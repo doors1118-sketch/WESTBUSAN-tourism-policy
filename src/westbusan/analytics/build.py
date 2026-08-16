@@ -359,20 +359,23 @@ def _region_rows(
             visitor = _monthly_native_sum(db, run_id, "fact_tourism_demand", district, period, "tourism_data_lab", "locgo_regn_visitr_dd_list.visitor_count", "count")
             consumption = _monthly_native_sum(db, run_id, "fact_tourism_demand", district, period, "area_tourism_consumption", "area_tar_svc_dem_list.1107", "KRW")
             transport = _monthly_native_sum(db, run_id, "fact_transport_flow", district, period, "public_transport_od_usage", "public_transport_od_volume", "passengers")
-            denom = values["room_sum"] if period == "current" else _same_period_supply(db, run_id, as_of, district, period)
+            period_values = values if period == "current" else _same_period_inventory(
+                db, run_id, as_of, district, period, values
+            )
+            denom = period_values["room_sum"]
             ratios = {
-                "room_coverage": (float(values["known"]), float(values["facilities"]), values["coverage"], "inventory.room_count"),
-                "small_facility_share": (float(values["small"]) if values["small"] is not None else None, float(values["known"]), values["coverage"], "inventory.room_count"),
-                "visitors_per_100_rooms": (visitor[0], denom, values["coverage"], visitor[1]),
-                "lodging_consumption_per_room": (consumption[0], denom, values["coverage"], consumption[1]),
-                "transport_inflow_per_room": (transport[0], denom, values["coverage"], transport[1]),
+                "room_coverage": (float(period_values["known"]), float(period_values["facilities"]), period_values["coverage"], "inventory.room_count"),
+                "small_facility_share": (float(period_values["small"]) if period_values["small"] is not None else None, float(period_values["known"]), period_values["coverage"], "inventory.room_count"),
+                "visitors_per_100_rooms": (visitor[0], denom, period_values["coverage"], visitor[1]),
+                "lodging_consumption_per_room": (consumption[0], denom, period_values["coverage"], consumption[1]),
+                "transport_inflow_per_room": (transport[0], denom, period_values["coverage"], transport[1]),
                 "tourism_registration_facility_share": (float(values["tourism_facilities"]), float(values["facilities"]), 1.0, "inventory.registration_type"),
                 "tourism_registration_room_share": (values["tourism_rooms"], denom, values["coverage"], "inventory.registration_type"),
                 "foreigner_city_homestay_registration_share": (float(values["foreigner_registrations"]), float(values["registrations"]), 1.0, "inventory.registration_type"),
                 "foreign_visitor_capable_registration_share": (float(values["foreign_capable_registrations"]), float(values["registrations"]), 1.0, "inventory.registration_type"),
-                "building_20y_share": (float(values["age20_count"]), float(values["age_known"]), values["age_known"] / values["facilities"], "building_register.approval_date"),
-                "building_30y_share": (float(values["age30_count"]), float(values["age_known"]), values["age_known"] / values["facilities"], "building_register.approval_date"),
-                "recent_five_year_permit_event_share": (float(values["permit_count"]), float(values["permit_known"]), values["permit_known"] / values["facilities"], "building_register.permit_date"),
+                "building_20y_share": (float(values["age20_count"]), float(values["age_known"]), values["age_known"] / values["facilities"] if values["facilities"] else None, "building_register.approval_date"),
+                "building_30y_share": (float(values["age30_count"]), float(values["age_known"]), values["age_known"] / values["facilities"] if values["facilities"] else None, "building_register.approval_date"),
+                "recent_five_year_permit_event_share": (float(values["permit_count"]), float(values["permit_known"]), values["permit_known"] / values["facilities"] if values["facilities"] else None, "building_register.permit_date"),
             }
             evidence = {name: _evidence(name, numerator, denominator, coverage, period, source, factor=100 if name == "visitors_per_100_rooms" else 1) for name, (numerator, denominator, coverage, source) in ratios.items()}
             evidence["visitor_growth_minus_room_supply_growth"] = _evidence(
@@ -380,7 +383,7 @@ def _region_rows(
                 "missing_consecutive_comparable_period",
             )
             openings, closures = _event_changes(db, district, period)
-            rows.append({"district": district, "group": values["group"], "period": period, "values": values, "visitor": visitor[0], "consumption": consumption[0], "transport": transport[0], "supply_total": denom, "openings": openings, "closures": closures, "evidence": evidence})
+            rows.append({"district": district, "group": values["group"], "period": period, "values": period_values, "visitor": visitor[0], "consumption": consumption[0], "transport": transport[0], "supply_total": denom, "openings": openings, "closures": closures, "evidence": evidence})
     _classify_pressure(rows)
     _growth_and_supply_bands(rows)
     return rows
@@ -442,6 +445,40 @@ def _same_period_supply(
     return sum(known) if known else None
 
 
+def _same_period_inventory(
+    db: Database, run_id: UUID, as_of: date | None, district: str, period: str,
+    fallback: dict[str, object],
+) -> dict[str, object]:
+    """Build the room distribution from this period's snapshot, never today’s one."""
+    rows = db.query(
+        """select link.facility_id, snapshot.room_count
+        from bridge_facility_license as link
+        join dim_facility as facility on facility.facility_id = link.facility_id
+        join staging_license_snapshot as snapshot
+          on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
+        where facility.district = ? and snapshot.observed_on::varchar like ?
+          and snapshot.source_id <> 'tourist_pensions'
+          and ((? is null and snapshot.last_loaded_run_id = ?) or snapshot.observed_on <= ?)""",
+        [district, f"{period}%", as_of, run_id, as_of],
+    )
+    facility_rooms: dict[object, set[float]] = defaultdict(set)
+    facilities = {item[0] for item in rows}
+    for facility_id, rooms in rows:
+        if rooms is not None and float(rooms) >= 0:
+            facility_rooms[facility_id].add(float(rooms))
+    known = [next(iter(values)) for values in facility_rooms.values() if len(values) == 1]
+    total = len(facilities)
+    if not total:
+        return {**fallback, "facilities": 0, "known": 0, "room_sum": None, "room_mean": None,
+                "room_median": None, "q1": None, "q3": None, "coverage": None,
+                "small": None, "small_share": None}
+    return {**fallback, "facilities": total, "known": len(known), "room_sum": sum(known) if known else None,
+            "room_mean": mean(known) if known else None, "room_median": median(known) if known else None,
+            "q1": _quantile(known, .25), "q3": _quantile(known, .75),
+            "coverage": len(known) / total, "small": sum(room <= 20 for room in known) if known else None,
+            "small_share": sum(room <= 20 for room in known) / len(known) if known else None}
+
+
 def _month(period: str) -> str:
     """Normalise daily native series to their district-month mart grain."""
     return period[:7] if len(period) >= 7 and period[4:5] == "-" else period
@@ -495,17 +532,18 @@ def _growth_and_supply_bands(rows: list[dict[str, object]]) -> None:
                     supply_growth = float(supply) / float(old_supply) - 1
                     row["growth_gap"] = visitor_growth - supply_growth
                     row["supply_growth"] = supply_growth
-                    row["evidence"]["visitor_growth_minus_room_supply_growth"] = _evidence(
-                        "visitor_growth_minus_room_supply_growth",
-                        visitor_growth,
-                        1.0,
-                        min(
-                            float(row["values"]["coverage"] or 0),
-                            float(prior["values"]["coverage"] or 0),
-                        ),
-                        str(row["period"]),
-                        "tourism_data_lab.visitor_count|inventory.room_count",
-                    )
+                    row["evidence"]["visitor_growth_minus_room_supply_growth"] = {
+                        "metric_name": "visitor_growth_minus_room_supply_growth",
+                        "value": row["growth_gap"], "numerator": visitor_growth,
+                        "denominator": 1.0,
+                        "coverage": min(float(row["values"]["coverage"] or 0), float(prior["values"]["coverage"] or 0)),
+                        "source_period": str(row["period"]), "previous_period": str(prior["period"]),
+                        "metric_source_identity": "tourism_data_lab.visitor_count|inventory.room_count",
+                        "current_visitors": visitor, "previous_visitors": old_visitor,
+                        "current_rooms": supply, "previous_rooms": old_supply,
+                        "visitor_growth": visitor_growth, "supply_growth": supply_growth,
+                        "quality_band": "good",
+                    }
                     growth_rows.append(row)
             if "visitor_growth_minus_room_supply_growth" not in row["evidence"]:
                 row["evidence"]["visitor_growth_minus_room_supply_growth"] = _evidence(
@@ -556,7 +594,15 @@ def _replace_comparisons(
             else:
                 w = _aggregate([item["values"][key] for item in west]); e = _aggregate([item["values"][key] for item in east])
             for kind, value in (("west_minus_east", w - e if w is not None and e is not None else None), ("west_divided_by_east", w / e if w is not None and e is not None and e > 0 else None)):
-                db.connection.execute("insert into mart_region_comparison values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [run_id, period, metric, kind, value, w, e, None, "good" if value is not None else "insufficient", _json({"west": w, "east": e})])
+                coverage = min(
+                    [float(item["values"]["coverage"]) for item in west + east if item["values"]["coverage"] is not None],
+                    default=None,
+                )
+                quality = "good" if value is not None and coverage is not None else "insufficient"
+                evidence = {"west": w, "east": e, "source_period": period,
+                            "metric_source_identity": f"mart_region_month:{metric}",
+                            "coverage": coverage, "quality_band": quality}
+                db.connection.execute("insert into mart_region_comparison values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [run_id, period, metric, kind, value, w, e, coverage, quality, _json(evidence)])
         all_rows = [item for item in rows if item["period"] == period]
         for item in all_rows:
             value = item["values"]["room_median"]
@@ -581,14 +627,14 @@ def _replace_signals(
     for row in rows:
         by_group_period[(str(row["group"]), str(row["period"]))].append(row)
     for (group, period), group_rows in by_group_period.items():
-        if period != "current" or not group_rows or any(
+        if not group_rows or any(
             row["values"]["coverage"] is None or float(row["values"]["coverage"]) < 0.8
             for row in group_rows
         ):
             continue
         group_facilities = [item for item in facilities if item["region_group"] == group]
-        rooms = [float(item["room_count"]) for item in group_facilities if item["room_count"] is not None]
-        ages = [float(item["building_age"]) for item in group_facilities if item["building_age"] is not None]
+        rooms = [float(item["room_count"]) for item in group_facilities if item["room_count"] is not None] if period == "current" else [float(row["values"]["room_median"]) for row in group_rows if row["values"]["room_median"] is not None]
+        ages = [float(item["building_age"]) for item in group_facilities if item["building_age"] is not None] if period == "current" else [float(row["values"]["age_median"]) for row in group_rows if row["values"]["age_median"] is not None]
         visitor_values = [item["evidence"]["visitors_per_100_rooms"]["value"] for item in group_rows]
         metrics = RegionMetrics(group, median(rooms) if rooms else None, sum(room <= policy.small_room_threshold for room in rooms) / len(rooms) if rooms else None, sum(age >= 30 for age in ages) / len(ages) if ages else None, _aggregate(visitor_values), _group_band(group_rows, "pressure"), _group_band(group_rows, "supply"))
         for signal in policy_signals(metrics, small_room_threshold=policy.small_room_threshold):

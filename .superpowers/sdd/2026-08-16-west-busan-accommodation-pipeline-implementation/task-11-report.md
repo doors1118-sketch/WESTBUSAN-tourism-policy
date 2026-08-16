@@ -35,3 +35,12 @@ Validation after review fixes: focused analytics tests: 5 passed; full suite: 15
 - Zero-room building-age weights no longer divide by zero; permit-share values and evidence share the same known-permit denominator. Percentiles require all 16 districts and 16 known values. Group policy signals use the configured small-room threshold, full covered current-group data, and one deterministic group-period row.
 
 Validation after rereview fixes: focused analytics tests: 5 passed; full suite: 158 passed, 3 skipped; Ruff: passed; `git diff --check`: passed.
+
+## Rereview fix round 3
+
+- Closure-only districts now emit their legal-event month safely with null inventory coverage instead of dividing zero facilities into age/permit coverage.
+- Period inventory is rebuilt from that month's supply snapshot, so historical `room_sum`, distributions, and coverage cannot borrow the current snapshot. Growth evidence records the stored gap plus both source-period visitor/room inputs and derived component growth rates.
+- Division comparisons persist source period, metric identity, coverage, and quality alongside their numerator and denominator. Historical comparisons remain explicitly insufficient when comparable supply is unavailable.
+- Policy evaluation accepts a fully covered period-compatible group rather than a current-only dead path, while continuing to use the configured small-room threshold.
+
+Validation after round 3: focused analytics tests: 5 passed; full suite: 158 passed, 3 skipped; Ruff: passed; `git diff --check`: passed.
