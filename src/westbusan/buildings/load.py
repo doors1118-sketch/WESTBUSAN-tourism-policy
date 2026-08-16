@@ -150,17 +150,34 @@ def collect_buildings_for_licenses(
            )
            select source_id, source_record_id, lot_address
            from eligible
-           where revision_rank = 1 and lot_address is not null and lot_address <> ''""",
+           where revision_rank = 1""",
             [run.run_id, run.cutoff_date],
         )
     else:
         license_rows = db.query(
             """select source_id, source_record_id, lot_address
-               from staging_license_snapshot
-               where lot_address is not null and lot_address <> ''"""
+               from staging_license_snapshot"""
+        )
+    captured_licenses = {
+        (str(source_id), str(source_record_id))
+        for source_id, source_record_id, _ in license_rows
+    }
+    for source_id, source_record_id in captured_licenses:
+        heartbeat()
+        db.connection.execute(
+            """delete from run_license_building_observation
+               where run_id = ? and source_id = ? and source_record_id = ?""",
+            [run.run_id, source_id, source_record_id],
+        )
+        db.connection.execute(
+            """delete from run_license_building_snapshot
+               where producer_run_id = ? and source_id = ? and source_record_id = ?""",
+            [run.run_id, source_id, source_record_id],
         )
     for source_id, source_record_id, lot_address in license_rows:
         heartbeat()
+        if lot_address is None or not str(lot_address).strip():
+            continue
         query = parcel_query(
             NormalizedAddress(value=str(lot_address), district=None, is_busan=True), db
         )
@@ -224,6 +241,14 @@ def collect_buildings_for_licenses(
                     heartbeat,
                 ):
                     bridge_rows += 1
+    for source_id, source_record_id in captured_licenses:
+        heartbeat()
+        db.connection.execute(
+            """insert into run_license_building_snapshot (
+                   producer_run_id, source_id, source_record_id
+               ) values (?, ?, ?)""",
+            [run.run_id, source_id, source_record_id],
+        )
     return BuildingCollectionResult(len(queries), building_rows, bridge_rows)
 
 

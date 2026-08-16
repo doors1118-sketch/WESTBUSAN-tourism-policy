@@ -90,6 +90,11 @@ def test_same_parcel_is_requested_once_and_links_each_license(
     assert all(include_empty)
     assert result.bridge_rows == 2
     assert db.query("select count(*) from bridge_license_building") == [(2,)]
+    assert db.query(
+        """select source_record_id from run_license_building_snapshot
+           where producer_run_id = ? order by source_record_id""",
+        [run.run_id],
+    ) == [("BUSAN-1",), ("BUSAN-2",)]
     assert db.query("select count(*) from raw_artifact") == [(5,)]
     request_jsons = [row[0] for row in db.query("select request_json from raw_artifact")]
     artifact_paths = [Path(row[0]) for row in db.query("select path from raw_artifact")]

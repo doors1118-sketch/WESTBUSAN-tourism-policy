@@ -497,9 +497,27 @@ def _building_ids(db: Database, run_id: UUID) -> dict[str, set[UUID]]:
         visible_runs = _visible_run_ids(db, run_id)
         placeholders = ",".join("?" for _ in visible_runs)
         rows = db.query(
-            f"""select source_id, source_record_id, building_id
-                from run_license_building_observation
-                where run_id in ({placeholders})""",
+            f"""with ranked_snapshot as (
+                    select snapshot.*, row_number() over (
+                        partition by snapshot.source_id, snapshot.source_record_id
+                        order by producer.business_date desc nulls last,
+                                 producer.started_at desc nulls last,
+                                 snapshot.completed_at desc,
+                                 snapshot.producer_run_id desc
+                    ) as snapshot_rank
+                    from run_license_building_snapshot as snapshot
+                    join pipeline_run as producer
+                      on producer.run_id = snapshot.producer_run_id
+                    where snapshot.producer_run_id in ({placeholders})
+                )
+                select snapshot.source_id, snapshot.source_record_id,
+                       observation.building_id
+                from ranked_snapshot as snapshot
+                left join run_license_building_observation as observation
+                  on observation.run_id = snapshot.producer_run_id
+                 and observation.source_id = snapshot.source_id
+                 and observation.source_record_id = snapshot.source_record_id
+                where snapshot.snapshot_rank = 1""",
             list(visible_runs),
         )
     else:
@@ -507,7 +525,8 @@ def _building_ids(db: Database, run_id: UUID) -> dict[str, set[UUID]]:
             "select source_id, source_record_id, building_id from bridge_license_building"
         )
     for source_id, source_record_id, building_id in rows:
-        result[f"{source_id}:{source_record_id}"].add(building_id)
+        if building_id is not None:
+            result[f"{source_id}:{source_record_id}"].add(building_id)
     return result
 
 

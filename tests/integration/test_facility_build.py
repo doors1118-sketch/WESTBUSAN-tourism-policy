@@ -288,6 +288,12 @@ def test_run_facility_building_ignores_later_blocked_global_link(tmp_path: Path)
            ) values (?, 'lodgings', 'L1', ?, 'first')""",
         [target, first_building],
     )
+    db.connection.execute(
+        """insert into run_license_building_snapshot (
+               producer_run_id, source_id, source_record_id
+           ) values (?, 'lodgings', 'L1')""",
+        [target],
+    )
     build_facilities(db, target)
     db.connection.execute(
         """insert into bridge_license_building (
@@ -301,6 +307,84 @@ def test_run_facility_building_ignores_later_blocked_global_link(tmp_path: Path)
     assert db.query(
         "select building_id from run_facility_building where run_id = ?", [target]
     ) == [(first_building,)]
+
+
+def test_building_observation_uses_latest_complete_snapshot_and_explicit_empty(
+    tmp_path: Path,
+) -> None:
+    """A B1→B2 correction replaces B1, and a collected empty result clears B2."""
+    db = Database(tmp_path / "building-snapshot.duckdb", Path("sql"))
+    db.migrate()
+    first, corrected, empty = uuid4(), uuid4(), uuid4()
+    for run_id, business_date in (
+        (first, "2026-08-14"),
+        (corrected, "2026-08-15"),
+        (empty, "2026-08-16"),
+    ):
+        db.connection.execute(
+            """insert into pipeline_run (
+                   run_id, mode, started_at, status, business_date
+               ) values (?, 'daily', now(), 'RUNNING', ?)""",
+            [run_id, business_date],
+        )
+        for input_run_id in (first, corrected, empty):
+            if input_run_id == run_id or (
+                run_id == corrected and input_run_id == first
+            ) or run_id == empty:
+                db.connection.execute(
+                    """insert into pipeline_run_input (run_id, input_run_id)
+                       values (?, ?)""",
+                    [run_id, input_run_id],
+                )
+        load_license_snapshot(
+            db,
+            [
+                _license(
+                    "lodgings",
+                    "L1",
+                    "호텔",
+                    "부산광역시 사하구 낙동대로 1",
+                    "051-111-1111",
+                    observed_on=date.fromisoformat(business_date),
+                )
+            ],
+            run_id,
+        )
+    b1, b2 = uuid4(), uuid4()
+    for building_id, key in ((b1, "B1"), (b2, "B2")):
+        db.connection.execute(
+            "insert into dim_building (building_id, building_key) values (?, ?)",
+            [building_id, key],
+        )
+    for producer_run_id, building_id in ((first, b1), (corrected, b2)):
+        db.connection.execute(
+            """insert into run_license_building_snapshot (
+                   producer_run_id, source_id, source_record_id
+               ) values (?, 'lodgings', 'L1')""",
+            [producer_run_id],
+        )
+        db.connection.execute(
+            """insert into run_license_building_observation (
+                   run_id, source_id, source_record_id, building_id, parcel_hash
+               ) values (?, 'lodgings', 'L1', ?, 'parcel')""",
+            [producer_run_id, building_id],
+        )
+    db.connection.execute(
+        """insert into run_license_building_snapshot (
+               producer_run_id, source_id, source_record_id
+           ) values (?, 'lodgings', 'L1')""",
+        [empty],
+    )
+
+    build_facilities(db, corrected)
+    build_facilities(db, empty)
+
+    assert db.query(
+        "select building_id from run_facility_building where run_id = ?", [corrected]
+    ) == [(b2,)]
+    assert db.scalar(
+        "select count(*) from run_facility_building where run_id = ?", [empty]
+    ) == 0
 
 
 def _license(

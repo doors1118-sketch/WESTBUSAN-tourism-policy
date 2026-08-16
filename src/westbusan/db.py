@@ -207,6 +207,20 @@ def migrate_legacy_run(
                on conflict do nothing""",
             [run_id, run_id],
         )
+        db.connection.execute(
+            """insert into run_license_building_snapshot (
+                   producer_run_id, source_id, source_record_id
+               )
+               select distinct license.run_id, license.source_id,
+                      license.source_record_id
+               from run_facility_license as license
+               join run_facility_building as building
+                 on building.run_id = license.run_id
+                and building.facility_id = license.facility_id
+               where license.run_id = ?
+               on conflict do nothing""",
+            [run_id],
+        )
         for family, table in (
             ("tourism", "fact_tourism_demand"),
             ("transport", "fact_transport_flow"),
@@ -333,6 +347,18 @@ def _legacy_evidence_counts(db: Database, run_id: UUID) -> dict[str, int]:
                        and observation.source_id = license.source_id
                        and observation.source_record_id = license.source_record_id
                        and observation.building_id = building.building_id
+                   )""",
+                [run_id],
+            )
+        ),
+        "missing_license_building_snapshots": int(
+            db.scalar(
+                """select count(*) from run_facility_license as license
+                   where license.run_id = ? and not exists (
+                     select 1 from run_license_building_snapshot as snapshot
+                     where snapshot.producer_run_id = license.run_id
+                       and snapshot.source_id = license.source_id
+                       and snapshot.source_record_id = license.source_record_id
                    )""",
                 [run_id],
             )
