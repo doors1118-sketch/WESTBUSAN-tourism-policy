@@ -1,10 +1,21 @@
 [
   {
     "mng_no": "TOURIST-1",
+    "opn_atmy_grp_cd": "6260000",
     "bplc_nm": "관광 호텔",
     "road_nm_addr": "부산광역시 해운대구 해운대로 1",
+    "lcpmt_ymd": "20180510",
+    "sals_stts_cd": "01",
+    "sals_stts_nm": "영업",
+    "dtl_sals_stts_cd": "01",
+    "dtl_sals_stts_nm": "정상",
+    "last_mdfcn_ymd": "20250831",
+    "data_updt_ymd": "20250901",
+    "dat_updt_pnt": "01",
+    "xcrd": "968000.00",
+    "ycrd": "1850000.00",
     "ksrm_cnt": "0",
     "wsrm_cnt": "50",
-    "sals_stts_nm": "영업"
+    "source_contract_fixture": "official-current"
   }
 ]

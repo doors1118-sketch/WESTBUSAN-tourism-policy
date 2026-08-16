@@ -1,11 +1,21 @@
 [
   {
     "MNG_NO": "BUSAN-1",
+    "OPN_ATMY_GRP_CD": "6260000",
     "BPLC_NM": "  바다 HOTEL ",
     "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
+    "LCPMT_YMD": "20200102",
+    "SALS_STTS_CD": "01",
+    "SALS_STTS_NM": "영업",
+    "DTL_SALS_STTS_CD": "01",
+    "DTL_SALS_STTS_NM": "정상",
+    "LAST_MDFCN_YMD": "20250831",
+    "DATA_UPDT_YMD": "20250901",
+    "DAT_UPDT_PNT": "01",
+    "XCRD": "963210.12",
+    "YCRD": "1812345.67",
     "KSRM_CNT": "3",
     "WSRM_CNT": "17",
-    "SALS_STTS_NM": "영업/정상",
     "UNMAPPED_FIELD": "preserve me"
   }
 ]

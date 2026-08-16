@@ -28,6 +28,8 @@ _MONTHLY_SOURCES = frozenset({"building_register_title", "building_register_basi
 _TOURISM_SOURCES = frozenset({"tourism_data_lab", "area_tourism_demand", "area_tourism_consumption", "tourism_concentration_rate", "area_tourism_destination_division", "related_tourism_destinations"})
 _BUILDING_SOURCES = frozenset({"building_register_title", "building_register_basis_outline", "building_permit_basis_outline", "building_permit_site", "closed_register_basis_outline"})
 _UNAVAILABLE = frozenset({"AUTH_FAILED", "QUOTA_EXCEEDED", "SPEC_UNRESOLVED", "HTTP_FAILED", "SCHEMA_CHANGED"})
+_BUSAN_AUTHORITY_CODE = "6260000"
+_OFFICIAL_OVERALL_STATUS_CODES = frozenset({"01", "02", "03", "04"})
 _IDENTIFIER_FIELDS = frozenset({"MNG_NO", "MGT_NO", "management_number", "source_record_id", "id"})
 _TOURISM_OPERATION_PREFIXES = {
     "locgoRegnVisitrDDList": "locgo_regn_visitr_dd_list.",
@@ -463,18 +465,65 @@ def _date_parse_check(db: Database, run_id: UUID, source_id: str, pages: list[_A
 
 
 def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> list[CheckResult]:
-    rows = db.query("select source_id, district, region_group, region_quality, room_count from staging_license_snapshot where last_loaded_run_id = ?", [run_id])
-    by_source: dict[str, int] = defaultdict(int)
-    for source_id, *_ in rows:
-        by_source[str(source_id)] += 1
+    rows = db.query(
+        """select source_id, district, region_group, region_quality, room_count,
+                  jurisdiction_code, license_date, source_updated_at, data_updated_on,
+                  status_code, status_class, detailed_status_code, detailed_status_name
+           from staging_license_snapshot where last_loaded_run_id = ?""",
+        [run_id],
+    )
+    by_source: dict[str, list[tuple[object, ...]]] = defaultdict(list)
+    for row in rows:
+        by_source[str(row[0])].append(row)
     checks: list[CheckResult] = []
     for source_id in source_ids:
-        count = by_source[source_id]
+        source_rows = by_source[source_id]
+        count = len(source_rows)
         checks.append(CheckResult("busan_rows_present", "passed" if count else "failed", count, ">0 after READY accommodation source", "required", source_id, "staging_license_snapshot", {"run_id": str(run_id), "staged_row_count": count}))
+        jurisdiction_count = sum(row[5] == _BUSAN_AUTHORITY_CODE for row in source_rows)
+        date_count = sum(
+            row[6] is not None and row[7] is not None and row[8] is not None
+            for row in source_rows
+        )
+        status_count = sum(
+            row[9] in _OFFICIAL_OVERALL_STATUS_CODES
+            and row[10] not in (None, "unknown")
+            and row[11] is not None
+            and row[12] is not None
+            for row in source_rows
+        )
+        checks.extend(
+            [
+                _coverage_check(
+                    "accommodation_jurisdiction_coverage",
+                    source_id,
+                    jurisdiction_count,
+                    count,
+                    "OPN_ATMY_GRP_CD=6260000 for every accepted row",
+                    run_id,
+                ),
+                _coverage_check(
+                    "accommodation_date_coverage",
+                    source_id,
+                    date_count,
+                    count,
+                    "parseable LCPMT_YMD, LAST_MDFCN_YMD, and DATA_UPDT_YMD",
+                    run_id,
+                ),
+                _coverage_check(
+                    "accommodation_status_coverage",
+                    source_id,
+                    status_count,
+                    count,
+                    "known SALS_STTS_CD plus detailed status code and name",
+                    run_id,
+                ),
+            ]
+        )
     total = len(rows)
-    resolved = sum(1 for _, _, group, quality, _ in rows if group and quality == "resolved")
-    districts = sum(1 for _, district, _, _, _ in rows if district)
-    rooms = sum(1 for *_, room in rows if room is not None)
+    resolved = sum(1 for row in rows if row[2] and row[3] == "resolved")
+    districts = sum(1 for row in rows if row[1])
+    rooms = sum(1 for row in rows if row[4] is not None)
     region_rate, district_rate, room_rate = (resolved / total if total else 0.0, districts / total if total else 0.0, rooms / total if total else 0.0)
     checks.extend([
         CheckResult("region_group_resolution_rate", "passed" if region_rate > 0 else "failed", region_rate, ">0", "required", table_name="staging_license_snapshot", evidence={"run_id": str(run_id), "resolved_rows": resolved, "total_rows": total}),
@@ -482,6 +531,26 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
         CheckResult("room_count_coverage", "passed" if room_rate >= 0.80 else "warning", room_rate, ">=0.80", "warning", table_name="staging_license_snapshot", evidence={"run_id": str(run_id), "covered_rows": rooms, "total_rows": total}),
     ])
     return checks
+
+
+def _coverage_check(
+    name: str,
+    source_id: str,
+    covered: int,
+    total: int,
+    expected: str,
+    run_id: UUID,
+) -> CheckResult:
+    return CheckResult(
+        name,
+        "passed" if total > 0 and covered == total else "failed",
+        {"covered_rows": covered, "total_rows": total},
+        expected,
+        "required",
+        source_id,
+        "staging_license_snapshot",
+        {"run_id": str(run_id), "covered_rows": covered, "total_rows": total},
+    )
 
 
 def _entity_precision_check() -> CheckResult:

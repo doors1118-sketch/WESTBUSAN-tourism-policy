@@ -593,6 +593,34 @@ def test_publication_preserves_an_unrelated_pointer_write_exception(
         publish_if_valid(db, report.run_id, report)
 
 
+def test_approved_accommodation_shape_cannot_hide_null_critical_semantics(
+    tmp_path: Path,
+) -> None:
+    """Catches fingerprint approval masking null jurisdiction/date/status values."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    _valid_run(db, tmp_path, run_id)
+    db.connection.execute(
+        """update staging_license_snapshot set
+               jurisdiction_code = null,
+               license_date = null,
+               source_updated_at = null,
+               data_updated_on = null,
+               status_code = null,
+               status_class = null,
+               detailed_status_code = null,
+               detailed_status_name = null
+           where last_loaded_run_id = ?""",
+        [run_id],
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    assert _check(report, "accommodation_jurisdiction_coverage", "lodgings").status == "failed"
+    assert _check(report, "accommodation_date_coverage", "lodgings").status == "failed"
+    assert _check(report, "accommodation_status_coverage", "lodgings").status == "failed"
+
+
 def _valid_run(
     db: Database,
     tmp_path: Path,
@@ -601,9 +629,20 @@ def _valid_run(
     checked_at: datetime = datetime(2026, 8, 16, tzinfo=UTC),
 ) -> QualityReport:
     for source_id in _CORE_ACCOMMODATION_SOURCES:
+        official_row = {
+            "MNG_NO": "L1",
+            "OPN_ATMY_GRP_CD": "6260000",
+            "LCPMT_YMD": "20200102",
+            "SALS_STTS_CD": "01",
+            "SALS_STTS_NM": "영업",
+            "DTL_SALS_STTS_CD": "01",
+            "DTL_SALS_STTS_NM": "정상",
+            "LAST_MDFCN_YMD": "20250831",
+            "DATA_UPDT_YMD": "20250901",
+        }
         body = json.dumps(
             {
-                "data": [{"MNG_NO": "L1"}] if source_id == "lodgings" else [],
+                "data": [official_row] if source_id == "lodgings" else [],
                 "totalCount": 1 if source_id == "lodgings" else 0,
                 "pageNo": 1,
                 "numOfRows": 1,
@@ -647,8 +686,14 @@ def _valid_run(
         insert into staging_license_snapshot (
             source_id, source_record_id, observed_on, first_loaded_run_id, last_loaded_run_id,
             region_quality, region_group, district, room_count, room_count_quality,
-            source_payload_json, record_hash
-        ) values ('lodgings', ?, ?, ?, ?, 'resolved', 'west', '사하구', 1, 'reported', '{}', ?)
+            jurisdiction_code, license_date, source_updated_at, data_updated_on,
+            status_code, status_name, status_class, detailed_status_code,
+            detailed_status_name, source_payload_json, record_hash
+        ) values (
+            'lodgings', ?, ?, ?, ?, 'resolved', 'west', '사하구', 1, 'reported',
+            '6260000', '2020-01-02', '20250831', '2025-09-01',
+            '01', '영업', 'active', '01', '정상', '{}', ?
+        )
         on conflict (source_id, source_record_id, observed_on) do update
             set last_loaded_run_id = excluded.last_loaded_run_id
         """,

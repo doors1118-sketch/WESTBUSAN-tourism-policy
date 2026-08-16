@@ -11,6 +11,7 @@ import westbusan.orchestrator as orchestrator_module
 from westbusan.http import HttpResult, SchemaError
 from westbusan.models import SourceSpec
 from westbusan.orchestrator import Pipeline
+from westbusan.quality.checks import run_quality_suite
 from westbusan.sources.registry import SourceRegistry
 
 
@@ -134,6 +135,14 @@ def test_collector_pages_with_busan_filter_and_persists_redacted_request_evidenc
         """select page_no, accepted_count, out_of_scope_count, rejected_count
            from accommodation_collection_audit order by page_no"""
     ) == [(1, 1, 0, 0), (2, 1, 0, 0)]
+    reconciliation = next(
+        check
+        for check in run_quality_suite(pipeline.db, run.run_id).checks
+        if check.name == "raw_total_matches_staging" and check.source_id == "lodgings"
+    )
+    assert reconciliation.status == "passed"
+    assert reconciliation.actual[0]["raw_total"] == 2
+    assert reconciliation.actual[0]["target_rows"] == 2
 
 
 def test_collector_fails_closed_on_mixed_national_rows(
