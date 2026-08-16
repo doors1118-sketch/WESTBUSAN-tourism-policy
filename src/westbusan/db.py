@@ -42,6 +42,13 @@ class Database:
     def query(self, sql: str, parameters: list[object] | None = None) -> list[tuple[Any, ...]]:
         return self.connection.execute(sql, parameters or []).fetchall()
 
+    def scalar(self, sql: str, parameters: list[object] | None = None) -> Any:
+        """Return the first column from exactly one result row."""
+        row = self.connection.execute(sql, parameters or []).fetchone()
+        if row is None:
+            raise ValueError("scalar query returned no rows")
+        return row[0]
+
     def record_artifact(self, artifact: RawArtifact) -> None:
         self.connection.execute(
             """

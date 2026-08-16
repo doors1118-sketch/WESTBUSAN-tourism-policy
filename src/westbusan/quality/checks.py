@@ -694,7 +694,8 @@ def _canonical_json(value: object) -> str:
 
 
 def _has_identifier(row: dict[str, object]) -> bool:
-    return any(row.get(key) not in (None, "") for key in _IDENTIFIER_FIELDS)
+    values = {str(key).casefold(): value for key, value in row.items()}
+    return any(values.get(key.casefold()) not in (None, "") for key in _IDENTIFIER_FIELDS)
 
 
 def _partition(source_date: date | None) -> str | None:
