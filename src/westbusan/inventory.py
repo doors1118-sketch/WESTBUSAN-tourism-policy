@@ -31,28 +31,45 @@ def is_active_status(
 
 
 def latest_complete_snapshot_runs(
-    db: Database, target_run_id: UUID
+    db: Database, target_run_id: UUID, *, period: str | None = None
 ) -> dict[str, UUID]:
-    """Latest visible READY/EMPTY full-snapshot run for each source."""
+    """Latest visible READY/EMPTY full-snapshot run for each source and month.
+
+    A run is eligible only when its *final* source status is complete.  This is
+    deliberately a two-stage ranking: filtering READY rows first would revive a
+    partial retry whose later status records a failure.
+    """
     visible = visible_run_ids(db, target_run_id)
     placeholders = ",".join("?" for _ in visible)
     rows = db.query(
         f"""
-        with completed as (
+        with final_status as (
             select status.source_id, status.run_id, status.checked_at,
                    row_number() over (
-                       partition by status.source_id
-                       order by coalesce(run.started_at, status.checked_at) desc,
-                                status.checked_at desc, status.run_id desc
-                   ) as row_number
+                       partition by status.source_id, status.run_id
+                       order by status.checked_at desc
+                   ) as status_rank,
+                   coalesce(run.started_at, status.checked_at) as snapshot_at,
+                   status.status,
+                   run.status as run_status
             from source_status as status
             left join pipeline_run as run on run.run_id = status.run_id
             where status.run_id in ({placeholders})
-              and status.status in ('READY', 'EMPTY')
+        ), eligible as (
+            select source_id, run_id, checked_at, snapshot_at,
+                   row_number() over (
+                       partition by source_id
+                       order by snapshot_at desc, checked_at desc, run_id desc
+                   ) as snapshot_rank
+            from final_status
+            where status_rank = 1
+              and status in ('READY', 'EMPTY')
+              and coalesce(run_status, 'RUNNING') <> 'BLOCKED'
+              and (? is null or strftime(snapshot_at, '%Y-%m') = ?)
         )
-        select source_id, run_id from completed where row_number = 1
+        select source_id, run_id from eligible where snapshot_rank = 1
         """,
-        list(visible),
+        [*visible, period, period],
     )
     return {str(source_id): run_id for source_id, run_id in rows}
 
