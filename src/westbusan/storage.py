@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping, Sequence
+from datetime import date
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
@@ -32,6 +33,7 @@ class RawStore:
         request: dict[str, object],
         body: bytes,
         suffix: str,
+        source_date: date | None = None,
     ) -> RawArtifact:
         """Write a response once, returning its immutable artifact metadata."""
         if not suffix.startswith("."):
@@ -65,6 +67,7 @@ class RawStore:
             content_hash=content_hash,
             path=path,
             created_at=run.started_at,
+            source_date=source_date,
         )
 
     def write_rows(

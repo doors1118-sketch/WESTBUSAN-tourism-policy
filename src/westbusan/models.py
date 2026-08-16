@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -35,3 +35,4 @@ class RawArtifact:
     content_hash: str
     path: Path
     created_at: datetime
+    source_date: date | None = None

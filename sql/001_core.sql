@@ -19,7 +19,8 @@ create table if not exists raw_artifact (
     request_hash varchar not null,
     content_hash varchar not null,
     path varchar not null,
-    created_at timestamp with time zone not null
+    created_at timestamp with time zone not null,
+    source_date date
 );
 
 create table if not exists source_status (
