@@ -71,6 +71,19 @@ def test_build_marts_end_to_end_handles_empty_evidence(tmp_path: Path) -> None:
     ) == [("east", 3, 0, None), ("other", 9, 0, None), ("west", 4, 0, None)]
 
 
+def test_typed_mart_uses_visitor_person_days_name_only(tmp_path: Path) -> None:
+    """Catches a durable column still claiming monthly unique visitors."""
+    db = Database(tmp_path / "typed-name.duckdb", Path("sql")); db.migrate()
+
+    columns = {
+        row[1]
+        for row in db.query("select * from pragma_table_info('mart_region_month')")
+    }
+
+    assert "visitor_person_days_per_100_rooms" in columns
+    assert "visitors_per_100_rooms" not in columns
+
+
 def test_build_marts_end_to_end_keeps_tourist_pension_out_of_supply(tmp_path: Path) -> None:
     """Regression: a linked designation remains non-additive in legal supply."""
     db, run = _built_db(tmp_path, [_license("lodgings", "L", "호텔", "부산광역시 사하구 길 1", 10), _license("tourist_pensions", "L", "호텔", "부산광역시 사하구 길 1", 10)])
@@ -271,11 +284,77 @@ def test_sparse_visitor_person_days_pressure_is_insufficient_and_not_occupancy(
     assert '"interpretation":"visitor-person-days pressure; not monthly unique tourists or occupancy"' in evidence
 
 
+def test_visitor_pressure_coverage_includes_total_room_denominator(
+    tmp_path: Path,
+) -> None:
+    """Catches complete visitor days masking that only half of rooms are known."""
+    db, run = _built_db(
+        tmp_path,
+        [
+            _license("lodgings", "L1", "호텔1", "부산광역시 사하구 길 1", 10, date(2026, 1, 31)),
+            _license("lodgings", "L2", "호텔2", "부산광역시 사하구 길 2", None, date(2026, 1, 31)),
+        ],
+    )
+    artifact = uuid4()
+    for day in range(1, 32):
+        native_day = f"2026-01-{day:02d}"
+        db.connection.execute(
+            """
+            insert into fact_tourism_demand (
+                source_id, metric_code, period, district, region_group,
+                dimension_json, dimension_json_hash, source_revision, metric_value,
+                unit, source_payload_json, artifact_id, loaded_run_id
+            ) values ('tourism_data_lab',
+                      'locgo_regn_visitr_dd_list.visitor_count', ?, '사하구',
+                      'west', '{}', ?, 'r', 100, 'count', '{}', ?, ?)
+            """,
+            [native_day, native_day, artifact, run],
+        )
+
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+
+    coverage, evidence = db.query(
+        """
+        select coverage, evidence_json from mart_metric_evidence
+        where district = '사하구' and period = '2026-01'
+          and metric_name = 'visitor_person_days_per_100_rooms'
+        """
+    )[0]
+    assert coverage == 0.5
+    assert '"denominator_total_room":0.5' in evidence
+
+
+def test_facility_count_comparison_uses_stock_not_room_coverage(tmp_path: Path) -> None:
+    """Catches unknown room counts invalidating a known physical stock comparison."""
+    db, run = _built_db(
+        tmp_path,
+        [
+            _license("lodgings", "W", "서부", "부산광역시 사하구 길 1", None),
+            _license("lodgings", "E", "동부", "부산광역시 해운대구 길 1", None),
+        ],
+    )
+
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+
+    assert db.query(
+        """
+        select coverage, quality_band from mart_region_comparison
+        where metric_name = 'physical_facility_count'
+          and period = 'current'
+          and comparison_type = 'west_minus_east'
+        """
+    ) == [(1.0, "good")]
+
+
 def test_build_marts_end_to_end_marks_partial_division_coverage_as_warning(tmp_path: Path) -> None:
     """Regression: a West/East comparison cannot be good with incomplete rooms."""
     db, run = _built_db(tmp_path, [_license("lodgings", "W", "서부", "부산광역시 사하구 길 1", None), _license("lodgings", "E", "동부", "부산광역시 해운대구 길 1", 10)])
     build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
-    assert db.query("select quality_band from mart_region_comparison where comparison_type = 'west_divided_by_east' limit 1") == [("insufficient",)]
+    assert db.query(
+        """select quality_band from mart_region_comparison
+           where period = 'current' and metric_name = 'room_sum'
+             and comparison_type = 'west_divided_by_east'"""
+    ) == [("insufficient",)]
 
 
 def test_build_marts_end_to_end_january_does_not_inherit_august_registrations(tmp_path: Path) -> None:
@@ -307,7 +386,12 @@ def test_build_marts_end_to_end_division_none_coverage_is_insufficient(tmp_path:
     """Reviewer regression: absent coverage is not silently ignored in a division."""
     db, run = _built_db(tmp_path, [_license("lodgings", "W", "서부", "부산광역시 사하구 길 1", None), _license("lodgings", "E", "동부", "부산광역시 해운대구 길 1", 10)])
     build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
-    assert db.query("select coverage, quality_band from mart_region_comparison where comparison_type = 'west_divided_by_east' limit 1") == [(None, "insufficient")]
+    assert db.query(
+        """select coverage, quality_band from mart_region_comparison
+           where metric_name = 'room_sum'
+             and period = 'current'
+             and comparison_type = 'west_divided_by_east'"""
+    ) == [(None, "insufficient")]
 
 
 def test_build_marts_end_to_end_group_distribution_does_not_use_district_medians(tmp_path: Path) -> None:

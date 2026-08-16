@@ -686,11 +686,30 @@ def _region_rows(
                 ),
                 "room_coverage": (float(period_values["known"]), _optional_float(period_values["facilities"]), period_values["coverage"], "inventory.room_count"),
                 "small_facility_share": (float(period_values["small"]) if period_values["small"] is not None else None, float(period_values["known"]), period_values["coverage"], "inventory.room_count"),
-                "visitor_person_days_per_100_rooms": (visitor[0], denom, visitor[2]["overall"], visitor[1]),
-                "lodging_consumption_per_room": (consumption[0], denom, period_values["coverage"], consumption[1]),
-                "transport_inflow_per_room": (transport[0], denom, period_values["coverage"], transport[1]),
+                "visitor_person_days_per_100_rooms": (
+                    visitor[0], denom,
+                    _minimum_coverage(visitor[2]["overall"], period_values["coverage"]),
+                    visitor[1],
+                ),
+                "lodging_consumption_per_room": (
+                    consumption[0], denom,
+                    _minimum_coverage(consumption[2]["overall"], period_values["coverage"]),
+                    consumption[1],
+                ),
+                "transport_inflow_per_room": (
+                    transport[0], denom,
+                    _minimum_coverage(transport[2]["overall"], period_values["coverage"]),
+                    transport[1],
+                ),
                 "tourism_registration_facility_share": (float(period_values["tourism_facilities"]), _optional_float(period_values["facilities"]), 1.0 if period_values.get("stock_observed") else None, "inventory.registration_type"),
-                "tourism_registration_room_share": (period_values["tourism_rooms"], denom, period_values["tourism_room_coverage"], "inventory.registration_type"),
+                "tourism_registration_room_share": (
+                    period_values["tourism_rooms"], denom,
+                    _minimum_coverage(
+                        period_values["coverage"],
+                        period_values["tourism_room_coverage"],
+                    ),
+                    "inventory.registration_type",
+                ),
                 "foreigner_city_homestay_registration_share": (float(period_values["foreigner_registrations"]), _optional_float(period_values["registrations"]), 1.0 if period_values.get("stock_observed") else None, "inventory.registration_type"),
                 "foreign_visitor_capable_registration_share": (float(period_values["foreign_capable_registrations"]), _optional_float(period_values["registrations"]), 1.0 if period_values.get("stock_observed") else None, "inventory.registration_type"),
                 "building_20y_share": (float(period_values["age20_count"]), float(period_values["age_known"]), period_values["age_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.use_approval_date"),
@@ -701,9 +720,22 @@ def _region_rows(
             evidence["visitor_person_days_per_100_rooms"].update(
                 {
                     **visitor[2],
+                    "coverage_components": {
+                        "numerator_expected_day": visitor[2]["day_coverage"],
+                        "numerator_source": visitor[2]["source_coverage"],
+                        "numerator_dimension": visitor[2]["dimension_coverage"],
+                        "numerator_geography": visitor[2]["geography_coverage"],
+                        "denominator_total_room": period_values["coverage"],
+                    },
                     "interpretation": "visitor-person-days pressure; not monthly unique tourists or occupancy",
                 }
             )
+            evidence["tourism_registration_room_share"]["coverage_components"] = {
+                "denominator_total_room": period_values["coverage"],
+                "numerator_tourism_subgroup_room": period_values[
+                    "tourism_room_coverage"
+                ],
+            }
             evidence["physical_facility_count"]["stock_observed"] = bool(
                 period_values.get("stock_observed")
             )
@@ -883,7 +915,7 @@ def _same_period_inventory(
           and (? is null or snapshot.observed_on <= ?)""",
         [run_id, district, f"{period}%", *visible_runs, as_of, as_of],
     )
-    completed = latest_complete_snapshot_runs(db, run_id)
+    completed = latest_complete_snapshot_runs(db, run_id, period=period)
     observed_snapshot_rows = bool(rows)
     rows = [
         row
@@ -1102,7 +1134,25 @@ def _replace_regions(db: Database, run_id: UUID, rows: list[dict[str, object]]) 
     for row in rows:
         v, e = row["values"], row["evidence"]
         db.connection.execute(
-            """insert into mart_region_month values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """insert into mart_region_month (
+                run_id, district, region_group, period, physical_facility_count,
+                legal_registration_count, room_sum, room_mean, room_median,
+                room_q1, room_q3, room_known_facility_count, room_coverage,
+                small_facility_count, small_facility_share,
+                tourism_registration_facility_share,
+                tourism_registration_room_share,
+                foreigner_city_homestay_registration_share,
+                foreign_visitor_capable_registration_share, building_age_mean,
+                building_age_median, building_age_room_weighted_mean,
+                building_20y_share, building_30y_share,
+                recent_five_year_permit_event_share, active_openings,
+                active_closures, active_net_change,
+                visitor_person_days_per_100_rooms, lodging_consumption_per_room,
+                transport_inflow_per_room,
+                visitor_growth_minus_room_supply_growth, demand_pressure_band,
+                room_supply_band, metric_evidence_json
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [run_id, row["district"], row["group"], row["period"], v["facilities"], v["registrations"], v["room_sum"], v["room_mean"], v["room_median"], v["q1"], v["q3"], v["known"], v["coverage"], v["small"], v["small_share"], v["tourism_share"], v["tourism_room_share"], v["foreigner_share"], v["foreign_capable_share"], v["age_mean"], v["age_median"], v["weighted_age"], v["age20"], v["age30"], v["permit_share"], row["openings"], row["closures"], row["openings"] - row["closures"], e["visitor_person_days_per_100_rooms"]["value"], e["lodging_consumption_per_room"]["value"], e["transport_inflow_per_room"]["value"], row.get("growth_gap"), row["pressure"], row["supply"], _json(e)],
         )
         for name, evidence in e.items():
@@ -1119,9 +1169,15 @@ def _replace_group_regions(
     for row in rows:
         by_group_period[(str(row["group"]), str(row["period"]))].append(row)
     for (group, period), group_rows in sorted(by_group_period.items()):
-        expected = len(getattr(configured, group))
+        expected_districts = set(getattr(configured, group))
+        expected = len(expected_districts)
         observed = [row for row in group_rows if row["values"].get("stock_observed")]
-        complete_stock = len(group_rows) == expected and len(observed) == expected
+        actual_districts = {str(row["district"]) for row in group_rows}
+        complete_stock = (
+            actual_districts == expected_districts
+            and len(group_rows) == expected
+            and len(observed) == expected
+        )
         facility_count = (
             sum(int(row["values"]["facilities"]) for row in group_rows)
             if complete_stock
@@ -1132,17 +1188,23 @@ def _replace_group_regions(
             if complete_stock
             else None
         )
-        known_rooms = sum(int(row["values"]["known"]) for row in group_rows)
+        known_rooms = (
+            sum(int(row["values"]["known"]) for row in group_rows)
+            if complete_stock else 0
+        )
         room_values = [
             float(value)
             for row in group_rows
             for value in row["values"].get("room_values", [])
         ]
-        room_sum = sum(room_values) if room_values else None
+        room_sum = sum(room_values) if complete_stock and room_values else None
         room_coverage = (
             known_rooms / facility_count if facility_count and facility_count > 0 else None
         )
-        age_known = sum(int(row["values"]["age_known"]) for row in group_rows)
+        age_known = (
+            sum(int(row["values"]["age_known"]) for row in group_rows)
+            if complete_stock else 0
+        )
         age_coverage = (
             age_known / facility_count if facility_count and facility_count > 0 else None
         )
@@ -1199,11 +1261,20 @@ def _replace_comparisons(
                 w = _aggregate([item["values"][key] for item in west]); e = _aggregate([item["values"][key] for item in east])
             for kind, value in (("west_minus_east", w - e if w is not None and e is not None else None), ("west_divided_by_east", w / e if w is not None and e is not None and e > 0 else None)):
                 participating = west + east
+                evidence_metric = (
+                    "physical_facility_count"
+                    if metric == "physical_facility_count"
+                    else "room_coverage"
+                )
                 coverage = (
                     None if not participating or any(
-                        item["values"]["coverage"] is None or float(item["values"]["coverage"]) <= 0
+                        item["evidence"][evidence_metric]["coverage"] is None
+                        or float(item["evidence"][evidence_metric]["coverage"]) <= 0
                         for item in participating
-                    ) else min(float(item["values"]["coverage"]) for item in participating)
+                    ) else min(
+                        float(item["evidence"][evidence_metric]["coverage"])
+                        for item in participating
+                    )
                 )
                 quality = _comparison_quality([coverage] if coverage is not None and value is not None else [])
                 evidence = {"west": w, "east": e, "source_period": period,
@@ -1233,7 +1304,13 @@ def _replace_signals(
     by_group_period: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     for row in rows:
         by_group_period[(str(row["group"]), str(row["period"]))].append(row)
+    configured = RegionConfig.default()
     for (group, period), group_rows in by_group_period.items():
+        expected_districts = set(getattr(configured, group))
+        membership_complete = (
+            len(group_rows) == len(expected_districts)
+            and {str(row["district"]) for row in group_rows} == expected_districts
+        )
         rooms = [float(value) for row in group_rows for value in row["values"].get("room_values", [])]
         ages = [float(value) for row in group_rows for value in row["values"].get("age_values", [])]
         visitor_pairs = [
@@ -1242,7 +1319,12 @@ def _replace_signals(
             if item["evidence"]["visitor_person_days_per_100_rooms"]["numerator"] is not None
             and item["evidence"]["visitor_person_days_per_100_rooms"]["denominator"] is not None
         ]
-        median_rooms, small_share, age30_share = _group_distribution(rooms, ages, policy.small_room_threshold)
+        median_rooms, small_share, age30_share = _group_distribution(
+            rooms,
+            ages,
+            policy.small_room_threshold,
+            max(policy.old_building_years),
+        )
         facility_values = [
             int(row["values"]["facilities"])
             for row in group_rows
@@ -1250,7 +1332,7 @@ def _replace_signals(
         ]
         facility_count = (
             sum(facility_values)
-            if len(facility_values) == len(group_rows)
+            if membership_complete and len(facility_values) == len(group_rows)
             else None
         )
         known_rooms = len(rooms)
@@ -1260,7 +1342,8 @@ def _replace_signals(
                 for row in group_rows
                 if row["values"]["coverage"] is not None
             )
-            if group_rows
+            if membership_complete
+            and group_rows
             and all(row["values"]["coverage"] is not None for row in group_rows)
             else None
         )
@@ -1272,7 +1355,8 @@ def _replace_signals(
         ]
         tourism_coverage = (
             min(float(value) for value in tourism_coverage_values)
-            if tourism_coverage_values
+            if membership_complete
+            and tourism_coverage_values
             and all(value is not None for value in tourism_coverage_values)
             else None
         )
@@ -1293,12 +1377,19 @@ def _replace_signals(
         openings = sum(int(row["openings"]) for row in group_rows)
         closures = sum(int(row["closures"]) for row in group_rows)
         group_pressure = _group_pressure(visitor_pairs)
+        if not membership_complete:
+            group_pressure = None
         group_growth = (
             float(group_rows[0]["growth_gap"])
-            if len(group_rows) == 1 and group_rows[0].get("growth_gap") is not None
+            if membership_complete
+            and len(group_rows) == 1
+            and group_rows[0].get("growth_gap") is not None
             else None
         )
-        stock_band = _group_band(group_rows, "stock_band")
+        stock_band = (
+            _group_band(group_rows, "stock_band")
+            if membership_complete else "unclassified"
+        )
         evidence = {
             "median_rooms": _policy_evidence_metric(median_rooms, 1.0, room_coverage),
             "small_facility_share": _policy_evidence_metric(
@@ -1351,9 +1442,9 @@ def _replace_signals(
             small_share,
             age30_share,
             group_pressure,
-            _group_band(group_rows, "pressure"),
+            _group_band(group_rows, "pressure") if membership_complete else "unclassified",
             stock_band,
-            _group_band(group_rows, "supply"),
+            _group_band(group_rows, "supply") if membership_complete else "unclassified",
             group_growth,
             tourism_share,
             openings,
@@ -1491,13 +1582,20 @@ def _group_pressure(values: list[tuple[float, float]]) -> float | None:
 
 
 def _group_distribution(
-    rooms: list[float], ages: list[float], threshold: int
+    rooms: list[float], ages: list[float], threshold: int, old_threshold: int
 ) -> tuple[float | None, float | None, float | None]:
     return (
         median(rooms) if rooms else None,
         sum(room <= threshold for room in rooms) / len(rooms) if rooms else None,
-        sum(age >= 30 for age in ages) / len(ages) if ages else None,
+        sum(age >= old_threshold for age in ages) / len(ages) if ages else None,
     )
+
+
+def _minimum_coverage(*components: object) -> float | None:
+    """Return the evidence gate shared by every required metric component."""
+    if not components or any(component is None for component in components):
+        return None
+    return min(float(component) for component in components)
 
 
 def _comparison_quality(coverages: list[float]) -> QualityBand:

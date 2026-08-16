@@ -9,6 +9,7 @@ from westbusan.analytics.build import (
     _growth_evidence,
     _monthly_native_sum,
     _period_metric_set,
+    _replace_group_regions,
     _visible_run_ids,
     policy_signals,
 )
@@ -302,10 +303,44 @@ def test_division_quality_warns_for_partial_coverage() -> None:
 def test_group_distribution_flattens_facility_values_not_district_medians() -> None:
     """Catches a 1/40 facility being inflated into a 50% regional share."""
     median_rooms, small_share, age30_share = _group_distribution(
-        [1.0, *([9.0] * 9)], [40.0, *([20.0] * 9)], 1
+        [1.0, *([9.0] * 9)], [40.0, *([20.0] * 9)], 1, 30
     )
 
     assert (median_rooms, small_share, age30_share) == (9.0, 0.1, 0.1)
+
+
+def test_group_old_share_uses_configured_threshold() -> None:
+    """Catches silently reverting a configured 25-year rule to 30 years."""
+    assert _group_distribution([10.0], [26.0, 20.0], 20, 25)[2] == 0.5
+
+
+def test_partial_group_stock_and_rooms_are_unavailable(tmp_path: Path) -> None:
+    """Catches a subset of West districts being published as the group total."""
+    db = Database(tmp_path / "partial-group.duckdb", Path("sql")); db.migrate()
+    run_id = uuid4()
+    rows = [
+        {
+            "district": "사하구",
+            "group": "west",
+            "period": "current",
+            "values": {
+                "stock_observed": True,
+                "facilities": 1,
+                "registrations": 1,
+                "known": 1,
+                "room_values": [10.0],
+                "age_known": 0,
+            },
+        }
+    ]
+
+    _replace_group_regions(db, run_id, rows)
+
+    assert db.query(
+        """select district_count, observed_district_count,
+                  physical_facility_count, room_sum, room_known_facility_count
+             from mart_region_group_month"""
+    ) == [(4, 1, None, None, 0)]
 
 
 def test_period_metric_set_retains_known_room_total_for_tourism_denominator() -> None:
