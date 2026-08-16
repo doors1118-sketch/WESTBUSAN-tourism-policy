@@ -444,18 +444,22 @@ def _legacy_evidence_counts(db: Database, run_id: UUID) -> dict[str, int]:
         ),
         "missing_linked_building_revisions": int(
             db.scalar(
-                """select count(*)
+                   """select count(*)
                    from run_facility_building as link
-                   join dim_building as building
+                   left join dim_building as building
                      on building.building_id = link.building_id
                    join pipeline_run as target on target.run_id = ?
-                   where link.run_id = ? and not exists (
-                     select 1 from staging_building_revision as revision
-                     join pipeline_run_input as lineage
-                       on lineage.run_id = ?
-                      and lineage.input_run_id = revision.version_run_id
-                     where revision.building_id = building.building_key
-                       and revision.observed_on <= target.business_date
+                   where link.run_id = ? and (
+                     building.building_id is null
+                     or building.building_key is null
+                     or not exists (
+                       select 1 from staging_building_revision as revision
+                       join pipeline_run_input as lineage
+                         on lineage.run_id = ?
+                        and lineage.input_run_id = revision.version_run_id
+                       where revision.building_id = building.building_key
+                         and revision.observed_on <= target.business_date
+                     )
                    )""",
                 [run_id, run_id, run_id],
             )

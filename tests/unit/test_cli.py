@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
 from typer.testing import CliRunner
 
 from westbusan.accommodation.load import load_license_snapshot
@@ -500,10 +501,11 @@ def test_migrate_legacy_rejects_unrecoverable_base_only_license_history(
     assert evidence["missing_license_base_revisions"] == 1
 
 
+@pytest.mark.parametrize("has_dim_building", (True, False))
 def test_migrate_legacy_rejects_linked_building_without_visible_revision(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, has_dim_building: bool
 ) -> None:
-    """A dim-building link alone is not historical building-register evidence."""
+    """A missing dimension or revision makes a run-scoped building link unsafe."""
     pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
     pipeline.db.migrate()
     run_id, facility_id, building_id = uuid4(), uuid4(), uuid4()
@@ -538,11 +540,12 @@ def test_migrate_legacy_rejects_linked_building_without_visible_revision(
            ) values (?, ?, 'lodgings', 'linked-no-revision', '{}')""",
         [run_id, facility_id],
     )
-    pipeline.db.connection.execute(
-        """insert into dim_building (building_id, building_key)
-           values (?, 'unversioned-building')""",
-        [building_id],
-    )
+    if has_dim_building:
+        pipeline.db.connection.execute(
+            """insert into dim_building (building_id, building_key)
+               values (?, 'unversioned-building')""",
+            [building_id],
+        )
     pipeline.db.connection.execute(
         "insert into run_facility_building values (?, ?, ?)",
         [run_id, facility_id, building_id],
