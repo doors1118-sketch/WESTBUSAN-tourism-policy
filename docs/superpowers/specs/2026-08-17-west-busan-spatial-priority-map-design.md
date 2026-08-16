@@ -1,7 +1,7 @@
 # West Busan 500m Spatial Priority Map Design
 
-**Date:** 2026-08-17  
-**Status:** Approved in conversation; awaiting written-spec review  
+**Date:** 2026-08-17
+**Status:** Approved in conversation; awaiting written-spec review
 **Target branch:** `codex/westbusan-pipeline`
 
 ## 1. Purpose
