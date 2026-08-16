@@ -30,7 +30,7 @@ from westbusan.http import (
     SafeHttpClient,
     SchemaError,
 )
-from westbusan.models import RunContext, SourceStatus
+from westbusan.models import RunContext, SourceSpec, SourceStatus
 from westbusan.quality.checks import approve_schema_baseline, run_quality_suite
 from westbusan.quality.publish import current_published_run, publish_if_valid
 from westbusan.sources.datagokr import parse_data_page
@@ -58,6 +58,8 @@ _OPERATIONAL_ERRORS = (
     TypeError,
     ValueError,
 )
+_ACCOMMODATION_JURISDICTION_PARAMETER = "cond[OPN_ATMY_GRP_CD::EQ]"
+_BUSAN_JURISDICTION_CODE = "6260000"
 
 
 @dataclass(frozen=True, slots=True)
@@ -785,6 +787,7 @@ class Pipeline:
     ) -> int:
         self._refresh_lease(run.run_id)
         spec = self.registry.get(source_id)
+        jurisdiction_parameter, jurisdiction_expected = _jurisdiction_contract(spec)
         service_key = self.settings.service_key.get_secret_value()
         if not service_key:
             raise AuthenticationError("DATA_GO_KR_SERVICE_KEY is not configured")
@@ -797,6 +800,9 @@ class Pipeline:
         client = SafeHttpClient()
         page_no = next_page
         loaded = 0
+        accepted_total = 0
+        out_of_scope_total = 0
+        rejected_total = 0
         started = monotonic()
         while True:
             self._refresh_lease(run.run_id)
@@ -809,17 +815,44 @@ class Pipeline:
             }
             result = client.get(spec.endpoint_url, parameters)
             page = parse_data_page(result.body, result.content_type)
+            normalized = [normalize_license(source_id, row, as_of) for row in page.rows]
+            accepted = [
+                record
+                for record in normalized
+                if record.jurisdiction_code == jurisdiction_expected
+            ]
+            out_of_scope = sum(
+                record.jurisdiction_code not in (None, jurisdiction_expected)
+                for record in normalized
+            )
+            rejected = sum(record.jurisdiction_code is None for record in normalized)
+            counts = {
+                "accepted": len(accepted),
+                "out_of_scope": out_of_scope,
+                "rejected": rejected,
+            }
             suffix = ".xml" if "xml" in result.content_type.casefold() else ".json"
             self._refresh_lease(run.run_id)
             artifact = self.raw_store.write(
                 run,
                 source_id,
                 {
+                    "endpoint": spec.endpoint_url,
                     "operation": spec.operation,
-                    "parameters": {"as_of": as_of.isoformat()},
-                    "serviceKey": service_key,
-                    "pageNo": page_no,
-                    "numOfRows": spec.page_size,
+                    "parameters": parameters,
+                    "partition": as_of.isoformat(),
+                    "temporal_semantics": spec.temporal_semantics,
+                    "jurisdiction_filter": {
+                        "parameter": jurisdiction_parameter,
+                        "expected": jurisdiction_expected,
+                    },
+                    "response": {
+                        "http_status": result.status_code,
+                        "content_type": result.content_type,
+                        "retrieved_at": result.retrieved_at.isoformat(),
+                        "headers": dict(result.response_headers),
+                    },
+                    "counts": counts,
                     "total_count": page.total_count,
                     "schema_fingerprint": page.schema_fingerprint,
                 },
@@ -830,11 +863,39 @@ class Pipeline:
             self._refresh_lease(run.run_id)
             self.db.record_artifact(artifact)
             self._refresh_lease(run.run_id)
-            self.raw_store.write_rows(artifact, page.rows)
-            rows = [normalize_license(source_id, row, as_of) for row in page.rows]
+            self.db.connection.execute(
+                """
+                insert into accommodation_collection_audit (
+                    run_id, source_id, artifact_id, page_no, endpoint,
+                    jurisdiction_parameter, jurisdiction_expected, accepted_count,
+                    out_of_scope_count, rejected_count
+                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    run.run_id,
+                    source_id,
+                    artifact.artifact_id,
+                    page_no,
+                    spec.endpoint_url,
+                    jurisdiction_parameter,
+                    jurisdiction_expected,
+                    len(accepted),
+                    out_of_scope,
+                    rejected,
+                ],
+            )
             self._refresh_lease(run.run_id)
-            load_license_snapshot(self.db, rows, run.run_id)
-            loaded += len(rows)
+            self.raw_store.write_rows(artifact, page.rows)
+            accepted_total += len(accepted)
+            out_of_scope_total += out_of_scope
+            rejected_total += rejected
+            if out_of_scope or rejected:
+                raise SchemaError(
+                    "accommodation response contradicts the reviewed jurisdiction filter"
+                )
+            self._refresh_lease(run.run_id)
+            load_license_snapshot(self.db, accepted, run.run_id)
+            loaded += len(accepted)
             completed = not page.rows or page_no * spec.page_size >= page.total_count
             self._checkpoint(
                 source_id,
@@ -857,6 +918,15 @@ class Pipeline:
                     "operation": spec.operation,
                     "partition": as_of.isoformat(),
                     "row_count": loaded,
+                    "jurisdiction_filter": {
+                        "parameter": jurisdiction_parameter,
+                        "expected": jurisdiction_expected,
+                    },
+                    "counts": {
+                        "accepted": accepted_total,
+                        "out_of_scope": out_of_scope_total,
+                        "rejected": rejected_total,
+                    },
                 },
                 run.run_id,
             )
@@ -998,6 +1068,15 @@ class Pipeline:
             row_count=0,
             status="HTTP_FAILED",
         )
+
+def _jurisdiction_contract(spec: SourceSpec) -> tuple[str, str]:
+    value = spec.required_parameters.get(_ACCOMMODATION_JURISDICTION_PARAMETER)
+    if str(value) != _BUSAN_JURISDICTION_CODE:
+        raise SchemaError(
+            "accommodation source is missing the reviewed Busan jurisdiction filter"
+        )
+    return _ACCOMMODATION_JURISDICTION_PARAMETER, _BUSAN_JURISDICTION_CODE
+
 
 class _JsonlLogger:
     def __init__(self, log_dir: Path, log_date: date) -> None:

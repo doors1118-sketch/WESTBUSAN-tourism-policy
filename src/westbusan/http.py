@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from xml.parsers.expat import ExpatError
 
@@ -44,6 +45,8 @@ class HttpResult:
     status_code: int
     body: bytes
     content_type: str
+    retrieved_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    response_headers: Mapping[str, str] = field(default_factory=dict)
 
 
 _RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
@@ -80,6 +83,17 @@ class SafeHttpClient:
                 status_code=response.status_code,
                 body=response.content,
                 content_type=response.headers.get("content-type", ""),
+                retrieved_at=datetime.now(UTC),
+                response_headers={
+                    key: response.headers[key]
+                    for key in (
+                        "etag",
+                        "last-modified",
+                        "content-length",
+                        "x-ratelimit-remaining",
+                    )
+                    if key in response.headers
+                },
             )
             raise_for_portal_error(result.body, result.content_type)
             if response.status_code in _RETRYABLE_STATUSES and attempt < len(_WAITS):

@@ -222,6 +222,14 @@ def probe_source(spec: SourceSpec, client: SafeHttpClient, db: Database) -> Sour
             status,
             {
                 "endpoint": spec.endpoint_url,
+                "operation": spec.operation,
+                "parameters": params,
+                "response": {
+                    "http_status": result.status_code,
+                    "content_type": result.content_type,
+                    "retrieved_at": result.retrieved_at.isoformat(),
+                    "headers": dict(result.response_headers),
+                },
                 "page_no": page.page_no,
                 "row_count": len(page.rows),
                 "schema_fingerprint": page.schema_fingerprint,

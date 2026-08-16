@@ -69,7 +69,11 @@ def test_probe_records_ready_status_without_service_key(tmp_path: Path, monkeypa
 
     def handler(request: httpx.Request) -> httpx.Response:
         captured.update(request.url.params)
-        return httpx.Response(200, json={"data": [{"id": "one"}], "totalCount": 1})
+        return httpx.Response(
+            200,
+            json={"data": [{"id": "one"}], "totalCount": 1},
+            headers={"etag": '"probe-version"'},
+        )
 
     db = Database(tmp_path / "status.duckdb", Path("sql"))
     db.migrate()
@@ -84,7 +88,15 @@ def test_probe_records_ready_status_without_service_key(tmp_path: Path, monkeypa
     assert captured["numOfRows"] == "1"
     saved_detail = db.query("select detail_json from source_status")[0][0]
     assert "test-service-key" not in saved_detail
-    assert "serviceKey" not in saved_detail
+    detail = json.loads(saved_detail)
+    assert detail["endpoint"] == "https://example.test/service/info"
+    assert detail["parameters"]["serviceKey"] == "[REDACTED]"
+    assert detail["parameters"]["pageNo"] == 1
+    assert detail["response"]["http_status"] == 200
+    assert detail["response"]["headers"] == {
+        "etag": '"probe-version"',
+        "content-length": "38",
+    }
 
 
 @pytest.mark.parametrize(

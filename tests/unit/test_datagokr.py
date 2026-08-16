@@ -119,6 +119,36 @@ def test_http_client_retries_retryable_statuses() -> None:
     assert waits == [1, 2]
 
 
+def test_http_client_retains_only_allowlisted_response_metadata() -> None:
+    """Catches cookies or authentication headers entering persisted provenance."""
+    client = SafeHttpClient(
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    json={"data": []},
+                    headers={
+                        "etag": '"safe-version"',
+                        "last-modified": "Sun, 16 Aug 2026 01:00:00 GMT",
+                        "set-cookie": "private=session",
+                        "authorization": "private",
+                    },
+                )
+            )
+        ),
+        sleeper=lambda _: None,
+    )
+
+    result = client.get("https://example.test/info", {})
+
+    assert result.retrieved_at.tzinfo is not None
+    assert result.response_headers == {
+        "etag": '"safe-version"',
+        "last-modified": "Sun, 16 Aug 2026 01:00:00 GMT",
+        "content-length": "11",
+    }
+
+
 def test_http_client_keeps_portal_detail_html_out_of_xml_error_parsing() -> None:
     client = SafeHttpClient(
         httpx.Client(
