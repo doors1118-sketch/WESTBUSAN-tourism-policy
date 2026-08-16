@@ -9,6 +9,29 @@ from uuid import UUID, uuid4
 
 
 @dataclass(frozen=True, slots=True)
+class ApiPage:
+    """One parsed page returned by a public-data API."""
+
+    rows: list[dict[str, object]]
+    total_count: int
+    page_no: int
+    page_size: int
+    raw_body: bytes
+    schema_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class SourceSpec:
+    """Minimum paging configuration shared by data.go.kr sources."""
+
+    source_id: str
+    url: str
+    page_size: int = 100
+    format_parameter: str = "returnType"
+    format_value: str = "json"
+
+
+@dataclass(frozen=True, slots=True)
 class RunContext:
     """Identifies one execution of the pipeline."""
 

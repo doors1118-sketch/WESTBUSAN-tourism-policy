@@ -1,0 +1,140 @@
+import json
+from pathlib import Path
+
+import httpx
+import pytest
+
+from westbusan.http import (
+    AuthenticationError,
+    QuotaError,
+    SafeHttpClient,
+    SchemaError,
+)
+from westbusan.models import SourceSpec
+from westbusan.sources.datagokr import DataGoKrPager, parse_data_page
+
+FIXTURES = Path(__file__).parents[1] / "fixtures" / "datagokr"
+
+
+def test_parse_standardized_json_page() -> None:
+    body = json.dumps(
+        {"data": [{"BPLC_NM": "A호텔"}], "totalCount": 1, "pageNo": 1, "numOfRows": 100}
+    ).encode()
+    page = parse_data_page(body, "application/json")
+    assert page.rows == [{"BPLC_NM": "A호텔"}]
+    assert page.total_count == 1
+    assert page.page_no == 1
+    assert page.page_size == 100
+
+
+def test_parse_response_body_json_item_object_as_a_row() -> None:
+    page = parse_data_page((FIXTURES / "building_page.json").read_bytes(), "application/json")
+    assert page.rows == [{"mgmBldrgstPk": "123", "platPlc": "부산광역시"}]
+    assert page.total_count == 1
+
+
+def test_parse_xml_page() -> None:
+    body = b"""<response><body><items><item><name>A</name></item></items><totalCount>1</totalCount><pageNo>1</pageNo><numOfRows>10</numOfRows></body></response>"""
+    page = parse_data_page(body, "application/xml")
+    assert page.rows == [{"name": "A"}]
+    assert page.total_count == 1
+
+
+def test_parse_explicit_no_data_response() -> None:
+    body = b'{"response":{"header":{"resultCode":"00","resultMsg":"NO_DATA"},"body":{}}}'
+    page = parse_data_page(body, "application/json")
+    assert page.rows == []
+    assert page.total_count == 0
+
+
+@pytest.mark.parametrize(
+    ("result_code", "error_type"), [("20", AuthenticationError), ("22", QuotaError)]
+)
+def test_parse_portal_error_codes(result_code: str, error_type: type[Exception]) -> None:
+    body = json.dumps({"response": {"header": {"resultCode": result_code}}}).encode()
+    with pytest.raises(error_type):
+        parse_data_page(body, "application/json")
+
+
+def test_parse_xml_return_reason_code_as_authentication_error() -> None:
+    body = b"""<OpenAPI_ServiceResponse><cmmMsgHeader><returnReasonCode>30</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>"""
+    with pytest.raises(AuthenticationError):
+        parse_data_page(body, "application/xml")
+
+
+def test_parse_unknown_schema_fails() -> None:
+    with pytest.raises(SchemaError):
+        parse_data_page(b'{"unexpected": []}', "application/json")
+
+
+def test_http_client_retries_retryable_statuses() -> None:
+    calls = 0
+    waits: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(503 if calls < 3 else 200, json={"data": []})
+
+    client = SafeHttpClient(
+        httpx.Client(transport=httpx.MockTransport(handler)), sleeper=waits.append
+    )
+    result = client.get("https://example.test/info", {})
+    assert result.status_code == 200
+    assert calls == 3
+    assert waits == [1, 2]
+
+
+def test_pager_stops_after_total_count() -> None:
+    calls: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page_no = int(request.url.params["pageNo"])
+        calls.append(page_no)
+        data = [{"id": page_no}] if page_no <= 2 else []
+        return httpx.Response(
+            200,
+            json={"data": data, "totalCount": 2, "pageNo": page_no, "numOfRows": 1},
+        )
+
+    pager = DataGoKrPager.for_test(httpx.MockTransport(handler), "masked")
+    pages = list(pager.iter_url("https://example.test/info", {}, page_size=1))
+    assert calls == [1, 2]
+    assert [row["id"] for page in pages for row in page.rows] == [1, 2]
+
+
+def test_pager_sends_required_params_and_source_spec_format() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.url.params)
+        return httpx.Response(200, json={"data": [], "totalCount": 0})
+
+    spec = SourceSpec(
+        source_id="lodgings",
+        url="https://example.test/info",
+        page_size=25,
+        format_parameter="returnType",
+        format_value="JSON",
+    )
+    pager = DataGoKrPager.for_test(httpx.MockTransport(handler), "masked")
+    assert list(pager.iter_pages(spec, {"city": "Busan"})) == []
+    assert captured == {
+        "city": "Busan",
+        "serviceKey": "masked",
+        "pageNo": "1",
+        "numOfRows": "25",
+        "returnType": "JSON",
+    }
+
+
+def test_pager_defaults_to_data_go_kr_return_type_parameter() -> None:
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.url.params)
+        return httpx.Response(200, json={"data": [], "totalCount": 0})
+
+    pager = DataGoKrPager.for_test(httpx.MockTransport(handler), "masked")
+    assert list(pager.iter_url("https://example.test/info", {})) == []
+    assert captured["returnType"] == "json"
