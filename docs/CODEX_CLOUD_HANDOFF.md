@@ -115,7 +115,7 @@ git log -5 --oneline
 
 ## 로컬 검증 상태 (2026-08-17)
 
-- 전체 pytest: 359 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
+- 전체 pytest: 364 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
 - 빈 DuckDB: 31개 migration 적용, main schema table 56개 생성.
 - legacy/DB migration focused: 5 passed.
 - Ruff: all checks passed.
