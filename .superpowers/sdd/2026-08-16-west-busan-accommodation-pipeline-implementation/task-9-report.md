@@ -31,6 +31,13 @@
 - Replaced the KORAIL fixtures and measures with the documented wide workplace/residence headers: ticket, age, service-line, train-type, and seat-class columns are whitelisted as distinct `count` measures. `시군구명`, workplace `시도코드`/`시군구코드`, and residence `법정동*` codes stay as dimensions; arbitrary numeric fields cannot become metrics.
 - Added an opt-in live metadata check (`WESTBUSAN_RUN_LIVE_CHECKS=1`) and verified it against the official Swagger and file-detail endpoints; the public portal returned non-null `registDt` and `updtDt` metadata.
 
+## ODCloud Credential-Scoping Fix Round
+
+- Split ODCloud calls into an unauthenticated metadata client for `infuser.odcloud.kr` Swagger and `www.data.go.kr` portal-detail requests, and a dataset client whose `Authorization` value is injected only for HTTPS requests to `api.odcloud.kr`. The key remains outside URLs, raw artifacts, and recorded metadata.
+- Wired the live metro collection path to use the metadata client for discovery and the authenticated dataset client only when paging the selected UDDI revision, including the first page used to obtain `totalCount`.
+- Added adversarial host-recording coverage for both the client and production live-loader branch: the credential reaches only `https://api.odcloud.kr`, never the Swagger or portal hosts (nor insecure HTTP).
+- Corrected KORAIL regression fixtures to remove the synthetic `발매처코드` and include the official residence `차량보유` dimension.
+
 ## Verification
 
 - Focused ODCloud/file/transport contract suite — 52 passed, 1 opt-in check skipped
@@ -38,6 +45,13 @@
 - Full suite — 127 passed, 3 opt-in checks skipped
 - `python -m ruff check .` — passed
 - `git diff --check` — passed
+
+Credential-scoping verification:
+
+- Focused ODCloud/transport suite — 20 passed, 1 opt-in check skipped
+- Opt-in official ODCloud file-detail check — 1 passed
+- Full suite — 128 passed, 3 opt-in checks skipped
+- `python -m ruff check .` and `git diff --check` — passed
 
 ## Commit
 
@@ -50,3 +64,5 @@ Provenance and official-file fix commit: `94ca71a4037c50153cad6be7f26dd9788a6c15
 Final official-contract fix commit: `2f5e9bd3382c7160069cb2d90599cf50ef98549f`
 
 Final provenance-persistence fix commit: `0e743a4736fbb2caf19751ff7b00efffe4a96268`
+
+ODCloud credential-scoping fix commit: `dacf0a213f2fe1cd3b06a4a356beae76aacae618`
