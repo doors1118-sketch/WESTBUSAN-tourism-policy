@@ -78,6 +78,50 @@ def test_spatial_migration_upgrades_pre_spatial_database_with_exception_lineage(
     assert "base_published_run_id" in exception_columns
 
 
+def test_exception_lineage_migration_backfills_original_029_rows(tmp_path: Path) -> None:
+    """Catches a 030 upgrade that loses rows or rewrites prior migration checksums."""
+    original_migrations = tmp_path / "original-spatial-migrations"
+    original_migrations.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name <= "029_spatial_marts.sql":
+            copy2(migration, original_migrations / migration.name)
+    path = tmp_path / "original-029.duckdb"
+    original = Database(path, original_migrations)
+    original.migrate()
+    spatial_run_id = uuid4()
+    base_run_id = uuid4()
+    original.connection.execute(
+        """insert into spatial_run (
+               spatial_run_id, base_published_run_id, boundary_version_id,
+               policy_version, business_date, status, started_at, fence_epoch
+           ) values (?, ?, ?, 'test-policy', '2026-08-16', 'COMPLETED', ?, 0)""",
+        [spatial_run_id, base_run_id, uuid4(), datetime(2026, 8, 16, tzinfo=UTC)],
+    )
+    original.connection.execute(
+        """insert into mart_spatial_exception (
+               spatial_run_id, subject_type, subject_id, exception_code,
+               redacted_evidence_json, resolution_status
+           ) values (?, 'facility', 'facility-1', 'missing_coordinate', '{}', 'OPEN')""",
+        [spatial_run_id],
+    )
+    original_checksums = dict(
+        original.query("select version, checksum from schema_migrations")
+    )
+    original.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+
+    assert dict(upgraded.query("select version, checksum from schema_migrations")).items() >= (
+        original_checksums.items()
+    )
+    assert upgraded.query(
+        """select base_published_run_id from mart_spatial_exception
+           where spatial_run_id = ? and subject_id = 'facility-1'""",
+        [spatial_run_id],
+    ) == [(base_run_id,)]
+
+
 def test_migrations_are_idempotent(tmp_path: Path) -> None:
     db = Database(tmp_path / "test.duckdb", Path("sql"))
     db.migrate()
