@@ -364,6 +364,21 @@ def _resolve_ref(value: object, definitions: Mapping[str, object]) -> object | N
 
 
 def _page(body: bytes, requested_page: int, requested_size: int) -> ApiPage:
+    return parse_odcloud_page(
+        body,
+        requested_page=requested_page,
+        requested_size=requested_size,
+    )
+
+
+def parse_odcloud_page(
+    body: bytes,
+    *,
+    requested_page: int = 1,
+    requested_size: int = 1_000,
+    require_paging_metadata: bool = False,
+) -> ApiPage:
+    """Parse one ODCloud page, optionally requiring provider paging evidence."""
     try:
         decoded = json.loads(body)
     except (TypeError, ValueError) as error:
@@ -376,12 +391,22 @@ def _page(body: bytes, requested_page: int, requested_size: int) -> ApiPage:
     if not isinstance(raw_rows, list) or not all(isinstance(row, Mapping) for row in raw_rows):
         raise SchemaError("ODCloud page has no object data array")
     rows = [dict(row) for row in raw_rows]
+    if require_paging_metadata and rows and any(
+        decoded.get(name) in (None, "") for name in ("totalCount", "page", "perPage")
+    ):
+        raise SchemaError("nonempty ODCloud response is missing paging metadata")
     total = _page_integer(decoded, ("totalCount", "matchCount"), len(rows))
+    page_no = _page_integer(decoded, ("page",), requested_page)
+    page_size = _page_integer(decoded, ("perPage",), requested_size)
+    if total < 0 or page_no < 1 or page_size < 0:
+        raise SchemaError("ODCloud paging metadata contains an invalid value")
+    if rows and (total < len(rows) or page_size < 1 or len(rows) > page_size):
+        raise SchemaError("ODCloud paging metadata contradicts the returned rows")
     return ApiPage(
         rows=rows,
         total_count=total,
-        page_no=_page_integer(decoded, ("page",), requested_page),
-        page_size=_page_integer(decoded, ("perPage",), requested_size),
+        page_no=page_no,
+        page_size=page_size,
         raw_body=body,
         schema_fingerprint=hashlib.sha256(
             json.dumps(sorted({key for row in rows for key in row}), ensure_ascii=False).encode()
@@ -405,5 +430,6 @@ __all__ = [
     "build_odcloud_metadata_client",
     "discover_latest_dataset",
     "iter_revision_pages",
+    "parse_odcloud_page",
     "select_latest_revision",
 ]

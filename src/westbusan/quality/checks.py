@@ -28,7 +28,9 @@ from westbusan.revisions import (
 )
 from westbusan.sources.datagokr import parse_data_page
 from westbusan.sources.files import read_tabular_rows
+from westbusan.sources.odcloud import parse_odcloud_page
 from westbusan.transport.load import (
+    TransportFactExpectation,
     normalize_transport_rows,
     transport_fact_expectations,
 )
@@ -110,6 +112,11 @@ class _ArtifactPage:
     error: str | None
     content_hash_ok: bool
     content_hash: str
+    artifact_role: str
+    source_revision: str
+    declared_schema_fingerprint: str | None
+    requested_start: date | None
+    requested_end: date | None
 
 
 def run_quality_suite(
@@ -366,6 +373,15 @@ def _parse_artifacts(
     for artifact_id, path_text, expected_hash, source_date, metadata in artifacts:
         operation = str(metadata.get("operation") or "unknown")
         content_hash_ok = False
+        artifact_role = "data_page"
+        source_revision = str(metadata.get("source_revision") or expected_hash)
+        declared_schema_fingerprint = (
+            str(metadata["schema_fingerprint"])
+            if metadata.get("schema_fingerprint") not in (None, "")
+            else None
+        )
+        requested_start: date | None = None
+        requested_end: date | None = None
         partition = (
             _metadata_partition(metadata) or _partition(source_date)
             if source_id in _BUILDING_SOURCES
@@ -375,6 +391,8 @@ def _parse_artifacts(
             body = Path(path_text).read_bytes()
             content_hash_ok = hashlib.sha256(body).hexdigest() == expected_hash
             if source_id in _FILE_TRANSPORT_SOURCES:
+                artifact_role = "file"
+                requested_start, requested_end = _transport_window(metadata)
                 rows = read_tabular_rows(Path(path_text))
                 for row in rows:
                     normalize_transport_rows(source_id, row)
@@ -382,6 +400,28 @@ def _parse_artifacts(
                 page_size = len(rows)
                 total_count = len(rows)
                 schema_fingerprint = _row_schema_fingerprint(rows)
+            elif (
+                source_id == "busan_metro_odcloud_discovery"
+                and metadata.get("kind") == "portal_file_detail"
+            ):
+                artifact_role = "provenance_metadata"
+                decoded = json.loads(body)
+                if not isinstance(decoded, dict):
+                    raise SchemaError("portal file detail metadata is not an object")
+                rows = []
+                page_no = None
+                page_size = None
+                total_count = None
+                schema_fingerprint = None
+            elif source_id == "busan_metro_odcloud_discovery":
+                artifact_role = "odcloud_data_page"
+                requested_start, requested_end = _transport_window(metadata)
+                page = parse_odcloud_page(body, require_paging_metadata=True)
+                rows = page.rows
+                page_no = page.page_no
+                page_size = page.page_size
+                total_count = page.total_count
+                schema_fingerprint = page.schema_fingerprint
             else:
                 page = parse_data_page(
                     body,
@@ -409,6 +449,11 @@ def _parse_artifacts(
                     str(error),
                     content_hash_ok,
                     expected_hash,
+                    artifact_role,
+                    source_revision,
+                    declared_schema_fingerprint,
+                    requested_start,
+                    requested_end,
                 )
             )
         else:
@@ -427,6 +472,11 @@ def _parse_artifacts(
                     None,
                     content_hash_ok,
                     expected_hash,
+                    artifact_role,
+                    source_revision,
+                    declared_schema_fingerprint,
+                    requested_start,
+                    requested_end,
                 )
             )
     return pages
@@ -452,8 +502,15 @@ def _raw_contract_checks(db: Database, run_id: UUID, source_id: str, pages: list
         "raw_artifact",
         {"artifact_ids": sorted(str(page.artifact_id) for page in mismatched)},
     )
-    malformed = [page for page in pages if page.error or page.rows is None]
-    missing_ids = sum(1 for page in pages if page.rows is not None and source_id in _ACCOMMODATION_SOURCES for row in page.rows if not _has_identifier(row))
+    data_pages = [
+        page for page in pages if page.artifact_role != "provenance_metadata"
+    ]
+    malformed = [
+        page
+        for page in pages
+        if page.error or (page.artifact_role != "provenance_metadata" and page.rows is None)
+    ]
+    missing_ids = sum(1 for page in data_pages if page.rows is not None and source_id in _ACCOMMODATION_SOURCES for row in page.rows if not _has_identifier(row))
     structure = CheckResult("required_record_structure", "passed" if not malformed and not missing_ids else "failed", {"malformed_pages": len(malformed), "missing_identifier_rows": missing_ids}, {"malformed_pages": 0, "missing_identifier_rows": 0}, severity, source_id, "raw_artifact", {"malformed_page_errors": sorted(page.error for page in malformed if page.error)})
     if source_id in _FILE_TRANSPORT_SOURCES:
         checks = [
@@ -462,8 +519,17 @@ def _raw_contract_checks(db: Database, run_id: UUID, source_id: str, pages: list
             _file_schema_check(source_id, pages, severity),
             _file_reconciliation_check(db, run_id, source_id, pages, severity),
         ]
+    elif source_id == "busan_metro_odcloud_discovery":
+        checks = [
+            integrity,
+            structure,
+            _odcloud_schema_check(source_id, pages, severity),
+            _transport_page_reconciliation_check(
+                db, run_id, source_id, data_pages, severity
+            ),
+        ]
     else:
-        checks = [integrity, structure, _schema_check(db, source_id, pages, statuses, severity), _reconciliation_check(db, run_id, source_id, pages, severity)]
+        checks = [integrity, structure, _schema_check(db, source_id, data_pages, statuses, severity), _reconciliation_check(db, run_id, source_id, data_pages, severity)]
     if source_id in _TOURISM_SOURCES:
         checks.append(_date_parse_check(db, run_id, source_id, pages, severity))
     return checks
@@ -501,9 +567,35 @@ def _file_reconciliation_check(
         for page in pages
         for row in page.rows or []
         for expectation in transport_fact_expectations(
-            source_id, [row], page.content_hash
+            source_id,
+            [row],
+            page.content_hash,
+            start=page.requested_start,
+            end=page.requested_end,
         )
     ]
+    passed, evidence = _transport_fact_reconciliation(
+        db, run_id, source_id, expectations, malformed
+    )
+    return CheckResult(
+        "raw_total_matches_staging",
+        "passed" if passed else "failed",
+        evidence,
+        "file-native normalized facts equal run-scoped transport observations",
+        severity,
+        source_id,
+        "fact_transport_flow",
+        {"artifact_type": "file"},
+    )
+
+
+def _transport_fact_reconciliation(
+    db: Database,
+    run_id: UUID,
+    source_id: str,
+    expectations: list[TransportFactExpectation],
+    malformed: list[_ArtifactPage],
+) -> tuple[bool, dict[str, object]]:
     actual_rows = db.query(
         """select fact.observation_key, fact.metric_code, fact.period,
                   fact.district, fact.region_group, fact.dimension_json,
@@ -516,12 +608,6 @@ def _file_reconciliation_check(
            where membership.run_id = ? and fact.source_id = ?""",
         [run_id, source_id],
     )
-    actual_periods = {str(row[2]) for row in actual_rows}
-    selected_expectations = [
-        expectation
-        for expectation in expectations
-        if not actual_periods or expectation.period in actual_periods
-    ]
     expected_by_key = {
         expectation.observation_key: (
             expectation.metric_code,
@@ -535,7 +621,7 @@ def _file_reconciliation_check(
             expectation.unit,
             expectation.source_payload_json,
         )
-        for expectation in selected_expectations
+        for expectation in expectations
     }
     actual_by_key = {str(row[0]): tuple(row[1:]) for row in actual_rows}
     missing = sorted(expected_by_key.keys() - actual_by_key.keys())
@@ -546,22 +632,158 @@ def _file_reconciliation_check(
         if expected_by_key[key] != actual_by_key[key]
     )
     passed = bool(expected_by_key) and not malformed and not missing and not extra and not mismatched
+    evidence = {
+        "expected_facts": len(expected_by_key),
+        "target_facts": len(actual_by_key),
+        "malformed_artifacts": len(malformed),
+        "missing_observation_keys": missing,
+        "extra_observation_keys": extra,
+        "mismatched_observation_keys": mismatched,
+    }
+    return passed, evidence
+
+
+def _odcloud_schema_check(
+    source_id: str,
+    pages: list[_ArtifactPage],
+    severity: Severity,
+) -> CheckResult:
+    data_pages = [
+        page for page in pages if page.artifact_role == "odcloud_data_page"
+    ]
+    observed = sorted(
+        {
+            page.schema_fingerprint
+            for page in data_pages
+            if page.schema_fingerprint
+        }
+    )
+    declared = sorted(
+        {
+            page.declared_schema_fingerprint
+            for page in data_pages
+            if page.declared_schema_fingerprint
+        }
+    )
+    revisions = sorted({page.source_revision for page in pages})
+    lineage_matches = bool(declared) and all(
+        page.declared_schema_fingerprint is not None
+        and page.source_revision.endswith(f":{page.declared_schema_fingerprint}")
+        for page in data_pages
+    )
+    passed = (
+        bool(data_pages)
+        and all(page.error is None for page in pages)
+        and len(observed) == 1
+        and len(declared) == 1
+        and len(revisions) == 1
+        and lineage_matches
+    )
+    evidence = {
+        "observed_page_schema_fingerprints": observed,
+        "declared_discovery_schema_fingerprints": declared,
+        "source_revisions": revisions,
+        "lineage_matches": lineage_matches,
+    }
+    return CheckResult(
+        "schema_fingerprint_approved",
+        "passed" if passed else "failed",
+        evidence,
+        "one deterministic page schema with discovery revision lineage",
+        severity,
+        source_id,
+        "raw_artifact",
+        {"artifact_type": "odcloud_data_page"},
+    )
+
+
+def _transport_page_reconciliation_check(
+    db: Database,
+    run_id: UUID,
+    source_id: str,
+    pages: list[_ArtifactPage],
+    severity: Severity,
+) -> CheckResult:
+    malformed = [
+        page
+        for page in pages
+        if page.error
+        or page.rows is None
+        or page.total_count is None
+        or page.page_no is None
+        or page.page_size is None
+    ]
+    by_window: dict[tuple[date | None, date | None], list[_ArtifactPage]] = (
+        defaultdict(list)
+    )
+    for page in pages:
+        by_window[(page.requested_start, page.requested_end)].append(page)
+    page_outcomes: list[dict[str, object]] = []
+    for (requested_start, requested_end), grouped in sorted(
+        by_window.items(), key=lambda item: (item[0][0] or date.min, item[0][1] or date.min)
+    ):
+        totals = {
+            page.total_count for page in grouped if page.total_count is not None
+        }
+        page_numbers = sorted(
+            page.page_no for page in grouped if page.page_no is not None
+        )
+        raw_total = next(iter(totals)) if len(totals) == 1 else None
+        page_size = grouped[0].page_size
+        expected_pages = (
+            list(range(1, _expected_page_count(raw_total, page_size) + 1))
+            if raw_total is not None
+            else []
+        )
+        page_outcomes.append(
+            {
+                "requested_start": requested_start.isoformat()
+                if requested_start
+                else None,
+                "requested_end": requested_end.isoformat() if requested_end else None,
+                "raw_total": raw_total,
+                "raw_rows": sum(len(page.rows or []) for page in grouped),
+                "page_numbers": page_numbers,
+                "expected_pages": expected_pages,
+            }
+        )
+    expectations = [
+        expectation
+        for page in pages
+        for expectation in transport_fact_expectations(
+            source_id,
+            page.rows or [],
+            page.source_revision,
+            start=page.requested_start,
+            end=page.requested_end,
+        )
+    ]
+    facts_passed, fact_evidence = _transport_fact_reconciliation(
+        db, run_id, source_id, expectations, malformed
+    )
+    paging_passed = (
+        bool(pages)
+        and not malformed
+        and all(
+            outcome["raw_total"] is not None
+            and outcome["page_numbers"] == outcome["expected_pages"]
+            and outcome["raw_rows"] == outcome["raw_total"]
+            for outcome in page_outcomes
+        )
+    )
+    evidence = {
+        "page_windows": page_outcomes,
+        **fact_evidence,
+    }
     return CheckResult(
         "raw_total_matches_staging",
-        "passed" if passed else "failed",
-        {
-            "expected_facts": len(expected_by_key),
-            "target_facts": len(actual_by_key),
-            "malformed_artifacts": len(malformed),
-            "missing_observation_keys": missing,
-            "extra_observation_keys": extra,
-            "mismatched_observation_keys": mismatched,
-        },
-        "file-native normalized facts equal run-scoped transport observations",
+        "passed" if paging_passed and facts_passed else "failed",
+        evidence,
+        "complete ODCloud page set and native facts reconcile to the run",
         severity,
         source_id,
         "fact_transport_flow",
-        {"artifact_type": "file"},
+        {"artifact_type": "odcloud_data_page"},
     )
 
 
@@ -1340,6 +1562,21 @@ def _metadata_partition(metadata: dict[str, object]) -> str | None:
         if value not in (None, ""):
             return str(value)
     return None
+
+
+def _transport_window(metadata: dict[str, object]) -> tuple[date, date]:
+    start_value = metadata.get("requested_start")
+    end_value = metadata.get("requested_end")
+    if not isinstance(start_value, str) or not isinstance(end_value, str):
+        raise SchemaError("transport artifact has no complete requested date window")
+    try:
+        start = date.fromisoformat(start_value)
+        end = date.fromisoformat(end_value)
+    except ValueError as error:
+        raise SchemaError("transport artifact requested date window is invalid") from error
+    if start > end:
+        raise SchemaError("transport artifact requested date window is reversed")
+    return start, end
 
 
 def _expected_page_count(total: int, page_size: int | None) -> int:

@@ -28,7 +28,15 @@ class FileSource:
     def __init__(self, data_dir: Path) -> None:
         self.store = RawStore(data_dir)
 
-    def ingest(self, path: Path, source_id: str, run: RunContext) -> RawArtifact:
+    def ingest(
+        self,
+        path: Path,
+        source_id: str,
+        run: RunContext,
+        *,
+        requested_start: date | None = None,
+        requested_end: date | None = None,
+    ) -> RawArtifact:
         """Copy one supported evidence file into immutable content-addressed storage."""
         path = Path(path)
         if path.suffix.lower() not in _SUPPORTED:
@@ -47,6 +55,10 @@ class FileSource:
                 "source_date_quality": source_date_quality,
                 "source_date_granularity": source_date_granularity,
                 "source_date_value": source_date_value,
+                "requested_start": requested_start.isoformat()
+                if requested_start
+                else None,
+                "requested_end": requested_end.isoformat() if requested_end else None,
             },
             body,
             path.suffix.lower(),

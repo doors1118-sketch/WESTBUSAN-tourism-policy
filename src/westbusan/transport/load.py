@@ -184,12 +184,22 @@ def transport_fact_expectations(
     source_id: str,
     rows: list[dict[str, object]],
     source_revision: str,
+    *,
+    start: date | None = None,
+    end: date | None = None,
 ) -> tuple[TransportFactExpectation, ...]:
     """Derive the exact fact rows that native transport records can produce."""
+    if (start is None) != (end is None):
+        raise ValueError("transport fact expectation window must be complete")
     return tuple(
         expectation
         for row in rows
         for record in normalize_transport_rows(source_id, row)
+        if start is None
+        or any(
+            _month_in_range(month, start, end)
+            for month in _record_months(record.period)
+        )
         for expectation in _record_fact_expectations(record, source_revision)
     )
 
@@ -269,7 +279,13 @@ def _load_files(
     represented: Counter[str] = Counter()
     for path in paths:
         progress()
-        artifact = files.ingest(path, spec.source_id, run)
+        artifact = files.ingest(
+            path,
+            spec.source_id,
+            run,
+            requested_start=start,
+            requested_end=end,
+        )
         progress()
         db.record_artifact(artifact)
         artifacts += 1
@@ -509,6 +525,8 @@ def _load_odcloud(
                 "row_count": revision.row_count,
                 "schema_fingerprint": revision.schema_fingerprint,
                 "source_revision": source_revision,
+                "requested_start": start.isoformat(),
+                "requested_end": end.isoformat(),
                 "page": page.page_no,
                 "perPage": page.page_size,
             },

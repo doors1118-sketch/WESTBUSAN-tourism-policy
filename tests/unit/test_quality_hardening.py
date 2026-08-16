@@ -10,6 +10,7 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
+from openpyxl import Workbook
 
 from tests.integrity_fixtures import (
     ensure_integrity_run,
@@ -18,6 +19,7 @@ from tests.integrity_fixtures import (
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.db import Database
 from westbusan.entity_resolution.match import build_facilities
+from westbusan.http import HttpResult
 from westbusan.models import RunContext, SourceStatus
 from westbusan.quality import publish as publish_module
 from westbusan.quality.checks import (
@@ -254,6 +256,75 @@ def test_valid_transport_csv_uses_file_native_quality_contract(tmp_path: Path) -
     assert all(check.severity == "required" for check in checks.values())
 
 
+@pytest.mark.parametrize("missing_period", (False, True))
+def test_valid_transport_xlsx_uses_the_same_native_quality_contract(
+    tmp_path: Path,
+    missing_period: bool,
+) -> None:
+    """XLSX evidence is reconciled through the shared SRT native normalizer."""
+    db = _db(tmp_path)
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 16, tzinfo=UTC),
+        business_date=date(2026, 2, 28),
+    )
+    ensure_integrity_run(db, run.run_id, business_date=run.cutoff_date)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.append(["승차역", "2026년1월", "2026년2월"])
+    worksheet.append(["부산역", 10, 20])
+    workbook.save(inbox / "SRT_역별_승차_2026.xlsx")
+    registry = SourceRegistry.load(Path("config/sources.yaml"))
+    selected = SourceRegistry((registry.get("srt_station_boarding_file"),))
+
+    result = load_transport(
+        db,
+        selected,
+        date(2026, 1, 1),
+        date(2026, 2, 28),
+        run,
+        inbox_dir=inbox,
+    )
+    if missing_period:
+        db.connection.execute(
+            """delete from run_fact_observation
+               where run_id = ? and family = 'transport'
+                 and observation_key in (
+                     select observation_key from fact_transport_flow
+                     where source_id = 'srt_station_boarding_file'
+                       and period = '2026-02'
+                 )""",
+            [run.run_id],
+        )
+    report = _run_quality_suite(db, run.run_id)
+    checks = {
+        check.name: check
+        for check in report.checks
+        if check.source_id == "srt_station_boarding_file"
+    }
+
+    assert result.records_loaded == 2
+    assert {
+        name: check.status
+        for name, check in checks.items()
+        if name
+        in {
+            "raw_content_hash",
+            "required_record_structure",
+            "schema_fingerprint_approved",
+            "raw_total_matches_staging",
+        }
+    } == {
+        "raw_content_hash": "passed",
+        "required_record_structure": "passed",
+        "schema_fingerprint_approved": "passed",
+        "raw_total_matches_staging": "failed" if missing_period else "passed",
+    }
+
+
 @pytest.mark.parametrize("invalid_kind", ("malformed_csv", "fact_mismatch"))
 def test_invalid_transport_file_or_fact_reconciliation_fails_closed(
     tmp_path: Path,
@@ -302,6 +373,108 @@ def test_invalid_transport_file_or_fact_reconciliation_fails_closed(
     assert reconciliation.status == "failed"
     assert reconciliation.severity == "required"
     assert report.has_failed_required_check is True
+
+
+@pytest.mark.parametrize("metadata_tamper", ("none", "bytes", "lineage"))
+def test_odcloud_provenance_metadata_is_hashed_but_not_counted_as_a_data_page(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_tamper: str,
+) -> None:
+    """Portal provenance cannot poison valid page totals, while byte tamper still blocks."""
+    db = _db(tmp_path)
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 16, tzinfo=UTC),
+        business_date=date(2024, 7, 31),
+    )
+    ensure_integrity_run(db, run.run_id, business_date=run.cutoff_date)
+    registry = SourceRegistry.load(Path("config/sources.yaml"))
+    selected = SourceRegistry((registry.get("busan_metro_odcloud_discovery"),))
+    swagger = Path("tests/fixtures/odcloud/swagger.json").read_bytes()
+    file_detail = Path("tests/fixtures/odcloud/file_detail.json").read_bytes()
+    metro_row = json.loads(
+        Path("tests/fixtures/transport/metro_rows.json").read_text(encoding="utf-8")
+    )[0]
+    monkeypatch.setenv("WESTBUSAN_ENABLE_LIVE_TRANSPORT", "true")
+    monkeypatch.setenv("ODCLOUD_API_KEY", "test-only-key")
+
+    class FixtureClient:
+        def get(self, url: str, params: dict[str, object]) -> HttpResult:
+            if url == "https://infuser.odcloud.kr/oas/docs":
+                return HttpResult(200, swagger, "application/json")
+            if url == "https://www.data.go.kr/data/3057229/fileData.do":
+                return HttpResult(
+                    200,
+                    (
+                        b'<html><body><input id="publicDataDetailPk" '
+                        b'value="uddi:99999999-9999-9999-9999-999999999999"></body></html>'
+                    ),
+                    "text/html",
+                )
+            if url == "https://www.data.go.kr/tcs/dss/selectFileDataDownload.do":
+                return HttpResult(200, file_detail, "application/json")
+            if "/3057229/v1/uddi:99999999-9999-9999-9999-999999999999" in url:
+                return HttpResult(
+                    200,
+                    json.dumps(
+                        {
+                            "data": [metro_row],
+                            "totalCount": 1,
+                            "page": 1,
+                            "perPage": 1000,
+                        }
+                    ).encode(),
+                    "application/json",
+                )
+            raise AssertionError(url)
+
+    result = load_transport(
+        db,
+        selected,
+        date(2024, 7, 1),
+        date(2024, 7, 31),
+        run,
+        client=FixtureClient(),
+    )
+    metadata_artifact_id, metadata_path_text, request_json = db.query(
+        """select artifact_id, path, request_json from raw_artifact
+               where run_id = ? and source_id = 'busan_metro_odcloud_discovery'
+                 and request_json like '%\"kind\":\"portal_file_detail\"%'""",
+        [run.run_id],
+    )[0]
+    metadata_path = Path(metadata_path_text)
+    if metadata_tamper == "bytes":
+        metadata_path.write_bytes(metadata_path.read_bytes() + b" ")
+    elif metadata_tamper == "lineage":
+        request = json.loads(request_json)
+        request["source_revision"] = "odcloud:unrelated:revision"
+        db.connection.execute(
+            "update raw_artifact set request_json = ? where artifact_id = ?",
+            [json.dumps(request, ensure_ascii=False), metadata_artifact_id],
+        )
+
+    report = _run_quality_suite(db, run.run_id)
+    checks = {
+        check.name: check
+        for check in report.checks
+        if check.source_id == "busan_metro_odcloud_discovery"
+    }
+
+    assert result.records_loaded == 1
+    assert checks["raw_content_hash"].status == (
+        "failed" if metadata_tamper == "bytes" else "passed"
+    )
+    assert checks["required_record_structure"].status == "passed"
+    assert checks["schema_fingerprint_approved"].status == (
+        "failed" if metadata_tamper == "lineage" else "passed"
+    )
+    assert checks["raw_total_matches_staging"].status == "passed"
+    assert any(
+        check.status == "failed" and check.severity == "required"
+        for check in checks.values()
+    ) is (metadata_tamper != "none")
 
 
 def test_monthly_freshness_uses_run_business_cutoff_not_wall_clock(

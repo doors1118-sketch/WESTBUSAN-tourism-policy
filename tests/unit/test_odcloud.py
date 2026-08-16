@@ -2,12 +2,14 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 
-from westbusan.http import SafeHttpClient
+from westbusan.http import SafeHttpClient, SchemaError
 from westbusan.sources.odcloud import (
     build_odcloud_client,
     discover_latest_dataset,
     iter_revision_pages,
+    parse_odcloud_page,
     select_latest_revision,
 )
 
@@ -180,3 +182,16 @@ def test_revision_pager_returns_an_explicit_empty_page_for_raw_auditing() -> Non
     assert len(pages) == 1
     assert pages[0].rows == []
     assert pages[0].raw_body == b'{"data":[],"totalCount":0}'
+
+
+def test_quality_parser_requires_paging_metadata_only_for_nonempty_odcloud_pages() -> None:
+    empty = parse_odcloud_page(
+        b'{"data":[],"totalCount":0}', require_paging_metadata=True
+    )
+
+    assert (empty.total_count, empty.page_no, empty.page_size) == (0, 1, 1000)
+    with pytest.raises(SchemaError, match="paging metadata"):
+        parse_odcloud_page(
+            '{"data":[{"station":"사상역"}],"totalCount":1}'.encode(),
+            require_paging_metadata=True,
+        )
