@@ -56,6 +56,40 @@ def test_historical_period_selects_its_complete_snapshot_not_latest_overall(
     }
 
 
+def test_period_selection_uses_snapshot_observation_month_for_backfill(
+    tmp_path: Path,
+) -> None:
+    """Catches a March backfill of January stock being assigned to March."""
+    db = Database(tmp_path / "backfill-period.duckdb", Path("sql")); db.migrate()
+    backfill, target = uuid4(), uuid4()
+    _run(db, backfill, "2026-03-10")
+    _run(db, target, "2026-03-11")
+    db.connection.execute(
+        """
+        insert into staging_license_snapshot (
+            source_id, source_record_id, observed_on, first_loaded_run_id,
+            last_loaded_run_id, region_quality, room_count_quality,
+            source_payload_json, record_hash
+        ) values ('lodgings', 'L1', '2026-01-31', ?, ?, 'resolved',
+                  'reported', '{}', 'L1')
+        """,
+        [backfill, backfill],
+    )
+    db.record_source_status(
+        SourceStatus(
+            "lodgings",
+            datetime(2026, 3, 10, tzinfo=UTC),
+            "READY",
+            {},
+            backfill,
+        )
+    )
+
+    assert latest_complete_snapshot_runs(db, target, period="2026-01") == {
+        "lodgings": backfill
+    }
+
+
 def _run(db: Database, run_id, started_at: str) -> None:
     db.connection.execute(
         """

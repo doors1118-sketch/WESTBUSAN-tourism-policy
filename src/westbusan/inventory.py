@@ -65,11 +65,27 @@ def latest_complete_snapshot_runs(
             where status_rank = 1
               and status in ('READY', 'EMPTY')
               and coalesce(run_status, 'RUNNING') <> 'BLOCKED'
-              and (? is null or strftime(snapshot_at, '%Y-%m') = ?)
+              and (
+                    ? is null
+                    or exists (
+                        select 1 from staging_license_snapshot as snapshot
+                        where snapshot.source_id = final_status.source_id
+                          and snapshot.last_loaded_run_id = final_status.run_id
+                          and strftime(snapshot.observed_on, '%Y-%m') = ?
+                    )
+                    or (
+                        not exists (
+                            select 1 from staging_license_snapshot as snapshot
+                            where snapshot.source_id = final_status.source_id
+                              and snapshot.last_loaded_run_id = final_status.run_id
+                        )
+                        and strftime(snapshot_at, '%Y-%m') = ?
+                    )
+              )
         )
         select source_id, run_id from eligible where snapshot_rank = 1
         """,
-        [*visible, period, period],
+        [*visible, period, period, period],
     )
     return {str(source_id): run_id for source_id, run_id in rows}
 
