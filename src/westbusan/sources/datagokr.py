@@ -71,8 +71,11 @@ class DataGoKrPager:
         include_empty: bool = False,
     ) -> Iterator[ApiPage]:
         """Fetch all pages for a source specification."""
+        for key, required_value in spec.required_parameters.items():
+            if key in base_params and base_params[key] != required_value:
+                raise ValueError(f"caller cannot override required parameter: {key}")
         yield from self.iter_url(
-            spec.url,
+            spec.endpoint_url,
             {**dict(spec.required_parameters), **base_params},
             page_size=spec.page_size,
             format_parameter=spec.format_parameter,

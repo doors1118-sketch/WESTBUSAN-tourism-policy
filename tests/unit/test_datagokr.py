@@ -19,9 +19,11 @@ FIXTURES = Path(__file__).parents[1] / "fixtures" / "datagokr"
 def test_iter_pages_sends_registered_parameters_on_every_page() -> None:
     """Catches the required jurisdiction filter disappearing after page one."""
     requests: list[dict[str, str]] = []
+    paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(dict(request.url.params))
+        paths.append(request.url.path)
         page_no = int(request.url.params["pageNo"])
         return httpx.Response(
             200,
@@ -38,16 +40,73 @@ def test_iter_pages_sends_registered_parameters_on_every_page() -> None:
         "lodgings",
         "https://example.test/lodgings",
         page_size=1,
+        operation="info",
         required_parameters={"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"},
     )
 
     pages = list(pager.iter_pages(spec, {}))
 
     assert len(pages) == 2
+    assert paths == ["/lodgings/info", "/lodgings/info"]
     assert [item["cond[OPN_ATMY_GRP_CD::EQ]"] for item in requests] == [
         "6260000",
         "6260000",
     ]
+
+
+def test_iter_pages_rejects_a_caller_override_of_required_parameters() -> None:
+    """Catches a caller replacing the reviewed Busan jurisdiction constraint."""
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"data": [], "totalCount": 0})
+
+    pager = DataGoKrPager.for_test(httpx.MockTransport(handler), "test-key")
+    spec = SourceSpec(
+        "lodgings",
+        "https://example.test/lodgings",
+        operation="info",
+        required_parameters={"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"},
+    )
+
+    with pytest.raises(ValueError, match="required parameter"):
+        list(
+            pager.iter_pages(
+                spec,
+                {"cond[OPN_ATMY_GRP_CD::EQ]": "6110000"},
+            )
+        )
+
+    assert calls == 0
+
+
+def test_iter_pages_accepts_an_identical_required_parameter_confirmation() -> None:
+    """Catches exact caller confirmation being rejected as an override."""
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.url.params)
+        return httpx.Response(200, json={"data": [], "totalCount": 0})
+
+    pager = DataGoKrPager.for_test(httpx.MockTransport(handler), "test-key")
+    spec = SourceSpec(
+        "lodgings",
+        "https://example.test/lodgings",
+        operation="info",
+        required_parameters={"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"},
+    )
+
+    list(
+        pager.iter_pages(
+            spec,
+            {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"},
+            include_empty=True,
+        )
+    )
+
+    assert captured["cond[OPN_ATMY_GRP_CD::EQ]"] == "6260000"
 
 
 def test_parse_standardized_json_page() -> None:

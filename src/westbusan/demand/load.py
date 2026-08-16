@@ -315,7 +315,12 @@ def load_tourism_demand(
             for month in months:
                 heartbeat()
                 parameters = _month_parameters(spec.required_parameters, month)
-                pager_spec = replace(spec, url=spec.endpoint_url, operation=None)
+                pager_spec = replace(
+                    spec,
+                    url=spec.endpoint_url,
+                    operation=None,
+                    required_parameters=parameters,
+                )
                 pager = DataGoKrPager(SafeHttpClient(), service_key)
                 pages = iter(
                     pager.iter_pages(pager_spec, parameters, include_empty=True)

@@ -572,11 +572,16 @@ def _load_od(
         return _SourceOutcome(0, 0, False)
     pager = DataGoKrPager(client, os.environ["DATA_GO_KR_SERVICE_KEY"])
     loaded = artifacts = 0
-    pager_spec = replace(spec, url=spec.endpoint_url, operation=None)
     evidence: list[SourceMonthEvidence] = []
     for month in _iter_months(start, end):
         progress()
         parameters = {**dict(spec.required_parameters), "opr_ym": month.replace("-", "")}
+        pager_spec = replace(
+            spec,
+            url=spec.endpoint_url,
+            operation=None,
+            required_parameters=parameters,
+        )
         represented = 0
         explicit_empty = False
         pages = iter(pager.iter_pages(pager_spec, parameters, include_empty=True))
