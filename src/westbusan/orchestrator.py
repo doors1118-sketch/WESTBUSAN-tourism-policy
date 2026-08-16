@@ -861,14 +861,19 @@ class Pipeline:
     def _assert_fence(self, run_id: UUID) -> None:
         now = datetime.now(UTC)
         rows = self.db.query(
-            """select 1 from pipeline_run as run
-               join pipeline_writer_lease as writer
-                 on writer.lease_key = 'writer' and writer.run_id = run.run_id
-                and writer.fence_epoch = run.writer_fence_epoch
-               where run.run_id = ? and run.status = 'RUNNING'
-                 and run.lease_owner_token = ? and writer.owner_token = ?
-                 and run.lease_expires_at > ? and writer.lease_expires_at > ?""",
-            [run_id, self._lease_owner_token, self._lease_owner_token, now, now],
+            """update pipeline_writer_lease as writer
+               set fence_touch = coalesce(fence_touch, 0) + 1
+               where writer.lease_key = 'writer' and writer.run_id = ?
+                 and writer.owner_token = ? and writer.lease_expires_at > ?
+                 and exists (
+                     select 1 from pipeline_run as run
+                     where run.run_id = writer.run_id and run.status = 'RUNNING'
+                       and run.lease_owner_token = ?
+                       and run.writer_fence_epoch = writer.fence_epoch
+                       and run.lease_expires_at > ?
+                 )
+               returning writer.fence_epoch""",
+            [run_id, self._lease_owner_token, now, self._lease_owner_token, now],
         )
         if len(rows) != 1:
             raise RuntimeError(

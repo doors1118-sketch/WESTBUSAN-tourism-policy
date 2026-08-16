@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import duckdb
 import pytest
 from pydantic import SecretStr
 
@@ -137,6 +138,30 @@ def test_prepare_run_rolls_back_after_active_writer_error(tmp_path: Path) -> Non
 
     second.db.connection.execute("begin transaction")
     second.db.connection.execute("rollback")
+
+
+def test_fence_touch_conflicts_with_two_connection_takeover(tmp_path: Path) -> None:
+    """A protected transaction must write the lease row that takeover replaces."""
+    first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    first.db.migrate()
+    run, _ = first._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "fence-touch"
+    )
+    assert run is not None
+    second = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    second.db.migrate()
+
+    first.db.connection.execute("begin transaction")
+    first._assert_fence(run.run_id)
+    with pytest.raises(duckdb.TransactionException, match="Conflict"):
+        second.db.query(
+            """update pipeline_writer_lease
+               set owner_token = ?, fence_epoch = fence_epoch + 1
+               where lease_key = 'writer'
+               returning fence_epoch""",
+            [uuid4()],
+        )
+    first.db.connection.execute("rollback")
 
 
 def test_terminal_source_status_and_completed_checkpoint_commit_atomically(
