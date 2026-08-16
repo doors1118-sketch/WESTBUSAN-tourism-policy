@@ -512,7 +512,10 @@ def _date_parse_check(db: Database, run_id: UUID, source_id: str, pages: list[_A
 def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> list[CheckResult]:
     rows = db.query(
         """select source_id, district, region_group, region_quality, room_count,
-                  jurisdiction_code, license_date, source_updated_at, data_updated_on,
+                  jurisdiction_code, license_date, license_date_quality,
+                  closure_date, closure_date_quality, source_updated_at,
+                  source_modified_on, source_modified_date_quality,
+                  data_updated_on, data_updated_date_quality,
                   status_code, status_class, detailed_status_code, detailed_status_name
            from staging_license_snapshot where last_loaded_run_id = ?""",
         [run_id],
@@ -527,14 +530,23 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
         checks.append(CheckResult("busan_rows_present", "passed" if count else "failed", count, ">0 after READY accommodation source", "required", source_id, "staging_license_snapshot", {"run_id": str(run_id), "staged_row_count": count}))
         jurisdiction_count = sum(row[5] == _BUSAN_AUTHORITY_CODE for row in source_rows)
         date_count = sum(
-            row[6] is not None and row[7] is not None and row[8] is not None
+            row[6] is not None
+            and row[7] == "parsed"
+            and row[11] is not None
+            and row[12] == "parsed"
+            and row[13] is not None
+            and row[14] == "parsed"
             for row in source_rows
         )
         status_count = sum(
-            row[9] in _OFFICIAL_OVERALL_STATUS_CODES
-            and row[10] not in (None, "unknown")
-            and row[11] is not None
-            and row[12] is not None
+            row[15] in _OFFICIAL_OVERALL_STATUS_CODES
+            and row[16] not in (None, "unknown")
+            and row[17] is not None
+            and row[18] is not None
+            and (
+                row[15] not in {"03", "04"}
+                or (row[8] is not None and row[9] == "parsed")
+            )
             for row in source_rows
         )
         checks.extend(
@@ -560,7 +572,7 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
                     source_id,
                     status_count,
                     count,
-                    "known SALS_STTS_CD plus detailed status code and name",
+                    "known SALS_STTS_CD plus detailed status; 03/04 require CLSBIZ_YMD",
                     run_id,
                 ),
             ]

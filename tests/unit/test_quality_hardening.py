@@ -621,6 +621,52 @@ def test_approved_accommodation_shape_cannot_hide_null_critical_semantics(
     assert _check(report, "accommodation_status_coverage", "lodgings").status == "failed"
 
 
+def test_invalid_nonnull_official_dates_fail_required_date_coverage(
+    tmp_path: Path,
+) -> None:
+    """Catches invalid LAST_MDFCN_YMD/DATA_UPDT_YMD passing as present strings."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    _valid_run(db, tmp_path, run_id)
+    db.connection.execute(
+        """update staging_license_snapshot set
+               source_updated_at = '20250899',
+               source_modified_on = null,
+               source_modified_date_quality = 'invalid',
+               data_updated_on = null,
+               data_updated_date_quality = 'invalid'
+           where last_loaded_run_id = ?""",
+        [run_id],
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    assert _check(report, "accommodation_date_coverage", "lodgings").status == "failed"
+
+
+@pytest.mark.parametrize("status_code", ["03", "04"])
+def test_closed_or_cancelled_status_requires_a_valid_closure_date(
+    tmp_path: Path,
+    status_code: str,
+) -> None:
+    """Catches closed current stock being accepted without CLSBIZ_YMD evidence."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    _valid_run(db, tmp_path, run_id)
+    status_class = "closed" if status_code == "03" else "cancelled_or_expired_or_stopped"
+    db.connection.execute(
+        """update staging_license_snapshot set
+               status_code = ?, status_class = ?, closure_date = null,
+               closure_date_quality = 'missing'
+           where last_loaded_run_id = ?""",
+        [status_code, status_class, run_id],
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    assert _check(report, "accommodation_status_coverage", "lodgings").status == "failed"
+
+
 def _valid_run(
     db: Database,
     tmp_path: Path,
@@ -686,12 +732,15 @@ def _valid_run(
         insert into staging_license_snapshot (
             source_id, source_record_id, observed_on, first_loaded_run_id, last_loaded_run_id,
             region_quality, region_group, district, room_count, room_count_quality,
-            jurisdiction_code, license_date, source_updated_at, data_updated_on,
+            jurisdiction_code, license_date, license_date_quality,
+            closure_date_quality, source_updated_at, source_modified_on,
+            source_modified_date_quality, data_updated_on, data_updated_date_quality,
             status_code, status_name, status_class, detailed_status_code,
             detailed_status_name, source_payload_json, record_hash
         ) values (
             'lodgings', ?, ?, ?, ?, 'resolved', 'west', '사하구', 1, 'reported',
-            '6260000', '2020-01-02', '20250831', '2025-09-01',
+            '6260000', '2020-01-02', 'parsed', 'missing', '20250831',
+            '2025-08-31', 'parsed', '2025-09-01', 'parsed',
             '01', '영업', 'active', '01', '정상', '{}', ?
         )
         on conflict (source_id, source_record_id, observed_on) do update

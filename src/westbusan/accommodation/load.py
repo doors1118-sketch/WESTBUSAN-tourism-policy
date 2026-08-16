@@ -28,7 +28,9 @@ def _payload(record: LicenseRecord) -> tuple[list[object], str]:
         record.region_group,
         record.region_quality,
         record.license_date,
+        record.license_date_quality,
         record.closure_date,
+        record.closure_date_quality,
         record.status_code,
         record.status_name,
         record.status_class,
@@ -43,7 +45,10 @@ def _payload(record: LicenseRecord) -> tuple[list[object], str]:
         record.projected_y,
         record.coordinate_crs,
         record.source_updated_at,
+        record.source_modified_on,
+        record.source_modified_date_quality,
         record.data_updated_on,
+        record.data_updated_date_quality,
         record.data_update_point,
         source_payload,
     ]
@@ -56,21 +61,26 @@ insert into staging_license_snapshot (
     source_id, source_record_id, observed_on, first_loaded_run_id, last_loaded_run_id,
     jurisdiction_code, source_name,
     normalized_name, road_address, lot_address, district, region_group, region_quality,
-    license_date, closure_date, status_code, status_name, status_class,
+    license_date, license_date_quality, closure_date, closure_date_quality,
+    status_code, status_name, status_class,
     detailed_status_code, detailed_status_name, room_count, room_count_quality,
     normalized_phone, longitude, latitude, projected_x, projected_y, coordinate_crs,
-    source_updated_at, data_updated_on, data_update_point, source_payload_json, record_hash
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    source_updated_at, source_modified_on, source_modified_date_quality,
+    data_updated_on, data_updated_date_quality, data_update_point,
+    source_payload_json, record_hash
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _UPDATE_SQL = """
 update staging_license_snapshot set
     jurisdiction_code = ?, source_name = ?, normalized_name = ?, road_address = ?, lot_address = ?,
-    district = ?, region_group = ?, region_quality = ?, license_date = ?, closure_date = ?,
+    district = ?, region_group = ?, region_quality = ?, license_date = ?,
+    license_date_quality = ?, closure_date = ?, closure_date_quality = ?,
     status_code = ?, status_name = ?, status_class = ?, detailed_status_code = ?,
     detailed_status_name = ?, room_count = ?, room_count_quality = ?, normalized_phone = ?,
     longitude = ?, latitude = ?, projected_x = ?, projected_y = ?, coordinate_crs = ?,
-    source_updated_at = ?, data_updated_on = ?, data_update_point = ?,
+    source_updated_at = ?, source_modified_on = ?, source_modified_date_quality = ?,
+    data_updated_on = ?, data_updated_date_quality = ?, data_update_point = ?,
     source_payload_json = ?, record_hash = ?, last_loaded_run_id = ?
 where source_id = ? and source_record_id = ? and observed_on = ?
 """

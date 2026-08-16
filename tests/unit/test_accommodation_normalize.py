@@ -130,14 +130,19 @@ def test_official_current_fields_preserve_status_dates_and_projected_coordinates
 
     assert record.jurisdiction_code == "6260000"
     assert record.license_date == date(2020, 1, 2)
+    assert record.license_date_quality == "parsed"
     assert record.closure_date == date(2025, 8, 31)
+    assert record.closure_date_quality == "parsed"
     assert record.status_code == "03"
     assert record.status_name == "폐업"
     assert record.status_class == "closed"
     assert record.detailed_status_code == "03"
     assert record.detailed_status_name == "폐업"
     assert record.source_updated_at == "20250831"
+    assert record.source_modified_on == date(2025, 8, 31)
+    assert record.source_modified_date_quality == "parsed"
     assert record.data_updated_on == date(2025, 9, 1)
+    assert record.data_updated_date_quality == "parsed"
     assert record.data_update_point == "01"
     assert record.projected_x == 963210.12
     assert record.projected_y == 1812345.67
@@ -163,3 +168,28 @@ def test_overall_status_codes_have_pinned_official_meanings() -> None:
             date(2026, 8, 16),
         )
         assert record.status_class == status_class
+
+
+def test_invalid_official_dates_are_explicitly_classified_not_silently_preserved() -> None:
+    """Catches nonempty invalid modification dates satisfying a null-only gate."""
+    record = normalize_license(
+        "lodgings",
+        {
+            "MNG_NO": "INVALID-DATES",
+            "LCPMT_YMD": "2020-99-99",
+            "CLSBIZ_YMD": "not-a-date",
+            "LAST_MDFCN_YMD": "20250899",
+            "DATA_UPDT_YMD": "20251301",
+        },
+        date(2026, 8, 16),
+    )
+
+    assert record.license_date is None
+    assert record.license_date_quality == "invalid"
+    assert record.closure_date is None
+    assert record.closure_date_quality == "invalid"
+    assert record.source_updated_at == "20250899"
+    assert record.source_modified_on is None
+    assert record.source_modified_date_quality == "invalid"
+    assert record.data_updated_on is None
+    assert record.data_updated_date_quality == "invalid"

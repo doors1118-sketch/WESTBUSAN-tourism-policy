@@ -84,7 +84,9 @@ class LicenseRecord:
     region_quality: str
     is_busan: bool
     license_date: date | None
+    license_date_quality: str
     closure_date: date | None
+    closure_date_quality: str
     status_code: str | None
     status_name: str | None
     status_class: str | None
@@ -99,7 +101,10 @@ class LicenseRecord:
     projected_y: float | None
     coordinate_crs: str | None
     source_updated_at: str | None
+    source_modified_on: date | None
+    source_modified_date_quality: str
     data_updated_on: date | None
+    data_updated_date_quality: str
     data_update_point: str | None
     source_payload_json: dict[str, object]
 
@@ -125,16 +130,20 @@ def _as_text(value: object | None) -> str | None:
 
 
 def _parse_date(value: object | None) -> date | None:
+    return _parse_date_with_quality(value)[0]
+
+
+def _parse_date_with_quality(value: object | None) -> tuple[date | None, str]:
     text = _as_text(value)
     if text is None:
-        return None
+        return None, "missing"
     match = re.fullmatch(r"(\d{4})[-/.]?(\d{2})[-/.]?(\d{2})", text[:10])
     if match is None:
-        return None
+        return None, "invalid"
     try:
-        return date(*(int(part) for part in match.groups()))
+        return date(*(int(part) for part in match.groups())), "parsed"
     except ValueError:
-        return None
+        return None, "invalid"
 
 
 def _parse_number(value: object | None) -> int | None:
@@ -202,6 +211,18 @@ def normalize_license(
     room_count, room_count_quality = _room_count(
         values.get("korean_rooms"), values.get("western_rooms")
     )
+    license_date, license_date_quality = _parse_date_with_quality(
+        values.get("license_date")
+    )
+    closure_date, closure_date_quality = _parse_date_with_quality(
+        values.get("closure_date")
+    )
+    source_modified_on, source_modified_date_quality = _parse_date_with_quality(
+        values.get("updated_at")
+    )
+    data_updated_on, data_updated_date_quality = _parse_date_with_quality(
+        values.get("data_updated_on")
+    )
     source_payload = {
         str(key): value for key, value in row.items() if _alias_key(str(key)) not in _ALL_ALIASES
     }
@@ -218,8 +239,10 @@ def normalize_license(
         region_group=region_group,
         region_quality=region_quality,
         is_busan=is_busan,
-        license_date=_parse_date(values.get("license_date")),
-        closure_date=_parse_date(values.get("closure_date")),
+        license_date=license_date,
+        license_date_quality=license_date_quality,
+        closure_date=closure_date,
+        closure_date_quality=closure_date_quality,
         status_code=_as_text(values.get("status_code")),
         status_name=_as_text(values.get("status_name")),
         status_class=_status_class(values.get("status_code")),
@@ -239,7 +262,10 @@ def normalize_license(
             else None
         ),
         source_updated_at=_as_text(values.get("updated_at")),
-        data_updated_on=_parse_date(values.get("data_updated_on")),
+        source_modified_on=source_modified_on,
+        source_modified_date_quality=source_modified_date_quality,
+        data_updated_on=data_updated_on,
+        data_updated_date_quality=data_updated_date_quality,
         data_update_point=_as_text(values.get("data_update_point")),
         source_payload_json=source_payload,
     )

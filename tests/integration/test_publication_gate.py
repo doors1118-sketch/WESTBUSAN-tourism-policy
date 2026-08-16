@@ -103,12 +103,15 @@ def _valid_report(db: Database, tmp_path: Path, run_id) -> QualityReport:
         insert into staging_license_snapshot (
             source_id, source_record_id, observed_on, first_loaded_run_id, last_loaded_run_id,
             district, region_group, region_quality, room_count, room_count_quality,
-            jurisdiction_code, license_date, source_updated_at, data_updated_on,
+            jurisdiction_code, license_date, license_date_quality,
+            closure_date_quality, source_updated_at, source_modified_on,
+            source_modified_date_quality, data_updated_on, data_updated_date_quality,
             status_code, status_name, status_class, detailed_status_code,
             detailed_status_name, source_payload_json, record_hash
         ) values (
             'lodgings', 'L1', ?, ?, ?, '사하구', 'west', 'resolved', 1, 'reported',
-            '6260000', '2020-01-02', '20250831', '2025-09-01',
+            '6260000', '2020-01-02', 'parsed', 'missing', '20250831',
+            '2025-08-31', 'parsed', '2025-09-01', 'parsed',
             '01', '영업', 'active', '01', '정상', '{}', 'hash'
         )
         """,
