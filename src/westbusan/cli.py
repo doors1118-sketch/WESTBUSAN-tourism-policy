@@ -12,7 +12,6 @@ from zoneinfo import ZoneInfo
 import typer
 
 from westbusan.orchestrator import Pipeline, RunSummary, export_current, redact_for_log
-from westbusan.quality.publish import current_published_run
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -99,10 +98,11 @@ def quality(
     """Print persisted quality evidence without rerunning or weakening gates."""
     pipeline = _pipeline(root)
     pipeline.db.migrate()
-    selected = run_id or current_published_run(pipeline.db)
+    selected = run_id
     if selected is None:
         rows = pipeline.db.query(
-            "select run_id from pipeline_run order by started_at desc limit 1"
+            """select run_id from pipeline_run
+               order by created_at desc, attempt desc nulls last limit 1"""
         )
         selected = rows[0][0] if rows else None
     if selected is None:

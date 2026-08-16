@@ -37,6 +37,26 @@
   auditing and a scalar DB helper. Corrected quality identifier recognition so
   valid case-insensitive provider aliases such as `mng_no` retain the same
   contract as normalization.
+- Hardened run lifecycle after independent review. A logical run has immutable
+  numbered attempts: a terminal publication returns its persisted summary as a
+  no-op, while retrying a blocked attempt receives a new deterministic run ID.
+  Insert-only run start and RUNNING-only finalization prevent a published run
+  from being reopened or later marked blocked.
+- Added versioned publication snapshots for duplicate-review evidence. Export
+  now reads the snapshot owned by the current published run, so a blocked
+  successor cannot alter the previous publication's operator review export.
+- Removed orchestration-created blanket tourism and transport checkpoints.
+  Completion is left to evidence-aware loaders; unsupported partitions remain
+  pending and fail closed. Daily tourism now requests the previous complete
+  calendar month while accommodation and building collection keep the actual
+  `as_of` snapshot.
+- Production building, tourism, and transport loader boundaries now translate
+  unexpected family failures into run-scoped source evidence and always reach a
+  structured terminal `BLOCKED` summary. CLI `quality` defaults to the latest
+  attempted run, including a blocked attempt behind a prior publication.
+- Documented `WESTBUSAN_ENABLE_LIVE_TRANSPORT=false` as the safe default in the
+  environment example, README, and Cloud handoff; only an explicitly reviewed
+  opt-in enables live transport collection.
 
 ## TDD evidence
 
@@ -49,13 +69,19 @@
   Typer `date` annotations, fixture default-source selection, and a later
   malformed source aborting earlier successful work. Each was followed by its
   focused green run.
+- Independent-review REDs reproduced terminal evidence replacement, reused
+  blocked run IDs, fabricated tourism/transport month checkpoints, current-run
+  rather than latest-attempt quality selection, daily tourism start-after-end,
+  mutable duplicate-review export, and unhandled family loader crashes. Each
+  regression was first observed failing and then passed against the hardened
+  implementation.
 - Final focused command:
   `python -m pytest tests/integration/test_end_to_end.py tests/unit/test_orchestrator.py tests/unit/test_cli.py -v`
-  — 9 passed.
+  — 17 passed.
 
 ## Final verification
 
-- Full `python -m pytest -v`: 167 passed, 3 skipped (opt-in live tests), exit 0.
+- Full `python -m pytest -v`: 175 passed, 3 skipped (opt-in live tests), exit 0.
 - `python -m ruff check .`: all checks passed, exit 0.
 - `python -m westbusan.cli --help`: six commands listed, exit 0.
 - Ignored-path `python -m westbusan.cli init-db --root .`: structured initialized

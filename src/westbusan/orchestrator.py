@@ -46,6 +46,16 @@ _FIXTURE_SOURCES = (
     "hanok_experience",
     "tourist_pensions",
 )
+_OPERATIONAL_ERRORS = (
+    AuthenticationError,
+    HttpStatusError,
+    KeyError,
+    OSError,
+    QuotaError,
+    SchemaError,
+    TypeError,
+    ValueError,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,16 +174,12 @@ class Pipeline:
         unknown = sorted(set(selected) - set(_FIXTURE_SOURCES))
         if unknown:
             raise ValueError(f"no fixture collector for: {', '.join(unknown)}")
-        started = datetime.combine(end, time.min, tzinfo=_SEOUL)
         identity = f"{mode}:{start.isoformat()}:{end.isoformat()}:{','.join(selected)}"
-        run = RunContext(
-            run_id=uuid5(NAMESPACE_URL, f"westbusan:fixture:{identity}"),
-            mode=mode,
-            started_at=started,
-        )
         self.db.migrate()
-        self._start_run(run)
-        self._reset_restartable_evidence(run)
+        run, persisted = self._prepare_run("fixture", mode, end, identity)
+        if persisted is not None:
+            return persisted
+        assert run is not None
         logger = _JsonlLogger(self.settings.log_dir, end)
         total_rows = 0
         for source_id in selected:
@@ -182,9 +188,9 @@ class Pipeline:
                 total_rows += self._collect_fixture_source(run, source_id, end, logger)
             except (json.JSONDecodeError, OSError, TypeError, ValueError) as error:
                 self._record_failure(run, source_id, error, logger)
-                self._checkpoint(source_id, partition, "failed", 1)
+                self._checkpoint(source_id, partition, "failed", 1, run.run_id)
                 continue
-            self._checkpoint(source_id, partition, "completed", 2)
+            self._checkpoint(source_id, partition, "completed", 2, run.run_id)
         return self._finish_run(run, total_rows, logger)
 
     def _execute_production(
@@ -195,15 +201,12 @@ class Pipeline:
         source_ids: list[str] | None,
     ) -> RunSummary:
         selected = self._selected_ids(source_ids)
-        started = datetime.combine(end, time.min, tzinfo=_SEOUL)
         identity = f"{mode}:{start.isoformat()}:{end.isoformat()}:{','.join(selected)}"
-        run = RunContext(
-            uuid5(NAMESPACE_URL, f"westbusan:production:{self.db.path}:{identity}"),
-            mode,
-            started,
-        )
         self.db.migrate()
-        self._start_run(run)
+        run, persisted = self._prepare_run("production", mode, end, identity)
+        if persisted is not None:
+            return persisted
+        assert run is not None
         logger = _JsonlLogger(self.settings.log_dir, end)
         total_rows = 0
         client = SafeHttpClient()
@@ -218,16 +221,7 @@ class Pipeline:
                     "update source_status set run_id = ? where source_id = ? and checked_at = ?",
                     [run.run_id, source_id, status.checked_at],
                 )
-            except (
-                AuthenticationError,
-                HttpStatusError,
-                KeyError,
-                OSError,
-                QuotaError,
-                SchemaError,
-                TypeError,
-                ValueError,
-            ) as error:
+            except _OPERATIONAL_ERRORS as error:
                 self._record_failure(run, source_id, error, logger)
 
         for source_id in selected:
@@ -236,16 +230,7 @@ class Pipeline:
                 continue
             try:
                 total_rows += self._collect_accommodation(run, spec.source_id, end, logger)
-            except (
-                AuthenticationError,
-                HttpStatusError,
-                KeyError,
-                OSError,
-                QuotaError,
-                SchemaError,
-                TypeError,
-                ValueError,
-            ) as error:
+            except _OPERATIONAL_ERRORS as error:
                 self._record_failure(run, source_id, error, logger)
 
         selected_registry = SourceRegistry(
@@ -258,24 +243,46 @@ class Pipeline:
                     for source_id in self.registry.ids(group="building")
                 )
             )
-            result = collect_buildings_for_licenses(
-                self.db, building_registry, run, raw_store=self.raw_store
-            )
-            total_rows += result.building_rows
+            try:
+                result = collect_buildings_for_licenses(
+                    self.db, building_registry, run, raw_store=self.raw_store
+                )
+            except Exception as error:  # noqa: BLE001 - terminal family boundary
+                for source_id in selected:
+                    if self.registry.get(source_id).group == "building":
+                        self._record_failure(run, source_id, error, logger)
+            else:
+                total_rows += result.building_rows
         if any(self.registry.get(item).group == "tourism" for item in selected):
-            result = load_tourism_demand(self.db, selected_registry, start, end, run)
-            total_rows += result.records_loaded
-            self._complete_source_partitions(result.sources_ready, start, end, logger, run)
+            tourism_start, tourism_end = start, end
+            if mode == "daily":
+                tourism_end = date(end.year, end.month, 1) - timedelta(days=1)
+                tourism_start = date(tourism_end.year, tourism_end.month, 1)
+            try:
+                result = load_tourism_demand(
+                    self.db, selected_registry, tourism_start, tourism_end, run
+                )
+            except Exception as error:  # noqa: BLE001 - terminal family boundary
+                for source_id in selected:
+                    if self.registry.get(source_id).group == "tourism":
+                        self._record_failure(run, source_id, error, logger)
+            else:
+                total_rows += result.records_loaded
         if any(self.registry.get(item).group == "transport" for item in selected):
             before = datetime.now(UTC)
-            result = load_transport(self.db, selected_registry, run)
-            self.db.connection.execute(
-                """update source_status set run_id = ?
-                   where run_id is null and checked_at >= ?""",
-                [run.run_id, before],
-            )
-            total_rows += result.records_loaded
-            self._complete_source_partitions(result.sources_ready, start, end, logger, run)
+            try:
+                result = load_transport(self.db, selected_registry, run)
+            except Exception as error:  # noqa: BLE001 - terminal family boundary
+                for source_id in selected:
+                    if self.registry.get(source_id).group == "transport":
+                        self._record_failure(run, source_id, error, logger)
+            else:
+                self.db.connection.execute(
+                    """update source_status set run_id = ?
+                       where run_id is null and checked_at >= ?""",
+                    [run.run_id, before],
+                )
+                total_rows += result.records_loaded
         return self._finish_run(run, total_rows, logger)
 
     def _finish_run(
@@ -300,8 +307,9 @@ class Pipeline:
         )
         finished = datetime.now(UTC)
         self.db.connection.execute(
-            "update pipeline_run set status = ? where run_id = ?",
-            [status, run.run_id],
+            """update pipeline_run set status = ?, finished_at = ?
+               where run_id = ? and status = 'RUNNING'""",
+            [status, finished, run.run_id],
         )
         summary = RunSummary(
             run.run_id,
@@ -319,6 +327,7 @@ class Pipeline:
             run.started_at,
             finished,
         )
+        self._persist_summary(summary)
         logger.write("run_complete", **summary.as_dict())
         return summary
 
@@ -328,20 +337,96 @@ class Pipeline:
             self.registry.get(source_id)
         return selected
 
-    def _start_run(self, run: RunContext) -> None:
+    def _prepare_run(
+        self,
+        scope: str,
+        mode: Literal["daily", "backfill"],
+        as_of: date,
+        identity: str,
+    ) -> tuple[RunContext | None, RunSummary | None]:
+        logical_key = str(
+            uuid5(
+                NAMESPACE_URL,
+                f"westbusan:{scope}:{self.db.path.resolve()}:{identity}",
+            )
+        )
+        rows = self.db.query(
+            """select run_id, status, attempt
+               from pipeline_run where logical_run_key = ?
+               order by attempt desc limit 1""",
+            [logical_key],
+        )
+        if rows:
+            prior_run_id, prior_status, prior_attempt = rows[0]
+            if str(prior_status) in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}:
+                return None, self._load_summary(prior_run_id)
+            if str(prior_status) == "RUNNING":
+                return (
+                    RunContext(
+                        prior_run_id,
+                        mode,
+                        datetime.combine(as_of, time.min, tzinfo=_SEOUL),
+                        "RUNNING",
+                    ),
+                    None,
+                )
+            attempt = int(prior_attempt) + 1
+        else:
+            attempt = 1
+        started = datetime.combine(as_of, time.min, tzinfo=_SEOUL)
+        run = RunContext(
+            uuid5(NAMESPACE_URL, f"{logical_key}:attempt:{attempt}"),
+            mode,
+            started,
+        )
+        self._start_run(run, logical_key, attempt)
+        return run, None
+
+    def _start_run(self, run: RunContext, logical_key: str, attempt: int) -> None:
         self.db.connection.execute(
             """
-            insert into pipeline_run (run_id, mode, started_at, status)
-            values (?, ?, ?, ?)
-            on conflict (run_id) do update set status = excluded.status
+            insert into pipeline_run (
+                run_id, mode, started_at, status, logical_run_key, attempt
+            ) values (?, ?, ?, ?, ?, ?)
+            on conflict (run_id) do nothing
             """,
-            [run.run_id, run.mode, run.started_at, run.status],
+            [run.run_id, run.mode, run.started_at, run.status, logical_key, attempt],
         )
 
-    def _reset_restartable_evidence(self, run: RunContext) -> None:
+    def _persist_summary(self, summary: RunSummary) -> None:
         self.db.connection.execute(
-            "delete from source_status where run_id = ?", [run.run_id]
+            """
+            insert into pipeline_run_summary values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict (run_id) do nothing
+            """,
+            [
+                summary.run_id,
+                summary.mode,
+                summary.status,
+                summary.published,
+                summary.raw_artifacts,
+                summary.row_count,
+                summary.warning_count,
+                summary.failed_required_checks,
+                summary.started_at,
+                summary.finished_at,
+            ],
         )
+
+    def _load_summary(self, run_id: UUID) -> RunSummary:
+        rows = self.db.query(
+            """select run_id, mode, status, published, raw_artifacts, row_count,
+                      warning_count, failed_required_checks,
+                      started_at::varchar, finished_at::varchar
+               from pipeline_run_summary where run_id = ?""",
+            [run_id],
+        )
+        if len(rows) != 1:
+            raise RuntimeError(f"terminal run {run_id} has no persisted summary")
+        values = list(rows[0])
+        values[-2] = datetime.fromisoformat(str(values[-2]))
+        values[-1] = datetime.fromisoformat(str(values[-1]))
+        return RunSummary(*values)
 
     def _collect_fixture_source(
         self,
@@ -402,7 +487,7 @@ class Pipeline:
         self.db.record_source_status(
             SourceStatus(
                 source_id=source_id,
-                checked_at=run.started_at,
+                checked_at=datetime.now(UTC),
                 status=status,
                 detail={
                     "operation": "info",
@@ -438,8 +523,9 @@ class Pipeline:
             raise AuthenticationError("DATA_GO_KR_SERVICE_KEY is not configured")
         partition = f"snapshot:{as_of.isoformat()}"
         checkpoint = self._checkpoint_value(source_id, partition)
-        next_page = int(checkpoint.get("next_page", 1))
-        if checkpoint.get("status") == "completed":
+        same_attempt = checkpoint.get("run_id") == str(run.run_id)
+        next_page = int(checkpoint.get("next_page", 1)) if same_attempt else 1
+        if same_attempt and checkpoint.get("status") == "completed":
             return 0
         client = SafeHttpClient()
         page_no = next_page
@@ -483,6 +569,7 @@ class Pipeline:
                 partition,
                 "completed" if completed else "running",
                 page_no + 1,
+                run.run_id,
             )
             if completed:
                 break
@@ -518,9 +605,11 @@ class Pipeline:
         partition: str,
         status: str,
         next_page: int,
+        run_id: UUID,
     ) -> None:
         value = json.dumps(
-            {"status": status, "next_page": next_page}, sort_keys=True
+            {"status": status, "next_page": next_page, "run_id": str(run_id)},
+            sort_keys=True,
         )
         self.db.connection.execute(
             """
@@ -575,30 +664,6 @@ class Pipeline:
             row_count=0,
             status=status,
         )
-
-    def _complete_source_partitions(
-        self,
-        source_ids: tuple[str, ...],
-        start: date,
-        end: date,
-        logger: _JsonlLogger,
-        run: RunContext,
-    ) -> None:
-        for source_id in source_ids:
-            for partition in iter_source_partitions(
-                self.registry.get(source_id), start, end
-            ):
-                self._checkpoint(source_id, partition, "completed", 2)
-            logger.write(
-                "source_complete",
-                run_id=run.run_id,
-                source_id=source_id,
-                partition=f"{start.isoformat()}..{end.isoformat()}",
-                duration=0.0,
-                row_count=None,
-                status="READY",
-            )
-
 
 class _JsonlLogger:
     def __init__(self, log_dir: Path, log_date: date) -> None:
@@ -713,9 +778,11 @@ def export_current(db: Database, data_dir: Path, export_date: date) -> tuple[Pat
             [run_id],
         ),
         "duplicate_review": (
-            """select * from duplicate_review
+            """select review_id, left_facility_id, right_facility_id,
+                      review_status, evidence_json
+               from publication_duplicate_review_snapshot where run_id = ?
                order by review_status, review_id""",
-            [],
+            [run_id],
         ),
     }
     paths: list[Path] = []

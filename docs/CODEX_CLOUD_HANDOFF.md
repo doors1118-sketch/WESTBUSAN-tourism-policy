@@ -23,7 +23,10 @@ Cloud 작업 공간이 폐기되면 함께 사라질 수 있습니다. 지속 �
    command, 로그에 복사하지 않습니다.
 3. 일반 환경 변수 `WESTBUSAN_DATA_DIR=data`,
    `WESTBUSAN_DB_PATH=data/westbusan.duckdb`, `WESTBUSAN_LOG_DIR=logs`를
-   설정합니다. Cloud의 파일 지속성 한계를 먼저 확인합니다.
+   설정합니다. `WESTBUSAN_ENABLE_LIVE_TRANSPORT`는 기본 `false`로 유지합니다.
+   공식 operation/파일 revision과 credential scope를 inspection한 뒤 라이브
+   교통 수집을 명시적으로 승인할 때만 `true`로 바꿉니다. Cloud의 파일 지속성
+   한계를 먼저 확인합니다.
 
 ## bootstrap
 
@@ -86,8 +89,8 @@ git log -5 --oneline
 
 ## 로컬 검증 상태 (2026-08-16)
 
-- Task 12 focused: 9 passed.
-- 전체 pytest: 167 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
+- Task 12 focused: 17 passed.
+- 전체 pytest: 175 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
 - Ruff: all checks passed.
 - CLI `--help`: 여섯 명령 표시, exit 0.
 - ignored 임시 DB `init-db`: exit 0.

@@ -20,7 +20,9 @@ Copy-Item .env.example .env
 `.env` 또는 프로세스 환경에는 값이 아니라 다음 이름만 사용합니다.
 `DATA_GO_KR_SERVICE_KEY`는 필수이고 `ODCLOUD_API_KEY`는 ODCloud 수집 시
 선택입니다. 경로 변수는 `WESTBUSAN_DATA_DIR`, `WESTBUSAN_DB_PATH`,
-`WESTBUSAN_LOG_DIR`입니다. 키 값은 명령줄, URL, 문서, fixture, 로그 또는
+`WESTBUSAN_LOG_DIR`입니다. 라이브 교통 수집은 기본 비활성이며, 원천 inspection과
+검토를 마친 운영자가 `WESTBUSAN_ENABLE_LIVE_TRANSPORT=true`를 명시한 경우에만
+활성화됩니다. 키 값은 명령줄, URL, 문서, fixture, 로그 또는
 DuckDB에 넣지 않습니다. `.env`는 자동 로드되지 않으므로 운영 전 현재
 PowerShell 프로세스에 안전하게 주입해야 합니다.
 
@@ -51,8 +53,10 @@ PowerShell 프로세스에 안전하게 주입해야 합니다.
 
 backfill 날짜는 양 끝을 포함합니다. 월 원천은 월별 partition, 현행 상태만
 제공하는 인허가·건축 원천은 종료일 기준 full snapshot 한 번으로 처리합니다.
-성공한 partition은 `collection_checkpoint`에 남아 재시작되고 이후 원천 실패가
-이미 저장된 성공 데이터를 삭제하지 않습니다.
+`collection_checkpoint` 완료 상태는 해당 원천·partition의 raw/fact 또는 명시적
+empty 증거가 있을 때만 기록합니다. 관광 원천은 관광 loader가 보존한 backfill
+상태를 그대로 기준으로 삼습니다. 이후 원천 실패가 이미 저장된 성공 데이터를
+삭제하지 않습니다.
 
 ## 품질, 중복 검토, export
 

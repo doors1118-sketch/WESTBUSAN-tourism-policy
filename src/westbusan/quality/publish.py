@@ -48,6 +48,7 @@ def publish_if_valid(db: Database, run_id: UUID, report: QualityReport) -> Publi
                 db.connection.execute("commit")
                 began = False
                 return PublishResult(True, run_id, run_id)
+            _snapshot_duplicate_review(db, run_id)
             _write_current_pointer(db, run_id)
             db.connection.execute("commit")
             began = False
@@ -78,6 +79,23 @@ def _write_current_pointer(db: Database, run_id: UUID) -> None:
         values ('current', ?)
         on conflict (publication_key) do update
             set published_run_id = excluded.published_run_id, published_at = now()
+        """,
+        [run_id],
+    )
+
+
+def _snapshot_duplicate_review(db: Database, run_id: UUID) -> None:
+    """Freeze duplicate-review evidence in the same transaction as publication."""
+    db.connection.execute(
+        """
+        insert into publication_duplicate_review_snapshot (
+            run_id, review_id, left_facility_id, right_facility_id,
+            review_status, evidence_json
+        )
+        select ?, review_id, left_facility_id, right_facility_id,
+               review_status, evidence_json
+        from duplicate_review
+        on conflict (run_id, review_id) do nothing
         """,
         [run_id],
     )
