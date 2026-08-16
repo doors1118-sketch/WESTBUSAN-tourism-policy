@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from calendar import monthrange
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
@@ -12,7 +13,7 @@ from statistics import mean, median
 from typing import Literal
 from uuid import UUID
 
-from westbusan.config import PolicyConfig
+from westbusan.config import PolicyConfig, RegionConfig
 from westbusan.db import Database, ensure_run_rebuildable
 from westbusan.inventory import (
     is_active_status,
@@ -37,15 +38,22 @@ class RegionMetrics:
     region_group: str
     median_rooms: float | None
     small_facility_share: float | None
-    building_30y_share: float | None
-    visitors_per_100_rooms: float | None
+    building_old_share: float | None
+    visitor_person_days_per_100_rooms: float | None
     demand_pressure_band: str
-    room_supply_band: str
+    supply_stock_band: str
+    room_supply_growth_band: str
+    visitor_growth_minus_room_supply_growth: float | None
+    tourism_registration_room_share: float | None
+    openings: int | None
+    closures: int | None
+    evidence: dict[str, dict[str, object]]
 
 
 @dataclass(frozen=True, slots=True)
 class PolicySignal:
     code: str
+    status: Literal["triggered", "not_triggered", "unavailable"]
     evidence_json: str
 
 
@@ -60,38 +68,125 @@ class MartBuildResult:
 def policy_signals(
     metrics: RegionMetrics, *, small_room_threshold: int = 20
 ) -> list[PolicySignal]:
-    """Return only signals supported by the evidence matrix.
-
-    Building age is deliberately described as an age proxy, not a claim about
-    interiors or renovation condition.  Missing, unclassified, or contradictory
-    inputs result in no signal.
-    """
-    base = asdict(metrics)
-    complete_renovation = all(
-        value is not None
-        for value in (
-            metrics.median_rooms,
-            metrics.small_facility_share,
-            metrics.building_30y_share,
-            metrics.visitors_per_100_rooms,
-        )
-    ) and metrics.demand_pressure_band == "high"
+    """Evaluate all five approved rules with metric-specific evidence gates."""
+    values: dict[str, object] = {
+        "median_rooms": metrics.median_rooms,
+        "small_facility_share": metrics.small_facility_share,
+        "building_old_share": metrics.building_old_share,
+        "visitor_person_days_per_100_rooms": metrics.visitor_person_days_per_100_rooms,
+        "supply_stock_band": metrics.supply_stock_band,
+        "visitor_growth_minus_room_supply_growth": metrics.visitor_growth_minus_room_supply_growth,
+        "tourism_registration_room_share": metrics.tourism_registration_room_share,
+        "openings": metrics.openings,
+        "closures": metrics.closures,
+    }
+    rules: tuple[
+        tuple[str, tuple[str, ...], bool, str], ...
+    ] = (
+        (
+            "RENOVATION_SUPPORT",
+            ("median_rooms", "small_facility_share", "building_old_share"),
+            bool(
+                metrics.median_rooms is not None
+                and metrics.median_rooms <= small_room_threshold
+                and metrics.small_facility_share is not None
+                and metrics.small_facility_share >= 0.5
+                and metrics.building_old_share is not None
+                and metrics.building_old_share >= 0.5
+            ),
+            "building age is a use-approval age proxy, not interior condition",
+        ),
+        (
+            "SUPPLY_EXPANSION_REVIEW",
+            ("visitor_person_days_per_100_rooms", "supply_stock_band"),
+            metrics.demand_pressure_band == "high"
+            and metrics.supply_stock_band == "low",
+            "visitor-person-days pressure is not occupancy; stock level is separate from growth",
+        ),
+        (
+            "OLD_LOW_DEMAND_REPOSITIONING",
+            ("building_old_share", "visitor_person_days_per_100_rooms"),
+            bool(
+                metrics.building_old_share is not None
+                and metrics.building_old_share >= 0.5
+                and metrics.demand_pressure_band == "low"
+            ),
+            "low estimated demand plus old building stock supports content/repositioning review",
+        ),
+        (
+            "DEMAND_GROWTH_LOW_TOURISM_CAPACITY",
+            (
+                "visitor_growth_minus_room_supply_growth",
+                "tourism_registration_room_share",
+            ),
+            bool(
+                metrics.visitor_growth_minus_room_supply_growth is not None
+                and metrics.visitor_growth_minus_room_supply_growth > 0
+                and metrics.tourism_registration_room_share is not None
+                and metrics.tourism_registration_room_share < 0.3
+            ),
+            "growth evidence and tourism-room subgroup coverage must both be compatible",
+        ),
+        (
+            "CLOSURE_DOMINANT_MARKET_STABILIZATION",
+            ("openings", "closures"),
+            bool(
+                metrics.openings is not None
+                and metrics.closures is not None
+                and metrics.closures > metrics.openings
+                and metrics.closures > 0
+            ),
+            "legal closure and opening events are distinct from observed stock",
+        ),
+    )
     signals: list[PolicySignal] = []
-    if complete_renovation and metrics.median_rooms <= small_room_threshold and metrics.small_facility_share >= 0.5 and metrics.building_30y_share >= 0.5:
-        signals.append(
-            PolicySignal(
-                "RENOVATION_SUPPORT",
-                _json({"matrix": "old_small_high_pressure", "metrics": base, "interpretation": "building age is not evidence of interior renovation condition"}),
-            )
+    for code, required, triggered, interpretation in rules:
+        available = all(
+            values[name] is not None
+            and not (isinstance(values[name], str) and values[name] == "unclassified")
+            and _policy_metric_covered(metrics.evidence.get(name))
+            for name in required
         )
-    if complete_renovation and metrics.room_supply_band == "low":
+        status: Literal["triggered", "not_triggered", "unavailable"] = (
+            "unavailable" if not available else "triggered" if triggered else "not_triggered"
+        )
         signals.append(
             PolicySignal(
-                "SUPPLY_EXPANSION_REVIEW",
-                _json({"matrix": "high_pressure_low_supply", "metrics": base, "interpretation": "visitor pressure is not occupancy"}),
+                code,
+                status,
+                _json(
+                    {
+                        "rule": code,
+                        "evaluation_status": status,
+                        "region_group": metrics.region_group,
+                        "required_metrics": {
+                            name: {
+                                "value": values[name],
+                                **metrics.evidence.get(name, {}),
+                            }
+                            for name in required
+                        },
+                        "interpretation": interpretation,
+                    }
+                ),
             )
         )
     return signals
+
+
+def _policy_metric_covered(evidence: dict[str, object] | None) -> bool:
+    if evidence is None:
+        return False
+    numerator = evidence.get("numerator")
+    denominator = evidence.get("denominator")
+    coverage = evidence.get("coverage")
+    return (
+        numerator is not None
+        and denominator is not None
+        and coverage is not None
+        and float(coverage) >= 0.8
+        and float(denominator) > 0
+    )
 
 
 def build_marts(
@@ -142,9 +237,15 @@ def build_marts(
     after_stage("facility")
     district_metrics = _district_metrics(facilities, policy)
     district_metrics.update(_event_only_districts(db, run_id, as_of, district_metrics))
+    district_metrics = _seed_all_districts(db, run_id, district_metrics)
     periods = _periods(db, run_id, as_of, district_metrics)
     records = _region_rows(db, run_id, as_of, district_metrics, periods, policy)
-    commit_stage(lambda: _replace_regions(db, run_id, records))
+    commit_stage(
+        lambda: (
+            _replace_regions(db, run_id, records),
+            _replace_group_regions(db, run_id, records),
+        )
+    )
     heartbeat()
     after_stage("region")
     commit_stage(lambda: _replace_comparisons(db, run_id, records, facilities))
@@ -379,7 +480,20 @@ def _district_metrics(rows: list[dict[str, object]], policy: PolicyConfig) -> di
         total_rooms = sum(known) if known else None
         coverage = len(known) / len(items) if items else None
         small = sum(room <= policy.small_room_threshold for room in known)
-        tourism_rooms = sum(float(item["room_count"]) for item in items if item["tourism"] and item["room_count"] is not None)
+        tourism_items = [item for item in items if item["tourism"]]
+        tourism_known_rooms = [
+            float(item["room_count"])
+            for item in tourism_items
+            if item["room_count"] is not None
+        ]
+        tourism_room_coverage = (
+            len(tourism_known_rooms) / len(tourism_items) if tourism_items else 1.0
+        )
+        tourism_rooms = (
+            sum(tourism_known_rooms)
+            if tourism_items and len(tourism_known_rooms) == len(tourism_items)
+            else 0.0 if not tourism_items else None
+        )
         age_weight_rows = [
             item for item in items if item["building_age"] is not None
             and item["room_count"] is not None and float(item["room_count"]) > 0
@@ -397,9 +511,10 @@ def _district_metrics(rows: list[dict[str, object]], policy: PolicyConfig) -> di
             "q1": _quantile(known, 0.25), "q3": _quantile(known, 0.75), "coverage": coverage,
             "small": small if known else None, "small_share": small / len(known) if known else None,
             "tourism_share": sum(bool(item["tourism"]) for item in items) / len(items),
-            "tourism_room_share": tourism_rooms / total_rooms if total_rooms else None,
+            "tourism_room_share": tourism_rooms / total_rooms if tourism_rooms is not None and total_rooms else None,
             "tourism_facilities": sum(bool(item["tourism"]) for item in items),
             "tourism_rooms": tourism_rooms,
+            "tourism_room_coverage": tourism_room_coverage,
             "foreigner_share": sum(int(item["foreigner_registrations"]) for item in items) / sum(int(item["legal_registration_count"]) for item in items),
             "foreign_capable_share": sum(int(item["foreign_capable_registrations"]) for item in items) / sum(int(item["legal_registration_count"]) for item in items),
             "foreigner_registrations": sum(int(item["foreigner_registrations"]) for item in items),
@@ -444,13 +559,40 @@ def _event_only_districts(
     return output
 
 
+def _seed_all_districts(
+    db: Database,
+    run_id: UUID,
+    existing: dict[str, dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    """Materialize the exact configured 16-district universe as zero/unknown rows."""
+    regions = RegionConfig.default()
+    has_full_snapshot = bool(latest_complete_snapshot_runs(db, run_id)) or bool(
+        db.query(
+            "select 1 from staging_license_snapshot where last_loaded_run_id = ? limit 1",
+            [run_id],
+        )
+    )
+    result = dict(existing)
+    for group in ("west", "east", "other"):
+        for district in getattr(regions, group):
+            if district in result:
+                continue
+            result[district] = (
+                _empty_metrics(district, group)
+                if has_full_snapshot
+                else _unknown_stock_metrics(district, group)
+            )
+    return result
+
+
 def _empty_metrics(district: str, group: str) -> dict[str, object]:
     return {
         "district": district, "group": group, "facilities": 0, "registrations": 0,
         "known": 0, "room_sum": None, "room_mean": None, "room_median": None,
         "q1": None, "q3": None, "coverage": None, "small": None,
         "small_share": None, "tourism_share": None, "tourism_room_share": None,
-        "tourism_facilities": 0, "tourism_rooms": None, "foreigner_share": None,
+        "tourism_facilities": 0, "tourism_rooms": None,
+        "tourism_room_coverage": None, "foreigner_share": None,
         "foreign_capable_share": None, "foreigner_registrations": 0,
         "foreign_capable_registrations": 0, "age_mean": None, "age_median": None,
         "weighted_age": None, "age20": None, "age30": None, "age20_count": 0,
@@ -544,18 +686,24 @@ def _region_rows(
                 ),
                 "room_coverage": (float(period_values["known"]), _optional_float(period_values["facilities"]), period_values["coverage"], "inventory.room_count"),
                 "small_facility_share": (float(period_values["small"]) if period_values["small"] is not None else None, float(period_values["known"]), period_values["coverage"], "inventory.room_count"),
-                "visitors_per_100_rooms": (visitor[0], denom, period_values["coverage"], visitor[1]),
+                "visitor_person_days_per_100_rooms": (visitor[0], denom, visitor[2]["overall"], visitor[1]),
                 "lodging_consumption_per_room": (consumption[0], denom, period_values["coverage"], consumption[1]),
                 "transport_inflow_per_room": (transport[0], denom, period_values["coverage"], transport[1]),
                 "tourism_registration_facility_share": (float(period_values["tourism_facilities"]), _optional_float(period_values["facilities"]), 1.0 if period_values.get("stock_observed") else None, "inventory.registration_type"),
-                "tourism_registration_room_share": (period_values["tourism_rooms"], denom, period_values["coverage"], "inventory.registration_type"),
+                "tourism_registration_room_share": (period_values["tourism_rooms"], denom, period_values["tourism_room_coverage"], "inventory.registration_type"),
                 "foreigner_city_homestay_registration_share": (float(period_values["foreigner_registrations"]), _optional_float(period_values["registrations"]), 1.0 if period_values.get("stock_observed") else None, "inventory.registration_type"),
                 "foreign_visitor_capable_registration_share": (float(period_values["foreign_capable_registrations"]), _optional_float(period_values["registrations"]), 1.0 if period_values.get("stock_observed") else None, "inventory.registration_type"),
                 "building_20y_share": (float(period_values["age20_count"]), float(period_values["age_known"]), period_values["age_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.use_approval_date"),
                 "building_30y_share": (float(period_values["age30_count"]), float(period_values["age_known"]), period_values["age_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.use_approval_date"),
                 "recent_five_year_permit_event_share": (float(period_values["permit_count"]), float(period_values["permit_known"]), period_values["permit_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.permit_date"),
             }
-            evidence = {name: _evidence(name, numerator, denominator, coverage, period, source, factor=100 if name == "visitors_per_100_rooms" else 1) for name, (numerator, denominator, coverage, source) in ratios.items()}
+            evidence = {name: _evidence(name, numerator, denominator, coverage, period, source, factor=100 if name == "visitor_person_days_per_100_rooms" else 1) for name, (numerator, denominator, coverage, source) in ratios.items()}
+            evidence["visitor_person_days_per_100_rooms"].update(
+                {
+                    **visitor[2],
+                    "interpretation": "visitor-person-days pressure; not monthly unique tourists or occupancy",
+                }
+            )
             evidence["physical_facility_count"]["stock_observed"] = bool(
                 period_values.get("stock_observed")
             )
@@ -579,10 +727,10 @@ def _monthly_native_sum(
     source_id: str,
     metric_code: str,
     unit: str,
-) -> tuple[float | None, str]:
+) -> tuple[float | None, str, dict[str, float | int | None]]:
     """Sum only repeated rows of one documented compatible source-native metric."""
     if len(period) != 7 or period[4] != "-":
-        return None, "missing_period"
+        return None, "missing_period", _missing_native_coverage()
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
     if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
@@ -606,12 +754,76 @@ def _monthly_native_sum(
                 from {source}
                 where {visibility} and fact.district = ? and fact.period like ?
                   and fact.source_id = ? and fact.metric_code = ? and fact.unit = ?
-            ) select metric_value from current_revision where revision_rank = 1""",
+            ) select metric_value, period, dimension_json_hash, district
+              from current_revision where revision_rank = 1""",
         [*parameters, district, f"{period}%", source_id, metric_code, unit],
     )
     if not found:
-        return None, "missing"
-    return sum(float(item[0]) for item in found), f"{source_id}:{metric_code}:{unit}"
+        return None, "missing", _missing_native_coverage()
+    coverage = _native_metric_coverage(found, period, metric_code)
+    return (
+        sum(float(item[0]) for item in found),
+        f"{source_id}:{metric_code}:{unit}",
+        coverage,
+    )
+
+
+def _missing_native_coverage() -> dict[str, float | int | None]:
+    return {
+        "expected_days": None,
+        "observed_days": 0,
+        "day_coverage": None,
+        "source_coverage": 0.0,
+        "dimension_coverage": 0.0,
+        "geography_coverage": 0.0,
+        "overall": 0.0,
+    }
+
+
+def _native_metric_coverage(
+    rows: list[tuple[object, ...]], period: str, metric_code: str
+) -> dict[str, float | int | None]:
+    daily = metric_code == "locgo_regn_visitr_dd_list.visitor_count"
+    observed_dates = {
+        str(row[1]) for row in rows if len(str(row[1])) == 10
+    }
+    if daily:
+        year, month = int(period[:4]), int(period[5:])
+        expected_days = monthrange(year, month)[1]
+        day_coverage = len(observed_dates) / expected_days
+        dimensions_by_day: dict[str, set[str]] = defaultdict(set)
+        for _, native_period, dimension_hash, _ in rows:
+            if len(str(native_period)) == 10:
+                dimensions_by_day[str(native_period)].add(str(dimension_hash))
+        expected_dimensions = max(
+            (len(values) for values in dimensions_by_day.values()), default=0
+        )
+        dimension_coverage = (
+            sum(
+                len(values) / expected_dimensions
+                for values in dimensions_by_day.values()
+            )
+            / len(dimensions_by_day)
+            if dimensions_by_day and expected_dimensions
+            else 0.0
+        )
+    else:
+        expected_days = None
+        day_coverage = 1.0
+        dimension_coverage = 1.0
+    source_coverage = 1.0
+    geography_coverage = 1.0 if len({str(row[3]) for row in rows}) == 1 else 0.0
+    return {
+        "expected_days": expected_days,
+        "observed_days": len(observed_dates),
+        "day_coverage": day_coverage,
+        "source_coverage": source_coverage,
+        "dimension_coverage": dimension_coverage,
+        "geography_coverage": geography_coverage,
+        "overall": min(
+            day_coverage, source_coverage, dimension_coverage, geography_coverage
+        ),
+    }
 
 
 def _same_period_supply(
@@ -705,7 +917,27 @@ def _same_period_inventory(
     registrations = sum(len(values) for values in facility_registrations.values())
     # Age and permit facts are intentionally null for a historical period unless
     # a period-compatible building snapshot is implemented for that period.
-    tourism_rooms = sum(next(iter(facility_rooms[facility])) for facility, sources in facility_sources.items() if "tourist_accommodations" in sources and len(facility_rooms[facility]) == 1)
+    tourism_facility_keys = [
+        facility
+        for facility, sources in facility_sources.items()
+        if "tourist_accommodations" in sources
+    ]
+    tourism_known = [
+        next(iter(facility_rooms[facility]))
+        for facility in tourism_facility_keys
+        if len(facility_rooms[facility]) == 1
+    ]
+    tourism_room_coverage = (
+        len(tourism_known) / len(tourism_facility_keys)
+        if tourism_facility_keys
+        else 1.0
+    )
+    tourism_rooms = (
+        sum(tourism_known)
+        if tourism_facility_keys
+        and len(tourism_known) == len(tourism_facility_keys)
+        else 0.0 if not tourism_facility_keys else None
+    )
     room_sum = metrics["room_sum"]
     output = {**_empty_metrics(district, str(fallback["group"])), **metrics,
             "registrations": registrations, "tourism_facilities": tourism,
@@ -715,7 +947,8 @@ def _same_period_inventory(
             "foreign_capable_registrations": foreigner + tourism,
             "foreign_capable_share": (foreigner + tourism) / registrations if registrations else None,
             "tourism_rooms": tourism_rooms,
-            "tourism_room_share": tourism_rooms / room_sum if room_sum else None, "age_mean": None, "age_median": None,
+            "tourism_room_coverage": tourism_room_coverage,
+            "tourism_room_share": tourism_rooms / room_sum if tourism_rooms is not None and room_sum else None, "age_mean": None, "age_median": None,
             "weighted_age": None, "age20": None, "age30": None, "age_known": 0,
             "age20_count": 0, "age30_count": 0, "permit_share": None,
             "permit_known": 0, "permit_count": 0, "stock_observed": True}
@@ -795,13 +1028,31 @@ def _evidence(name: str, numerator: float | None, denominator: object, coverage:
 def _classify_pressure(rows: list[dict[str, object]]) -> None:
     by_period: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in rows:
-        evidence = row["evidence"]["visitors_per_100_rooms"]
+        evidence = row["evidence"]["visitor_person_days_per_100_rooms"]
         if row["period"] != "current" and evidence["value"] is not None:
             by_period[str(row["period"])].append(row)
     for row in rows:
         comparable = by_period.get(str(row["period"]), [])
-        row["pressure"] = _tercile(float(row["evidence"]["visitors_per_100_rooms"]["value"]), [float(item["evidence"]["visitors_per_100_rooms"]["value"]) for item in comparable]) if len(comparable) >= 12 and row["evidence"]["visitors_per_100_rooms"]["value"] is not None else "unclassified"
+        row["pressure"] = _tercile(float(row["evidence"]["visitor_person_days_per_100_rooms"]["value"]), [float(item["evidence"]["visitor_person_days_per_100_rooms"]["value"]) for item in comparable]) if len(comparable) >= 12 and row["evidence"]["visitor_person_days_per_100_rooms"]["value"] is not None else "unclassified"
         row["supply"] = "unclassified"  # no historical room inventory may be invented as growth.
+    for period in {str(row["period"]) for row in rows}:
+        comparable = [
+            row
+            for row in rows
+            if str(row["period"]) == period
+            and row["values"]["facilities"] is not None
+            and row["values"].get("stock_observed")
+        ]
+        counts = [float(row["values"]["facilities"]) for row in comparable]
+        for row in rows:
+            if str(row["period"]) != period:
+                continue
+            value = row["values"]["facilities"]
+            row["stock_band"] = (
+                _tercile(float(value), counts)
+                if value is not None and len(counts) >= 12
+                else "unclassified"
+            )
 
 
 def _growth_and_supply_bands(rows: list[dict[str, object]]) -> None:
@@ -852,10 +1103,78 @@ def _replace_regions(db: Database, run_id: UUID, rows: list[dict[str, object]]) 
         v, e = row["values"], row["evidence"]
         db.connection.execute(
             """insert into mart_region_month values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [run_id, row["district"], row["group"], row["period"], v["facilities"], v["registrations"], v["room_sum"], v["room_mean"], v["room_median"], v["q1"], v["q3"], v["known"], v["coverage"], v["small"], v["small_share"], v["tourism_share"], v["tourism_room_share"], v["foreigner_share"], v["foreign_capable_share"], v["age_mean"], v["age_median"], v["weighted_age"], v["age20"], v["age30"], v["permit_share"], row["openings"], row["closures"], row["openings"] - row["closures"], e["visitors_per_100_rooms"]["value"], e["lodging_consumption_per_room"]["value"], e["transport_inflow_per_room"]["value"], row.get("growth_gap"), row["pressure"], row["supply"], _json(e)],
+            [run_id, row["district"], row["group"], row["period"], v["facilities"], v["registrations"], v["room_sum"], v["room_mean"], v["room_median"], v["q1"], v["q3"], v["known"], v["coverage"], v["small"], v["small_share"], v["tourism_share"], v["tourism_room_share"], v["foreigner_share"], v["foreign_capable_share"], v["age_mean"], v["age_median"], v["weighted_age"], v["age20"], v["age30"], v["permit_share"], row["openings"], row["closures"], row["openings"] - row["closures"], e["visitor_person_days_per_100_rooms"]["value"], e["lodging_consumption_per_room"]["value"], e["transport_inflow_per_room"]["value"], row.get("growth_gap"), row["pressure"], row["supply"], _json(e)],
         )
         for name, evidence in e.items():
             db.connection.execute("insert into mart_metric_evidence values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [run_id, row["district"], row["group"], row["period"], name, evidence["metric_source_identity"], evidence["numerator"], evidence["denominator"], evidence["coverage"], evidence["source_period"], evidence["quality_band"], _json(evidence)])
+
+
+def _replace_group_regions(
+    db: Database, run_id: UUID, rows: list[dict[str, object]]
+) -> None:
+    """Materialize explicit West/East/Other aggregates without inventing missing stock."""
+    db.connection.execute("delete from mart_region_group_month where run_id = ?", [run_id])
+    configured = RegionConfig.default()
+    by_group_period: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+    for row in rows:
+        by_group_period[(str(row["group"]), str(row["period"]))].append(row)
+    for (group, period), group_rows in sorted(by_group_period.items()):
+        expected = len(getattr(configured, group))
+        observed = [row for row in group_rows if row["values"].get("stock_observed")]
+        complete_stock = len(group_rows) == expected and len(observed) == expected
+        facility_count = (
+            sum(int(row["values"]["facilities"]) for row in group_rows)
+            if complete_stock
+            else None
+        )
+        registration_count = (
+            sum(int(row["values"]["registrations"]) for row in group_rows)
+            if complete_stock
+            else None
+        )
+        known_rooms = sum(int(row["values"]["known"]) for row in group_rows)
+        room_values = [
+            float(value)
+            for row in group_rows
+            for value in row["values"].get("room_values", [])
+        ]
+        room_sum = sum(room_values) if room_values else None
+        room_coverage = (
+            known_rooms / facility_count if facility_count and facility_count > 0 else None
+        )
+        age_known = sum(int(row["values"]["age_known"]) for row in group_rows)
+        age_coverage = (
+            age_known / facility_count if facility_count and facility_count > 0 else None
+        )
+        evidence = {
+            "stock_observed": complete_stock,
+            "expected_districts": expected,
+            "observed_districts": len(observed),
+            "room_coverage": room_coverage,
+            "age_known_coverage": age_coverage,
+        }
+        db.connection.execute(
+            """
+            insert into mart_region_group_month values (
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            )
+            """,
+            [
+                run_id,
+                group,
+                period,
+                expected,
+                len(observed),
+                facility_count,
+                registration_count,
+                room_sum,
+                known_rooms,
+                room_coverage,
+                age_known,
+                age_coverage,
+                _json(evidence),
+            ],
+        )
 
 
 def _replace_comparisons(
@@ -915,24 +1234,154 @@ def _replace_signals(
     for row in rows:
         by_group_period[(str(row["group"]), str(row["period"]))].append(row)
     for (group, period), group_rows in by_group_period.items():
-        if not group_rows or any(
-            row["values"]["coverage"] is None or float(row["values"]["coverage"]) < 0.8
-            for row in group_rows
-        ):
-            continue
         rooms = [float(value) for row in group_rows for value in row["values"].get("room_values", [])]
         ages = [float(value) for row in group_rows for value in row["values"].get("age_values", [])]
         visitor_pairs = [
-            (float(item["evidence"]["visitors_per_100_rooms"]["numerator"]), float(item["evidence"]["visitors_per_100_rooms"]["denominator"]))
+            (float(item["evidence"]["visitor_person_days_per_100_rooms"]["numerator"]), float(item["evidence"]["visitor_person_days_per_100_rooms"]["denominator"]))
             for item in group_rows
-            if item["evidence"]["visitors_per_100_rooms"]["numerator"] is not None
-            and item["evidence"]["visitors_per_100_rooms"]["denominator"] is not None
+            if item["evidence"]["visitor_person_days_per_100_rooms"]["numerator"] is not None
+            and item["evidence"]["visitor_person_days_per_100_rooms"]["denominator"] is not None
         ]
         median_rooms, small_share, age30_share = _group_distribution(rooms, ages, policy.small_room_threshold)
-        metrics = RegionMetrics(group, median_rooms, small_share, age30_share, _group_pressure(visitor_pairs), _group_band(group_rows, "pressure"), _group_band(group_rows, "supply"))
+        facility_values = [
+            int(row["values"]["facilities"])
+            for row in group_rows
+            if row["values"]["facilities"] is not None
+        ]
+        facility_count = (
+            sum(facility_values)
+            if len(facility_values) == len(group_rows)
+            else None
+        )
+        known_rooms = len(rooms)
+        room_coverage = (
+            min(
+                float(row["values"]["coverage"])
+                for row in group_rows
+                if row["values"]["coverage"] is not None
+            )
+            if group_rows
+            and all(row["values"]["coverage"] is not None for row in group_rows)
+            else None
+        )
+        age_coverage = (
+            len(ages) / facility_count if facility_count and facility_count > 0 else None
+        )
+        tourism_coverage_values = [
+            row["values"].get("tourism_room_coverage") for row in group_rows
+        ]
+        tourism_coverage = (
+            min(float(value) for value in tourism_coverage_values)
+            if tourism_coverage_values
+            and all(value is not None for value in tourism_coverage_values)
+            else None
+        )
+        total_rooms = sum(rooms) if rooms else None
+        tourism_room_values = [
+            row["values"].get("tourism_rooms") for row in group_rows
+        ]
+        tourism_rooms = (
+            sum(float(value) for value in tourism_room_values)
+            if tourism_room_values and all(value is not None for value in tourism_room_values)
+            else None
+        )
+        tourism_share = (
+            tourism_rooms / total_rooms
+            if tourism_rooms is not None and total_rooms and total_rooms > 0
+            else None
+        )
+        openings = sum(int(row["openings"]) for row in group_rows)
+        closures = sum(int(row["closures"]) for row in group_rows)
+        group_pressure = _group_pressure(visitor_pairs)
+        group_growth = (
+            float(group_rows[0]["growth_gap"])
+            if len(group_rows) == 1 and group_rows[0].get("growth_gap") is not None
+            else None
+        )
+        stock_band = _group_band(group_rows, "stock_band")
+        evidence = {
+            "median_rooms": _policy_evidence_metric(median_rooms, 1.0, room_coverage),
+            "small_facility_share": _policy_evidence_metric(
+                sum(room <= policy.small_room_threshold for room in rooms),
+                known_rooms,
+                room_coverage,
+            ),
+            "building_old_share": _policy_evidence_metric(
+                sum(age >= max(policy.old_building_years) for age in ages),
+                len(ages),
+                age_coverage,
+            ),
+            "visitor_person_days_per_100_rooms": _policy_evidence_metric(
+                group_pressure,
+                1.0 if group_pressure is not None else None,
+                min(
+                    (
+                        float(row["evidence"]["visitor_person_days_per_100_rooms"]["coverage"])
+                        for row in group_rows
+                        if row["evidence"]["visitor_person_days_per_100_rooms"]["coverage"] is not None
+                    ),
+                    default=0.0,
+                ),
+            ),
+            "supply_stock_band": _policy_evidence_metric(
+                facility_count,
+                len(group_rows),
+                1.0 if facility_count is not None else None,
+            ),
+            "visitor_growth_minus_room_supply_growth": _policy_evidence_metric(
+                group_growth,
+                1.0 if group_growth is not None else None,
+                1.0 if group_growth is not None else None,
+            ),
+            "tourism_registration_room_share": _policy_evidence_metric(
+                tourism_rooms,
+                total_rooms,
+                tourism_coverage,
+            ),
+            "openings": _policy_evidence_metric(
+                openings, max(1, facility_count or 0), 1.0 if facility_count is not None else None
+            ),
+            "closures": _policy_evidence_metric(
+                closures, max(1, facility_count or 0), 1.0 if facility_count is not None else None
+            ),
+        }
+        metrics = RegionMetrics(
+            group,
+            median_rooms,
+            small_share,
+            age30_share,
+            group_pressure,
+            _group_band(group_rows, "pressure"),
+            stock_band,
+            _group_band(group_rows, "supply"),
+            group_growth,
+            tourism_share,
+            openings,
+            closures,
+            evidence,
+        )
         for signal in policy_signals(metrics, small_room_threshold=policy.small_room_threshold):
-            db.connection.execute("insert into mart_policy_signal values (?, ?, ?, ?, ?)", [run_id, group, period, signal.code, signal.evidence_json]); count += 1
+            db.connection.execute(
+                """
+                insert into mart_policy_signal (
+                    run_id, region_group, period, code, evidence_json,
+                    evaluation_status
+                ) values (?, ?, ?, ?, ?, ?)
+                """,
+                [run_id, group, period, signal.code, signal.evidence_json, signal.status],
+            )
+            count += 1
     return count
+
+
+def _policy_evidence_metric(
+    numerator: object, denominator: object, coverage: object
+) -> dict[str, object]:
+    return {
+        "numerator": numerator,
+        "denominator": denominator,
+        "coverage": coverage,
+    }
 
 
 def _quantile(values: list[float], fraction: float) -> float | None:
@@ -1035,7 +1484,9 @@ def _growth_evidence(
 
 
 def _group_pressure(values: list[tuple[float, float]]) -> float | None:
-    numerator, denominator = sum(item[0] for item in values), sum(item[1] for item in values)
+    if len(values) != 1:
+        return None
+    numerator, denominator = values[0]
     return numerator * 100 / denominator if denominator > 0 else None
 
 

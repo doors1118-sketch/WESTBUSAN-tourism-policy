@@ -9,7 +9,6 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, SecretStr, model_validator
 
-
 BUSAN_DISTRICTS = frozenset(
     {
         "강서구",
@@ -62,6 +61,19 @@ class RegionConfig(BaseModel):
 class PolicyConfig(BaseModel):
     small_room_threshold: int
     old_building_years: list[int]
+
+    @model_validator(mode="after")
+    def validate_thresholds(self) -> PolicyConfig:
+        if (
+            self.small_room_threshold <= 0
+            or len(self.old_building_years) != 2
+            or self.old_building_years[0] <= 0
+            or self.old_building_years[0] >= self.old_building_years[1]
+        ):
+            raise ValueError(
+                "policy requires a positive room threshold and two increasing building-age thresholds"
+            )
+        return self
 
 
 class Settings(BaseModel):

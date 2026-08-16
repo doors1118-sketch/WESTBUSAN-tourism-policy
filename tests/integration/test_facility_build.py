@@ -2,6 +2,7 @@ from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
+import duckdb
 import pytest
 
 import westbusan.entity_resolution.match as match_module
@@ -303,7 +304,7 @@ def test_immutable_pair_adjudication_overrides_algorithm_and_is_consumed(tmp_pat
     assert stored[0][:3] == ("separate", "reviewer-1", "distinct entrances confirmed")
 
     # Same version is immutable: a contrary overwrite must fail.
-    with pytest.raises(Exception):
+    with pytest.raises(duckdb.ConstraintException):
         record_pair_adjudication(
             db,
             "lodgings:L1",

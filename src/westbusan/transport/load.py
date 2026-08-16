@@ -13,6 +13,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
+from westbusan.config import BUSAN_DISTRICTS, region_group_for_district
 from westbusan.db import Database
 from westbusan.http import (
     AuthenticationError,
@@ -39,24 +40,6 @@ ProgressCallback = Callable[[], None]
 def _noop_progress() -> None:
     """Default progress hook for callers that do not own a pipeline lease."""
 
-_REGION_BY_DISTRICT = {
-    "강서구": "west",
-    "북구": "west",
-    "사상구": "west",
-    "사하구": "west",
-    "해운대구": "east",
-    "수영구": "east",
-    "기장군": "east",
-    "중구": "other",
-    "서구": "other",
-    "동구": "other",
-    "영도구": "other",
-    "부산진구": "other",
-    "동래구": "other",
-    "남구": "other",
-    "금정구": "other",
-    "연제구": "other",
-}
 _STATION_DISTRICTS = {
     "사상역": "사상구",
     "하단역": "사하구",
@@ -729,7 +712,7 @@ def _metro_record(source_id: str, row: Mapping[str, object]) -> TransportRecord:
         source_id,
         _period(row),
         district,
-        _REGION_BY_DISTRICT.get(district, "unresolved"),
+        _region_group(district),
         dimensions,
         dict(row),
         tuple(measures),
@@ -750,7 +733,7 @@ def _od_record(source_id: str, row: Mapping[str, object]) -> TransportRecord:
         source_id,
         _period(row),
         district,
-        _REGION_BY_DISTRICT.get(district, "unresolved"),
+        _region_group(district),
         dimensions,
         dict(row),
         (TransportMeasure("public_transport_od_volume", count, "passengers", {}),),
@@ -790,7 +773,7 @@ def _railway_record(source_id: str, row: Mapping[str, object]) -> TransportRecor
         source_id,
         _railway_period(source_id, row),
         district,
-        _REGION_BY_DISTRICT.get(district, "unresolved"),
+        _region_group(district),
         dimensions,
         dict(row),
         tuple(measures),
@@ -855,7 +838,7 @@ def _srt_wide_records(
                 source_id,
                 f"{year:04d}-{month:02d}",
                 district,
-                _REGION_BY_DISTRICT.get(district, "unresolved"),
+                _region_group(district),
                 dimensions,
                 dict(row),
                 (
@@ -1057,11 +1040,18 @@ def _place(row: Mapping[str, object], prefix: str) -> str:
 
 
 def _district(value: str | None, station: str | None) -> str:
-    if value in _REGION_BY_DISTRICT:
+    if value in BUSAN_DISTRICTS:
         return str(value)
     if station is not None and station in _STATION_DISTRICTS:
         return _STATION_DISTRICTS[station]
     return "UNMAPPED"
+
+
+def _region_group(district: str) -> str:
+    try:
+        return region_group_for_district(district)
+    except ValueError:
+        return "unresolved"
 
 
 def _source_dimensions(row: Mapping[str, object], excluded: set[str]) -> dict[str, object]:

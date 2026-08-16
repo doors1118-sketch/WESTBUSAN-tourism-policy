@@ -3,7 +3,12 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from westbusan.config import RegionConfig, Settings, region_group_for_district
+from westbusan.config import (
+    PolicyConfig,
+    RegionConfig,
+    Settings,
+    region_group_for_district,
+)
 
 
 def test_settings_loads_regions_and_keeps_key_out_of_repr(
@@ -45,3 +50,12 @@ def test_region_resolver_uses_validated_configuration() -> None:
     assert region_group_for_district("해운대구", regions) == "east"
     with pytest.raises(ValueError, match="Unknown Busan district"):
         region_group_for_district("제주시", regions)
+
+
+def test_old_building_thresholds_are_ordered_policy_configuration() -> None:
+    """Catches analytics silently falling back to hard-coded 20/30-year cutoffs."""
+    assert PolicyConfig(
+        small_room_threshold=20, old_building_years=[10, 25]
+    ).old_building_years == [10, 25]
+    with pytest.raises(ValidationError, match="two increasing"):
+        PolicyConfig(small_room_threshold=20, old_building_years=[30])

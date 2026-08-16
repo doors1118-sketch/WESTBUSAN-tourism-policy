@@ -4,8 +4,13 @@ from uuid import uuid4
 
 from westbusan.db import Database
 from westbusan.models import SourceStatus
-from westbusan.quality.checks import CheckResult, QualityReport, run_quality_suite
-from westbusan.quality.checks import _designation_coverage_check, _entity_precision_check
+from westbusan.quality.checks import (
+    CheckResult,
+    QualityReport,
+    _designation_coverage_check,
+    _entity_precision_check,
+    run_quality_suite,
+)
 from westbusan.quality.publish import can_publish
 
 

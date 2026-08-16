@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
+from westbusan.config import region_group_for_district
 from westbusan.db import Database
 from westbusan.http import SafeHttpClient
 from westbusan.models import RunContext, SourceSpec, SourceStatus
@@ -117,26 +118,6 @@ _HISTORICAL_SOURCE_IDS = frozenset(
         "area_tourism_destination_division",
     }
 )
-_REGION_BY_DISTRICT = {
-    "강서구": "west",
-    "북구": "west",
-    "사상구": "west",
-    "사하구": "west",
-    "해운대구": "east",
-    "수영구": "east",
-    "기장군": "east",
-    "중구": "other",
-    "서구": "other",
-    "동구": "other",
-    "영도구": "other",
-    "부산진구": "other",
-    "동래구": "other",
-    "남구": "other",
-    "금정구": "other",
-    "연제구": "other",
-}
-
-
 @dataclass(frozen=True, slots=True, order=True)
 class YearMonth:
     year: int
@@ -224,8 +205,8 @@ def normalize_demand_row(source_id: str, row: dict[str, object]) -> DemandRecord
     period, period_fields = _period(source_id, row)
     district = str(_required_field(row, _DISTRICT_FIELDS)).strip()
     try:
-        region_group = _REGION_BY_DISTRICT[district]
-    except KeyError as error:
+        region_group = region_group_for_district(district)
+    except ValueError as error:
         raise ValueError(f"unknown Busan district: {district}") from error
     field_name, metric_code, unit = _metric_field(source_id, row)
     dimensions = {

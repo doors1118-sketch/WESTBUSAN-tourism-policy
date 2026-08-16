@@ -40,3 +40,23 @@ alter table mart_region_month
 
 alter table mart_region_month
     alter column legal_registration_count drop not null;
+
+create table if not exists mart_region_group_month (
+    run_id uuid not null,
+    region_group varchar not null,
+    period varchar not null,
+    district_count integer not null,
+    observed_district_count integer not null,
+    physical_facility_count integer,
+    legal_registration_count integer,
+    room_sum double,
+    room_known_facility_count integer not null,
+    room_coverage double,
+    age_known_facility_count integer not null,
+    age_known_coverage double,
+    evidence_json varchar not null,
+    primary key (run_id, region_group, period)
+);
+
+alter table mart_policy_signal
+    add column if not exists evaluation_status varchar default 'unavailable';

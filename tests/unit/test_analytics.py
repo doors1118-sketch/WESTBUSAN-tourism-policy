@@ -16,46 +16,107 @@ from westbusan.db import Database
 
 
 def test_old_small_high_pressure_region_gets_renovation_and_supply_signals() -> None:
-    """Catches policy conclusions that ignore the required evidence combination."""
+    """Catches renovation depending on demand or supply expansion depending on age."""
     metrics = RegionMetrics(
         region_group="west",
         median_rooms=12,
         small_facility_share=0.75,
-        building_30y_share=0.60,
-        visitors_per_100_rooms=950,
+        building_old_share=0.60,
+        visitor_person_days_per_100_rooms=950,
         demand_pressure_band="high",
-        room_supply_band="low",
+        supply_stock_band="low",
+        room_supply_growth_band="high",
+        visitor_growth_minus_room_supply_growth=None,
+        tourism_registration_room_share=None,
+        openings=None,
+        closures=None,
+        evidence=_policy_evidence(
+            "median_rooms",
+            "small_facility_share",
+            "building_old_share",
+            "visitor_person_days_per_100_rooms",
+            "supply_stock_band",
+        ),
     )
 
     signals = policy_signals(metrics)
 
-    assert {signal.code for signal in signals} == {
+    assert {signal.code for signal in signals if signal.status == "triggered"} == {
         "RENOVATION_SUPPORT",
         "SUPPLY_EXPANSION_REVIEW",
     }
+    assert len(signals) == 5
     assert all(signal.evidence_json for signal in signals)
 
 
-def test_incomplete_or_contradictory_evidence_emits_no_forced_signal() -> None:
-    """Catches emitting a desired policy despite missing or conflicting evidence."""
+def test_incomplete_policy_matrix_is_explicitly_unavailable() -> None:
+    """Catches silently omitting a policy rule whose evidence is missing."""
     metrics = RegionMetrics(
         region_group="west",
         median_rooms=None,
         small_facility_share=None,
-        building_30y_share=0.60,
-        visitors_per_100_rooms=None,
+        building_old_share=0.60,
+        visitor_person_days_per_100_rooms=None,
         demand_pressure_band="unclassified",
-        room_supply_band="high",
+        supply_stock_band="high",
+        room_supply_growth_band="high",
+        visitor_growth_minus_room_supply_growth=None,
+        tourism_registration_room_share=None,
+        openings=None,
+        closures=None,
+        evidence=_policy_evidence("building_old_share"),
     )
 
-    assert policy_signals(metrics) == []
+    signals = policy_signals(metrics)
+
+    assert len(signals) == 5
+    assert {signal.status for signal in signals} == {"unavailable"}
 
 
 def test_policy_signals_are_not_emitted_for_high_pressure_with_high_supply() -> None:
     """Catches a supply-review conclusion when the supply evidence contradicts it."""
-    metrics = RegionMetrics("west", 12, 0.75, 0.60, 950, "high", "high")
+    metrics = RegionMetrics(
+        "west", 12, 0.75, 0.60, 950, "high", "high", "high", None, None,
+        None, None,
+        _policy_evidence(
+            "median_rooms", "small_facility_share", "building_old_share",
+            "visitor_person_days_per_100_rooms", "supply_stock_band",
+        ),
+    )
 
-    assert {signal.code for signal in policy_signals(metrics)} == {"RENOVATION_SUPPORT"}
+    statuses = {signal.code: signal.status for signal in policy_signals(metrics)}
+    assert statuses["RENOVATION_SUPPORT"] == "triggered"
+    assert statuses["SUPPLY_EXPANSION_REVIEW"] == "not_triggered"
+
+
+def test_policy_matrix_includes_old_low_demand_growth_low_tourism_and_exit_rules() -> None:
+    """Catches three required evidence combinations disappearing from the matrix."""
+    metrics = RegionMetrics(
+        "west", 30, 0.2, 0.7, 100, "low", "medium", "low", 0.25, 0.1,
+        1, 5,
+        _policy_evidence(
+            "building_old_share", "visitor_person_days_per_100_rooms",
+            "visitor_growth_minus_room_supply_growth",
+            "tourism_registration_room_share", "openings", "closures",
+        ),
+    )
+
+    triggered = {
+        signal.code for signal in policy_signals(metrics) if signal.status == "triggered"
+    }
+
+    assert triggered == {
+        "OLD_LOW_DEMAND_REPOSITIONING",
+        "DEMAND_GROWTH_LOW_TOURISM_CAPACITY",
+        "CLOSURE_DOMINANT_MARKET_STABILIZATION",
+    }
+
+
+def _policy_evidence(*names: str) -> dict[str, dict[str, float]]:
+    return {
+        name: {"numerator": 1.0, "denominator": 1.0, "coverage": 1.0}
+        for name in names
+    }
 
 
 def test_monthly_native_metrics_sum_daily_visitors_but_never_select_other_consumption_codes(
@@ -184,9 +245,53 @@ def test_growth_evidence_value_matches_the_stored_growth_gap() -> None:
     assert evidence["denominator"] == 1.0
 
 
-def test_group_pressure_uses_combined_raw_numerators_and_denominators() -> None:
-    """Catches summing district rates into a fictitious group pressure of 200."""
-    assert _group_pressure([(100.0, 100.0), (100.0, 100.0)]) == 100.0
+def test_group_pressure_does_not_sum_district_person_day_estimates() -> None:
+    """Catches district visitor estimates being presented as a group headcount."""
+    assert _group_pressure([(100.0, 100.0), (100.0, 100.0)]) is None
+    assert _group_pressure([(100.0, 100.0)]) == 100.0
+
+
+def test_sparse_daily_visitor_numerator_has_separate_expected_day_coverage(
+    tmp_path: Path,
+) -> None:
+    """Catches two observed days being treated as a complete monthly visitor numerator."""
+    db = Database(tmp_path / "sparse-visitors.duckdb", Path("sql")); db.migrate()
+    run_id, artifact = uuid4(), uuid4()
+    for day, value in (("2026-01-01", 100), ("2026-01-02", 120)):
+        db.connection.execute(
+            """
+            insert into fact_tourism_demand (
+                source_id, metric_code, period, district, region_group,
+                dimension_json, dimension_json_hash, source_revision, metric_value,
+                unit, source_payload_json, artifact_id, loaded_run_id
+            ) values ('tourism_data_lab',
+                      'locgo_regn_visitr_dd_list.visitor_count', ?, '사하구',
+                      'west', '{}', ?, 'r', ?, 'count', '{}', ?, ?)
+            """,
+            [day, day, value, artifact, run_id],
+        )
+
+    value, _, coverage = _monthly_native_sum(
+        db,
+        run_id,
+        "fact_tourism_demand",
+        "사하구",
+        "2026-01",
+        "tourism_data_lab",
+        "locgo_regn_visitr_dd_list.visitor_count",
+        "count",
+    )
+
+    assert value == 220
+    assert coverage == {
+        "expected_days": 31,
+        "observed_days": 2,
+        "day_coverage": 2 / 31,
+        "source_coverage": 1.0,
+        "dimension_coverage": 1.0,
+        "geography_coverage": 1.0,
+        "overall": 2 / 31,
+    }
 
 
 def test_division_quality_warns_for_partial_coverage() -> None:

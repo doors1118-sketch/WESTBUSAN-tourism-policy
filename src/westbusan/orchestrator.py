@@ -113,21 +113,7 @@ class Pipeline:
             data_dir=data_dir,
             db_path=data_dir / "westbusan.duckdb",
             log_dir=Path(data_root).resolve() / "logs",
-            regions=RegionConfig(
-                west=["강서구", "북구", "사상구", "사하구"],
-                east=["해운대구", "수영구", "기장군"],
-                other=[
-                    "중구",
-                    "서구",
-                    "동구",
-                    "영도구",
-                    "부산진구",
-                    "동래구",
-                    "남구",
-                    "금정구",
-                    "연제구",
-                ],
-            ),
+            regions=RegionConfig.default(),
             policy=PolicyConfig(
                 small_room_threshold=20,
                 old_building_years=[20, 30],
