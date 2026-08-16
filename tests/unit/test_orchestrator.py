@@ -6,6 +6,8 @@ from uuid import uuid4
 
 import duckdb
 import pytest
+from pyarrow import csv as arrow_csv
+from pyarrow import parquet
 from pydantic import SecretStr
 
 import westbusan.orchestrator as orchestrator_module
@@ -1178,10 +1180,63 @@ def test_export_manifest_binds_current_run_counts_and_file_hashes(tmp_path: Path
     manifest_path = paths[0].parent / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 
+    assert manifest["schema_version"] == 1
+    assert manifest["export_date"] == "2026-08-16"
     assert manifest["published_run_id"] == str(summary.run_id)
     assert set(manifest["files"]) == {path.name for path in paths}
     assert all(item["sha256"] for item in manifest["files"].values())
     assert all(item["row_count"] >= 0 for item in manifest["files"].values())
+
+
+def test_export_rejects_semantic_rewrite_even_with_matching_manifest_hashes(
+    tmp_path: Path,
+) -> None:
+    """Rehashing a row-truncated CSV/Parquet pair cannot bless it as complete."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.daily(date(2026, 8, 16))
+    export_date = date(2026, 8, 16)
+    paths = export_current(pipeline.db, pipeline.settings.data_dir, export_date)
+    directory = paths[0].parent
+    manifest_path = directory / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    parquet_path = directory / "facility_current.parquet"
+    csv_path = directory / "facility_current.csv"
+    truncated = parquet.read_table(parquet_path).slice(0, 0)
+    parquet.write_table(truncated, parquet_path)
+    arrow_csv.write_csv(truncated, csv_path)
+    for path in (parquet_path, csv_path):
+        manifest["files"][path.name] = {
+            "row_count": 0,
+            "sha256": orchestrator_module._path_sha256(path),
+        }
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(RuntimeError, match="export bundle mismatch"):
+        export_current(pipeline.db, pipeline.settings.data_dir, export_date)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("schema_version", 2), ("export_date", "2026-08-15")),
+)
+def test_export_rejects_manifest_contract_mismatch(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    """Schema and partition identity are strict parts of the bundle contract."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.daily(date(2026, 8, 16))
+    export_date = date(2026, 8, 16)
+    paths = export_current(pipeline.db, pipeline.settings.data_dir, export_date)
+    manifest_path = paths[0].parent / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[field] = value
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="export bundle mismatch"):
+        export_current(pipeline.db, pipeline.settings.data_dir, export_date)
 
 
 def test_same_date_export_rejects_mismatch_until_explicit_rebuild(tmp_path: Path) -> None:

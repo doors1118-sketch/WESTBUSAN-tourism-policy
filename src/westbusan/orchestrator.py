@@ -16,6 +16,7 @@ from typing import Any, Literal
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import duckdb
+import pyarrow as pa
 from pyarrow import csv as arrow_csv
 from pyarrow import parquet
 
@@ -1583,7 +1584,9 @@ def export_current(
     )
     if directory.exists():
         existing = tuple(directory / name for name in expected_names)
-        if _export_bundle_is_valid(directory, run_id, expected_names):
+        if _export_bundle_is_valid(
+            db, directory, run_id, export_date, datasets, expected_names
+        ):
             return existing
         if not rebuild:
             raise RuntimeError(f"export bundle mismatch: {directory}")
@@ -1613,6 +1616,8 @@ def export_current(
             json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2),
             encoding="utf-8",
         )
+        if current_published_run(db) != run_id or not mart_manifest_is_valid(db, run_id):
+            raise RuntimeError("publication changed while the export bundle was built")
         if directory.exists():
             backup = exports_dir / f".replaced-{uuid4()}"
             os.replace(str(directory), str(backup))
@@ -1632,27 +1637,62 @@ def export_current(
 
 
 def _export_bundle_is_valid(
-    directory: Path, run_id: UUID, expected_names: tuple[str, ...]
+    db: Database,
+    directory: Path,
+    run_id: UUID,
+    export_date: date,
+    datasets: dict[str, tuple[str, list[object]]],
+    expected_names: tuple[str, ...],
 ) -> bool:
     try:
         manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
         files = manifest["files"]
     except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return False
-    if manifest.get("published_run_id") != str(run_id) or set(files) != set(expected_names):
+    if (
+        type(manifest.get("schema_version")) is not int
+        or manifest.get("schema_version") != 1
+        or manifest.get("export_date") != export_date.isoformat()
+        or manifest.get("published_run_id") != str(run_id)
+        or current_published_run(db) != run_id
+        or set(files) != set(expected_names)
+    ):
         return False
-    for name in expected_names:
-        path = directory / name
-        detail = files.get(name)
-        if (
-            not path.is_file()
-            or not isinstance(detail, dict)
-            or not isinstance(detail.get("row_count"), int)
-            or detail.get("row_count", -1) < 0
-            or detail.get("sha256") != _path_sha256(path)
-        ):
-            return False
+    try:
+        for dataset_name, (query, parameters) in datasets.items():
+            expected = db.connection.execute(query, parameters).to_arrow_table()
+            csv_path = directory / f"{dataset_name}.csv"
+            parquet_path = directory / f"{dataset_name}.parquet"
+            if not csv_path.is_file() or not parquet_path.is_file():
+                return False
+            csv_table = arrow_csv.read_csv(csv_path)
+            parquet_table = parquet.read_table(parquet_path)
+            if (
+                csv_table.num_rows != expected.num_rows
+                or parquet_table.num_rows != expected.num_rows
+                or csv_table.column_names != expected.column_names
+                or not parquet_table.combine_chunks().equals(expected.combine_chunks())
+                or csv_path.read_bytes() != _table_as_csv_bytes(expected)
+            ):
+                return False
+            for path in (csv_path, parquet_path):
+                detail = files.get(path.name)
+                if (
+                    not isinstance(detail, dict)
+                    or type(detail.get("row_count")) is not int
+                    or detail.get("row_count") != expected.num_rows
+                    or detail.get("sha256") != _path_sha256(path)
+                ):
+                    return False
+    except (OSError, TypeError, ValueError, duckdb.Error, pa.ArrowException):
+        return False
     return True
+
+
+def _table_as_csv_bytes(table: pa.Table) -> bytes:
+    sink = pa.BufferOutputStream()
+    arrow_csv.write_csv(table, sink)
+    return sink.getvalue().to_pybytes()
 
 
 def _path_sha256(path: Path) -> str:
