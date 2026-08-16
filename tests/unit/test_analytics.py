@@ -117,6 +117,55 @@ def test_visible_runs_use_immutable_lineage_not_creation_order_or_run_status(
     assert _visible_run_ids(db, second) == (first, second)
 
 
+def test_monthly_metric_uses_recollection_membership_not_first_loader(
+    tmp_path: Path,
+) -> None:
+    """A successful recollection can use an identical fact first inserted by BLOCKED."""
+    db = Database(tmp_path / "fact-membership.duckdb", Path("sql"))
+    db.migrate()
+    blocked, successful = uuid4(), uuid4()
+    for run_id, status in ((blocked, "BLOCKED"), (successful, "RUNNING")):
+        db.connection.execute(
+            """insert into pipeline_run (
+                   run_id, mode, started_at, status, business_date
+               ) values (?, 'daily', now(), ?, '2026-08-16')""",
+            [run_id, status],
+        )
+    db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [successful, successful],
+    )
+    db.connection.execute(
+        """insert into fact_tourism_demand (
+               source_id, metric_code, period, district, region_group,
+               dimension_json, dimension_json_hash, source_revision,
+               metric_value, unit, source_payload_json, artifact_id,
+               loaded_run_id, observation_key
+           ) values (
+               'tourism_data_lab', 'locgo_regn_visitr_dd_list.visitor_count',
+               '2026-08-01', '사하구', 'west', '{}', 'dimension', 'revision',
+               123, 'count', '{}', ?, ?, 'observation'
+           )""",
+        [uuid4(), blocked],
+    )
+    db.connection.execute(
+        """insert into run_fact_observation (run_id, family, observation_key)
+           values (?, 'tourism', 'observation')""",
+        [successful],
+    )
+
+    assert _monthly_native_sum(
+        db,
+        successful,
+        "fact_tourism_demand",
+        "사하구",
+        "2026-08",
+        "tourism_data_lab",
+        "locgo_regn_visitr_dd_list.visitor_count",
+        "count",
+    )[0] == 123
+
+
 def test_period_metric_set_keeps_historical_unknown_rooms_in_coverage() -> None:
     """Catches substituting current inventory for a month with one known of two facilities."""
     metrics = _period_metric_set([10.0, None], small_room_threshold=20)

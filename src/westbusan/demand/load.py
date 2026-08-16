@@ -710,14 +710,20 @@ def _persist_record(
     payload_json = json.dumps(
         record.source_payload_json, ensure_ascii=False, sort_keys=True, default=str
     )
+    observation_key = hashlib.sha256(
+        (
+            f"{record.source_id}|{record.metric_code}|{record.period}|"
+            f"{record.district}|{dimensions_hash}|{source_revision}"
+        ).encode()
+    ).hexdigest()
     progress()
     db.connection.execute(
         """
         insert into fact_tourism_demand (
             source_id, metric_code, period, district, region_group, dimension_json,
             dimension_json_hash, source_revision, metric_value, unit, source_payload_json,
-            artifact_id, loaded_run_id
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            artifact_id, loaded_run_id, observation_key
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         on conflict (source_id, metric_code, period, district, dimension_json_hash, source_revision)
         do nothing
         """,
@@ -735,7 +741,13 @@ def _persist_record(
             payload_json,
             artifact_id,
             run.run_id,
+            observation_key,
         ],
+    )
+    db.connection.execute(
+        """insert into run_fact_observation (run_id, family, observation_key)
+           values (?, 'tourism', ?) on conflict do nothing""",
+        [run.run_id, observation_key],
     )
 
 

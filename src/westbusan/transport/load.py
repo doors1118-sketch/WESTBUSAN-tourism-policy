@@ -890,15 +890,23 @@ def _persist_record(
             "interpretation": "access_or_visitor_pressure_proxy_not_tourism_or_occupancy",
         }
         dimension_json = json.dumps(dimensions, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        dimension_hash = hashlib.sha256(dimension_json.encode()).hexdigest()
         payload = json.dumps(record.source_payload_json, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        revision = source_revision or artifact.content_hash
+        observation_key = hashlib.sha256(
+            (
+                f"{record.source_id}|{measure.metric_code}|{record.period}|"
+                f"{record.district}|{dimension_hash}|{revision}"
+            ).encode()
+        ).hexdigest()
         progress()
         rows = db.query(
             """
             insert into fact_transport_flow (
                 source_id, metric_code, period, district, region_group, dimension_json,
                 dimension_json_hash, source_revision, metric_value, unit,
-                source_payload_json, artifact_id, loaded_run_id
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_payload_json, artifact_id, loaded_run_id, observation_key
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (source_id, metric_code, period, district, dimension_json_hash, source_revision)
             do nothing
             returning metric_code
@@ -910,14 +918,20 @@ def _persist_record(
                 record.district,
                 record.region_group,
                 dimension_json,
-                hashlib.sha256(dimension_json.encode()).hexdigest(),
-                source_revision or artifact.content_hash,
+                dimension_hash,
+                revision,
                 measure.value,
                 measure.unit,
                 payload,
                 artifact.artifact_id,
                 run.run_id,
+                observation_key,
             ],
+        )
+        db.connection.execute(
+            """insert into run_fact_observation (run_id, family, observation_key)
+               values (?, 'transport', ?) on conflict do nothing""",
+            [run.run_id, observation_key],
         )
         inserted = inserted or bool(rows)
     return inserted

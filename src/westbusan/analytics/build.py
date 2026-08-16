@@ -226,9 +226,10 @@ def _facility_rows(
         f"""
         with latest as (
             select *, row_number() over (
-                partition by source_id, source_record_id order by observed_on desc
+                partition by source_id, source_record_id
+                order by observed_on desc, recorded_at desc, revision_sequence desc
             ) as row_num
-            from staging_license_snapshot_version
+            from staging_license_revision
             where version_run_id in ({placeholders}) and (? is null or observed_on <= ?)
         )
         select link.facility_id, facility.district, facility.region_group,
@@ -297,8 +298,11 @@ def _building_ages(
     values = db.query(
         f"""
         with latest as (
-            select *, row_number() over (partition by building_id order by observed_on desc) as row_num
-            from staging_building_snapshot_version
+            select *, row_number() over (
+                partition by building_id
+                order by observed_on desc, recorded_at desc, revision_sequence desc
+            ) as row_num
+            from staging_building_revision
             where version_run_id in ({placeholders}) and (? is null or observed_on <= ?)
         )
         select link.facility_id, snap.approval_date, snap.permit_date, snap.observed_on
@@ -399,7 +403,7 @@ def _event_only_districts(
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
     rows = db.query(
-        f"""select distinct district, region_group from staging_license_snapshot_version
+        f"""select distinct district, region_group from staging_license_revision
         where district is not null and region_group is not null
           and version_run_id in ({placeholders})
           and (? is null or observed_on <= ?)""",
@@ -435,21 +439,34 @@ def _periods(
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
     output = {district: {"current"} for district in metrics}
-    for district, period in db.query(
-        f"select distinct district, period from fact_tourism_demand where loaded_run_id in ({placeholders})", list(visible_runs)
+    for table, family in (
+        ("fact_tourism_demand", "tourism"),
+        ("fact_transport_flow", "transport"),
     ):
-        if str(district) in output:
-            output[str(district)].add(_month(str(period)))
-    for district, period in db.query(
-        f"select distinct district, period from fact_transport_flow where loaded_run_id in ({placeholders})", list(visible_runs)
-    ):
-        if str(district) in output:
-            output[str(district)].add(_month(str(period)))
+        if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
+            fact_periods = db.query(
+                f"""select distinct fact.district, fact.period
+                    from {table} as fact
+                    join run_fact_observation as membership
+                      on membership.family = ?
+                     and membership.observation_key = fact.observation_key
+                    where membership.run_id in ({placeholders})""",
+                [family, *visible_runs],
+            )
+        else:
+            fact_periods = db.query(
+                f"""select distinct district, period from {table}
+                    where loaded_run_id in ({placeholders})""",
+                list(visible_runs),
+            )
+        for district, period in fact_periods:
+            if str(district) in output:
+                output[str(district)].add(_month(str(period)))
     # Supply observations and legal events are periods in their own right;
     # event-only months remain visible even if no demand source has a row.
     for district, observed_on, license_date, closure_date in db.query(
         f"""select district, observed_on, license_date, closure_date
-        from staging_license_snapshot_version
+        from staging_license_revision
         where version_run_id in ({placeholders}) and (? is null or observed_on <= ?)""",
         [*visible_runs, as_of, as_of],
     ):
@@ -515,17 +532,29 @@ def _monthly_native_sum(
         return None, "missing_period"
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
+    if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
+        family = "tourism" if table == "fact_tourism_demand" else "transport"
+        source = f"""{table} as fact
+                join run_fact_observation as membership
+                  on membership.family = ?
+                 and membership.observation_key = fact.observation_key"""
+        visibility = f"membership.run_id in ({placeholders})"
+        parameters: list[object] = [family, *visible_runs]
+    else:
+        source = f"{table} as fact"
+        visibility = f"fact.loaded_run_id in ({placeholders})"
+        parameters = list(visible_runs)
     found = db.query(
         f"""with current_revision as (
-                select *, row_number() over (
+                select fact.*, row_number() over (
                     partition by period, dimension_json_hash
                     order by loaded_at desc, source_revision desc
                 ) as revision_rank
-                from {table}
-                where loaded_run_id in ({placeholders}) and district = ? and period like ? and source_id = ?
-                  and metric_code = ? and unit = ?
+                from {source}
+                where {visibility} and fact.district = ? and fact.period like ?
+                  and fact.source_id = ? and fact.metric_code = ? and fact.unit = ?
             ) select metric_value from current_revision where revision_rank = 1""",
-        [*visible_runs, district, f"{period}%", source_id, metric_code, unit],
+        [*parameters, district, f"{period}%", source_id, metric_code, unit],
     )
     if not found:
         return None, "missing"
@@ -543,7 +572,7 @@ def _same_period_supply(
         from run_facility_license as link
         join run_facility as facility
           on facility.run_id = link.run_id and facility.facility_id = link.facility_id
-        join staging_license_snapshot_version as snapshot
+        join staging_license_revision as snapshot
           on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
         where link.run_id = ? and facility.district = ? and snapshot.observed_on::varchar like ?
           and snapshot.source_id <> 'tourist_pensions'
@@ -579,7 +608,7 @@ def _same_period_inventory(
         from run_facility_license as link
         join run_facility as facility
           on facility.run_id = link.run_id and facility.facility_id = link.facility_id
-        join staging_license_snapshot_version as snapshot
+        join staging_license_revision as snapshot
           on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
         where link.run_id = ? and facility.district = ? and snapshot.observed_on::varchar like ?
           and snapshot.source_id <> 'tourist_pensions'
@@ -633,8 +662,12 @@ def _period_building_metrics(
     visible = _visible_run_ids(db, run_id); placeholders = ",".join("?" for _ in visible)
     rows = db.query(
         f"""with latest as (
-            select *, row_number() over (partition by building_id order by observed_on desc, approval_date desc nulls last, permit_date desc nulls last) as row_num
-            from staging_building_snapshot_version
+            select *, row_number() over (
+                partition by building_id
+                order by observed_on desc, recorded_at desc, revision_sequence desc,
+                         approval_date desc nulls last, permit_date desc nulls last
+            ) as row_num
+            from staging_building_revision
             where observed_on::varchar like ? and version_run_id in ({placeholders})
               and (? is null or observed_on <= ?)
         ) select link.facility_id, snapshot.approval_date, snapshot.permit_date, snapshot.observed_on
@@ -859,7 +892,7 @@ def _event_changes(
     rows = db.query(
         f"""select distinct link.facility_id, snapshot.license_date, snapshot.closure_date
         from run_facility_license as link
-        join staging_license_snapshot_version as snapshot
+        join staging_license_revision as snapshot
           on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
         join run_facility as facility
           on facility.run_id = link.run_id and facility.facility_id = link.facility_id

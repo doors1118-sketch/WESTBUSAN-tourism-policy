@@ -147,7 +147,7 @@ def build_facilities(
 
     heartbeat()
     records = _latest_records(db, run_id)
-    building_ids = _building_ids(db)
+    building_ids = _building_ids(db, run_id)
     for record in records:
         record["building_ids"] = building_ids.get(_registration_key(record), set())
 
@@ -378,9 +378,11 @@ def build_facilities(
         write(
             """insert into run_duplicate_review (
                    run_id, review_id, left_facility_id, right_facility_id,
-                   evidence_json
-               ) values (?, ?, ?, ?, ?)""",
-            [run_id, review_id, left_id, right_id, evidence],
+                   review_status, evidence_json
+               ) select ?, review_id, left_facility_id, right_facility_id,
+                        review_status, evidence_json
+                 from duplicate_review where review_id = ?""",
+            [run_id, review_id],
         )
 
     heartbeat()
@@ -438,21 +440,29 @@ def _features(left: Mapping[str, object], right: Mapping[str, object]) -> MatchF
 def _latest_records(db: Database, run_id: UUID) -> list[dict[str, object]]:
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
+    cutoff_rows = db.query(
+        "select business_date from pipeline_run where run_id = ?", [run_id]
+    )
+    cutoff = cutoff_rows[0][0] if cutoff_rows else None
     rows = db.query(
         f"""
         select source_id, source_record_id, source_name, normalized_name, road_address,
                lot_address, district, region_group, normalized_phone, longitude, latitude
         from (
-            select *, row_number() over (
+            select snapshot.*, row_number() over (
                 partition by source_id, source_record_id
-                order by observed_on desc, source_updated_at desc nulls last
+                order by observed_on desc, source_updated_at desc nulls last,
+                         input.started_at desc nulls last, recorded_at desc,
+                         revision_sequence desc
             ) as row_number
-            from staging_license_snapshot_version
+            from staging_license_revision as snapshot
+            left join pipeline_run as input on input.run_id = snapshot.version_run_id
             where version_run_id in ({placeholders})
+              and (? is null or observed_on <= ?)
         )
         where row_number = 1
         """,
-        list(visible_runs),
+        [*visible_runs, cutoff, cutoff],
     )
     fields = (
         "source_id", "source_record_id", "source_name", "normalized_name", "road_address",
@@ -475,16 +485,27 @@ def _visible_run_ids(db: Database, run_id: UUID) -> tuple[UUID, ...]:
     if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
         return (run_id,)
     legacy = db.query(
-        "select distinct version_run_id from staging_license_snapshot_version order by version_run_id"
+        "select distinct version_run_id from staging_license_revision order by version_run_id"
     )
     return tuple(row[0] for row in legacy) or (run_id,)
 
 
-def _building_ids(db: Database) -> dict[str, set[UUID]]:
+def _building_ids(db: Database, run_id: UUID) -> dict[str, set[UUID]]:
     result: dict[str, set[UUID]] = defaultdict(set)
-    for source_id, source_record_id, building_id in db.query(
-        "select source_id, source_record_id, building_id from bridge_license_building"
-    ):
+    if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
+        visible_runs = _visible_run_ids(db, run_id)
+        placeholders = ",".join("?" for _ in visible_runs)
+        rows = db.query(
+            f"""select source_id, source_record_id, building_id
+                from run_license_building_observation
+                where run_id in ({placeholders})""",
+            list(visible_runs),
+        )
+    else:
+        rows = db.query(
+            "select source_id, source_record_id, building_id from bridge_license_building"
+        )
+    for source_id, source_record_id, building_id in rows:
         result[f"{source_id}:{source_record_id}"].add(building_id)
     return result
 

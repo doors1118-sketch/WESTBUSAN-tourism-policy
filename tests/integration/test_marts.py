@@ -232,6 +232,79 @@ def test_same_day_correction_and_later_blocked_facility_do_not_rewrite_earlier_m
     ) == [(10.0,)]
 
 
+def test_same_run_same_day_correction_appends_and_becomes_latest(tmp_path: Path) -> None:
+    """A resumed run must not silently discard a changed same-day observation."""
+    db = Database(tmp_path / "same-run-correction.duckdb", Path("sql"))
+    db.migrate()
+    run_id = uuid4()
+    db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date
+           ) values (?, 'daily', now(), 'RUNNING', '2026-08-16')""",
+        [run_id],
+    )
+    db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [run_id, run_id],
+    )
+    load_license_snapshot(
+        db,
+        [_license("lodgings", "L1", "호텔", "부산광역시 사하구 길 1", 10)],
+        run_id,
+    )
+    load_license_snapshot(
+        db,
+        [_license("lodgings", "L1", "호텔", "부산광역시 사하구 길 1", 11)],
+        run_id,
+    )
+
+    build_facilities(db, run_id)
+    build_marts(
+        db,
+        run_id,
+        PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+    )
+
+    assert db.query(
+        "select room_count from mart_facility_current where run_id = ?", [run_id]
+    ) == [(11.0,)]
+
+
+def test_facility_build_excludes_observations_after_business_cutoff(tmp_path: Path) -> None:
+    """Future-dated source observations cannot enter an earlier business-date run."""
+    db = Database(tmp_path / "business-cutoff.duckdb", Path("sql"))
+    db.migrate()
+    run_id = uuid4()
+    db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date
+           ) values (?, 'daily', now(), 'RUNNING', '2026-08-16')""",
+        [run_id],
+    )
+    db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [run_id, run_id],
+    )
+    load_license_snapshot(
+        db,
+        [
+            _license(
+                "lodgings",
+                "future",
+                "미래호텔",
+                "부산광역시 사하구 길 1",
+                10,
+                date(2026, 8, 17),
+            )
+        ],
+        run_id,
+    )
+
+    result = build_facilities(db, run_id)
+
+    assert result.facility_count == 0
+
+
 def _built_db(tmp_path: Path, records: list[object]) -> tuple[Database, object]:
     db = Database(tmp_path / "case.duckdb", Path("sql")); db.migrate(); run = uuid4()
     load_license_snapshot(db, records, run); build_facilities(db, run)

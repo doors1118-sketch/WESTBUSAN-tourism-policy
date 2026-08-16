@@ -2,6 +2,7 @@ import json
 import os
 from datetime import UTC, date, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -9,7 +10,7 @@ import pytest
 import westbusan.transport.load as transport_load_module
 from westbusan.db import Database
 from westbusan.http import HttpResult, SafeHttpClient
-from westbusan.models import RunContext
+from westbusan.models import RawArtifact, RunContext
 from westbusan.sources.files import read_tabular_rows
 from westbusan.sources.odcloud import build_odcloud_client, discover_latest_dataset
 from westbusan.sources.registry import SourceRegistry, record_inspection
@@ -20,6 +21,55 @@ from westbusan.transport.load import (
     normalize_transport_row,
     normalize_transport_rows,
 )
+
+
+def test_identical_transport_revision_records_each_recollecting_run(
+    tmp_path: Path,
+) -> None:
+    """A transport fact conflict must still append successful-run membership."""
+    db = Database(tmp_path / "transport-membership.duckdb", Path("sql"))
+    db.migrate()
+    record = normalize_transport_row(
+        "public_transport_od_usage",
+        json.loads(
+            Path("tests/fixtures/transport/od_row.json").read_text(encoding="utf-8")
+        ),
+    )
+    artifact_path = tmp_path / "transport.json"
+    artifact_path.write_bytes(b"{}")
+    blocked = RunContext(
+        uuid4(), "daily", datetime(2026, 8, 16, tzinfo=UTC), business_date=date(2026, 8, 16)
+    )
+    successful = RunContext(
+        uuid4(), "daily", datetime(2026, 8, 17, tzinfo=UTC), business_date=date(2026, 8, 17)
+    )
+    for run in (blocked, successful):
+        artifact = RawArtifact(
+            uuid4(),
+            run.run_id,
+            "public_transport_od_usage",
+            "2026-08-16",
+            "{}",
+            "request",
+            "same-revision",
+            artifact_path,
+            run.started_at,
+            date(2026, 8, 1),
+        )
+        transport_load_module._persist_record(
+            db,
+            record,
+            artifact,
+            run,
+            source_revision="same-revision",
+            progress=lambda: None,
+        )
+
+    assert db.scalar("select count(*) from fact_transport_flow") == len(record.measures)
+    assert db.scalar(
+        """select count(distinct run_id) from run_fact_observation
+           where family = 'transport'"""
+    ) == 2
 
 
 def test_normalize_metro_row_keeps_unmapped_station_out_of_a_district() -> None:

@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import NAMESPACE_URL, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from westbusan.buildings.normalize import BuildingRecord, normalize_building_title
 from westbusan.db import Database
@@ -134,13 +134,32 @@ def collect_buildings_for_licenses(
 
     licenses_by_parcel: dict[str, list[tuple[str, str]]] = defaultdict(list)
     queries: dict[str, ParcelQuery] = {}
-    for source_id, source_record_id, lot_address in db.query(
-        """
-        select source_id, source_record_id, lot_address
-        from staging_license_snapshot
-        where lot_address is not null and lot_address <> ''
-        """
-    ):
+    if db.query("select 1 from pipeline_run where run_id = ?", [run.run_id]):
+        license_rows = db.query(
+            """with eligible as (
+               select revision.*, row_number() over (
+                   partition by revision.source_id, revision.source_record_id
+                   order by revision.observed_on desc, revision.recorded_at desc,
+                            revision.revision_sequence desc
+               ) as revision_rank
+               from staging_license_revision as revision
+               join pipeline_run_input as lineage
+                 on lineage.run_id = ?
+                and lineage.input_run_id = revision.version_run_id
+               where revision.observed_on <= ?
+           )
+           select source_id, source_record_id, lot_address
+           from eligible
+           where revision_rank = 1 and lot_address is not null and lot_address <> ''""",
+            [run.run_id, run.cutoff_date],
+        )
+    else:
+        license_rows = db.query(
+            """select source_id, source_record_id, lot_address
+               from staging_license_snapshot
+               where lot_address is not null and lot_address <> ''"""
+        )
+    for source_id, source_record_id, lot_address in license_rows:
         heartbeat()
         query = parcel_query(
             NormalizedAddress(value=str(lot_address), district=None, is_busan=True), db
@@ -197,6 +216,7 @@ def collect_buildings_for_licenses(
                 heartbeat()
                 if _link_license(
                     db,
+                    run.run_id,
                     source_id,
                     source_record_id,
                     record.building_id,
@@ -382,6 +402,35 @@ def _store_building(
         record.is_closed,
         payload,
     ]
+    record_hash = hashlib.sha256(
+        json.dumps(
+            building_values,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    revisions = db.query(
+        """select revision_sequence, record_hash
+           from staging_building_revision
+           where version_run_id = ? and building_id = ? and observed_on = ?
+           order by revision_sequence desc limit 1""",
+        [run.run_id, record.building_id, run.cutoff_date],
+    )
+    if not revisions or revisions[0][1] != record_hash:
+        revision_sequence = int(revisions[0][0]) + 1 if revisions else 1
+        db.connection.execute(
+            """insert into staging_building_revision (
+                   version_run_id, building_id, observed_on, revision_sequence,
+                   parcel_hash, sigungu_cd, bjdong_cd, plat_gb_cd, bun, ji,
+                   road_address, lot_address, approval_date, use_approval_date,
+                   permit_date, main_use, total_area, ground_floor_count,
+                   underground_floor_count, closed_indicator, is_closed,
+                   source_payload_json, record_hash
+               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [run.run_id, *building_values[:2], revision_sequence, *building_values[2:], record_hash],
+        )
     db.connection.execute(
         """insert into staging_building_snapshot_version (
                version_run_id, building_id, observed_on, parcel_hash, sigungu_cd,
@@ -421,6 +470,7 @@ def _store_building(
 
 def _link_license(
     db: Database,
+    run_id: UUID,
     source_id: str,
     source_record_id: str,
     building_key: str,
@@ -428,24 +478,23 @@ def _link_license(
     progress: ProgressCallback,
 ) -> bool:
     building_uuid = uuid5(NAMESPACE_URL, building_key)
-    existing = db.query(
-        """
-        select 1 from bridge_license_building
-        where source_id = ? and source_record_id = ? and building_id = ?
-        """,
-        [source_id, source_record_id, building_uuid],
-    )
-    if existing:
-        return False
     progress()
     db.connection.execute(
         """
         insert into bridge_license_building (source_id, source_record_id, building_id, parcel_hash)
         values (?, ?, ?, ?)
+        on conflict do nothing
         """,
         [source_id, source_record_id, building_uuid, parcel_hash],
     )
-    return True
+    observed = db.query(
+        """insert into run_license_building_observation (
+               run_id, source_id, source_record_id, building_id, parcel_hash
+           ) values (?, ?, ?, ?, ?)
+           on conflict do nothing returning building_id""",
+        [run_id, source_id, source_record_id, building_uuid, parcel_hash],
+    )
+    return bool(observed)
 
 
 def _merge(primary: BuildingRecord, extra: BuildingRecord | None) -> BuildingRecord:

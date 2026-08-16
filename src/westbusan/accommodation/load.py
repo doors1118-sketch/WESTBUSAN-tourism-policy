@@ -100,6 +100,33 @@ def load_license_snapshot(
         if not record.is_busan or record.source_record_id is None:
             continue
         values, record_hash = _payload(record)
+        latest_revision = db.query(
+            """select revision_sequence, record_hash
+               from staging_license_revision
+               where version_run_id = ? and source_id = ?
+                 and source_record_id = ? and observed_on = ?
+               order by revision_sequence desc limit 1""",
+            [run_id, record.source_id, record.source_record_id, record.observed_on],
+        )
+        if not latest_revision or latest_revision[0][1] != record_hash:
+            revision_sequence = (
+                int(latest_revision[0][0]) + 1 if latest_revision else 1
+            )
+            db.connection.execute(
+                """insert into staging_license_revision (
+                       version_run_id, source_id, source_record_id, observed_on,
+                       revision_sequence, jurisdiction_code, source_name, normalized_name,
+                       road_address, lot_address, district, region_group, region_quality,
+                       license_date, license_date_quality, closure_date, closure_date_quality,
+                       status_code, status_name, status_class, detailed_status_code,
+                       detailed_status_name, room_count, room_count_quality, normalized_phone,
+                       longitude, latitude, projected_x, projected_y, coordinate_crs,
+                       source_updated_at, source_modified_on, source_modified_date_quality,
+                       data_updated_on, data_updated_date_quality, data_update_point,
+                       source_payload_json, record_hash
+                   ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [run_id, *values[:3], revision_sequence, *values[3:], record_hash],
+            )
         db.connection.execute(
             """
             insert into staging_license_snapshot_version (

@@ -201,6 +201,108 @@ def test_rebuild_removes_pending_review_that_is_no_longer_a_candidate(tmp_path: 
     ]
 
 
+def test_run_duplicate_snapshot_preserves_reviewed_status(tmp_path: Path) -> None:
+    """Rebuilding evidence must not turn an operator-reviewed pair back to pending."""
+    db = Database(tmp_path / "review-status.duckdb", Path("sql"))
+    db.migrate()
+    run_id = uuid4()
+    records = [
+        _license(
+            "lodgings",
+            "A",
+            "동일숙소",
+            "부산광역시 사하구 낙동대로 1",
+            "051-111-1111",
+        ),
+        _license(
+            "lodgings",
+            "B",
+            "동일 숙소",
+            "부산광역시 사하구 낙동대로 1",
+            "051-222-2222",
+        ),
+    ]
+    load_license_snapshot(db, records, run_id)
+    build_facilities(db, run_id)
+    review_id = db.scalar("select review_id from duplicate_review")
+    db.connection.execute(
+        "update duplicate_review set review_status = 'not_duplicate' where review_id = ?",
+        [review_id],
+    )
+
+    build_facilities(db, run_id)
+
+    assert db.query(
+        "select review_status from run_duplicate_review where run_id = ?",
+        [run_id],
+    ) == [("not_duplicate",)]
+
+
+def test_run_facility_building_ignores_later_blocked_global_link(tmp_path: Path) -> None:
+    """A retry cannot acquire a building link created only by a later BLOCKED run."""
+    db = Database(tmp_path / "building-link-lineage.duckdb", Path("sql"))
+    db.migrate()
+    target, blocked = uuid4(), uuid4()
+    for run_id, status in ((target, "RUNNING"), (blocked, "BLOCKED")):
+        db.connection.execute(
+            """insert into pipeline_run (
+                   run_id, mode, started_at, status, business_date
+               ) values (?, 'daily', now(), ?, '2026-08-16')""",
+            [run_id, status],
+        )
+    db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [target, target],
+    )
+    load_license_snapshot(
+        db,
+        [
+            _license(
+                "lodgings",
+                "L1",
+                "호텔",
+                "부산광역시 사하구 낙동대로 1",
+                "051-111-1111",
+            )
+        ],
+        target,
+    )
+    first_building, blocked_building = uuid4(), uuid4()
+    for building_id, key in (
+        (first_building, "first"),
+        (blocked_building, "blocked"),
+    ):
+        db.connection.execute(
+            "insert into dim_building (building_id, building_key) values (?, ?)",
+            [building_id, key],
+        )
+    db.connection.execute(
+        """insert into bridge_license_building (
+               source_id, source_record_id, building_id, parcel_hash
+           ) values ('lodgings', 'L1', ?, 'first')""",
+        [first_building],
+    )
+    db.connection.execute(
+        """insert into run_license_building_observation (
+               run_id, source_id, source_record_id, building_id, parcel_hash
+           ) values (?, 'lodgings', 'L1', ?, 'first')""",
+        [target, first_building],
+    )
+    build_facilities(db, target)
+    db.connection.execute(
+        """insert into bridge_license_building (
+               source_id, source_record_id, building_id, parcel_hash
+           ) values ('lodgings', 'L1', ?, 'blocked')""",
+        [blocked_building],
+    )
+
+    build_facilities(db, target)
+
+    assert db.query(
+        "select building_id from run_facility_building where run_id = ?", [target]
+    ) == [(first_building,)]
+
+
 def _license(
     source_id: str,
     source_record_id: str,

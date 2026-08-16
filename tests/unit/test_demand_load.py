@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+import westbusan.demand.load as demand_load_module
 from westbusan.db import Database
 from westbusan.demand.load import (
     iter_collection_months,
@@ -15,6 +16,36 @@ from westbusan.demand.load import (
 from westbusan.models import ApiPage, RunContext, SourceSpec
 from westbusan.sources.registry import SourceRegistry, record_inspection
 from westbusan.storage import RawStore
+
+
+def test_identical_demand_revision_records_each_recollecting_run(
+    tmp_path: Path,
+) -> None:
+    """A fact first seen by a blocked run remains visible to a later recollection."""
+    db = Database(tmp_path / "demand-membership.duckdb", Path("sql"))
+    db.migrate()
+    record = normalize_demand_row(
+        "area_tourism_demand",
+        json.loads(
+            Path("tests/fixtures/demand/area_demand.json").read_text(encoding="utf-8")
+        )[0],
+    )
+    blocked = RunContext(
+        uuid4(), "daily", datetime(2026, 8, 16, tzinfo=UTC), business_date=date(2026, 8, 16)
+    )
+    successful = RunContext(
+        uuid4(), "daily", datetime(2026, 8, 17, tzinfo=UTC), business_date=date(2026, 8, 17)
+    )
+    for run in (blocked, successful):
+        demand_load_module._persist_record(
+            db, record, "same-revision", uuid4(), run, lambda: None
+        )
+
+    assert db.scalar("select count(*) from fact_tourism_demand") == 1
+    assert db.query(
+        """select run_id from run_fact_observation
+           where family = 'tourism' order by run_id"""
+    ) == sorted([(blocked.run_id,), (successful.run_id,)])
 
 
 def test_month_iterator_includes_end_month() -> None:

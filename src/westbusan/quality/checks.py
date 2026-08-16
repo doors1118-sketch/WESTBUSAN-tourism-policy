@@ -597,13 +597,13 @@ def _target_count(db: Database, run_id: UUID, source_id: str, operation: str, pa
         return int(
             db.query(
                 """select count(*) from (
-                       select source_id from staging_license_snapshot_version
+                       select source_id from staging_license_revision
                        where source_id = ? and version_run_id = ? and observed_on = ?
                        union all
                        select source_id from staging_license_snapshot
                        where source_id = ? and last_loaded_run_id = ? and observed_on = ?
                          and not exists (
-                           select 1 from staging_license_snapshot_version
+                           select 1 from staging_license_revision
                            where version_run_id = ? and source_id = ?
                          )
                    )""",
@@ -615,23 +615,52 @@ def _target_count(db: Database, run_id: UUID, source_id: str, operation: str, pa
         period_prefix = partition[:7] if partition else None
         if prefix is None or period_prefix is None:
             return None
-        return int(
-            db.query(
-                """
-                select count(*) from fact_tourism_demand
-                where source_id = ? and loaded_run_id = ? and metric_code like ?
-                  and period like ?
-                """,
-                [source_id, run_id, f"{prefix}%", f"{period_prefix}%"],
-            )[0][0]
+        return _tourism_observation_count(
+            db,
+            run_id,
+            source_id,
+            metric_prefix=f"{prefix}%",
+            period_prefix=f"{period_prefix}%",
         )
     return None
 
 
 def _date_parse_check(db: Database, run_id: UUID, source_id: str, pages: list[_ArtifactPage], severity: Severity) -> CheckResult:
     raw_rows = sum(len(page.rows or []) for page in pages)
-    loaded = int(db.query("select count(*) from fact_tourism_demand where source_id = ? and loaded_run_id = ?", [source_id, run_id])[0][0])
+    loaded = _tourism_observation_count(db, run_id, source_id)
     return CheckResult("date_parse_success", "passed" if raw_rows == 0 or loaded else "failed", {"raw_rows": raw_rows, "loaded_rows": loaded}, "at least one parsed date-bearing row when raw rows exist", severity, source_id, "fact_tourism_demand", {})
+
+
+def _tourism_observation_count(
+    db: Database,
+    run_id: UUID,
+    source_id: str,
+    *,
+    metric_prefix: str | None = None,
+    period_prefix: str | None = None,
+) -> int:
+    filters = ["fact.source_id = ?"]
+    parameters: list[object] = [source_id]
+    if metric_prefix is not None:
+        filters.append("fact.metric_code like ?")
+        parameters.append(metric_prefix)
+    if period_prefix is not None:
+        filters.append("fact.period like ?")
+        parameters.append(period_prefix)
+    if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
+        sql = """select count(*) from fact_tourism_demand as fact
+                 join run_fact_observation as membership
+                   on membership.family = 'tourism'
+                  and membership.observation_key = fact.observation_key
+                 where membership.run_id = ? and """ + " and ".join(filters)
+        parameters.insert(0, run_id)
+    else:
+        sql = (
+            "select count(*) from fact_tourism_demand as fact "
+            "where fact.loaded_run_id = ? and " + " and ".join(filters)
+        )
+        parameters.insert(0, run_id)
+    return int(db.scalar(sql, parameters))
 
 
 def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> list[CheckResult]:
@@ -642,7 +671,7 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
                   source_modified_on, source_modified_date_quality,
                   data_updated_on, data_updated_date_quality,
                   status_code, status_class, detailed_status_code, detailed_status_name
-           from staging_license_snapshot_version where version_run_id = ?
+           from staging_license_revision where version_run_id = ?
            union all
            select source_id, district, region_group, region_quality, room_count,
                   jurisdiction_code, license_date, license_date_quality,
@@ -652,7 +681,7 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
                   status_code, status_class, detailed_status_code, detailed_status_name
            from staging_license_snapshot where last_loaded_run_id = ?
              and not exists (
-               select 1 from staging_license_snapshot_version
+               select 1 from staging_license_revision
                where version_run_id = ?
              )""",
         [run_id, run_id, run_id],
@@ -778,9 +807,10 @@ def _active_facility_count(db: Database, run_id: UUID) -> int:
             f"""with latest as (
                     select *, row_number() over (
                         partition by source_id, source_record_id
-                        order by observed_on desc, recorded_at desc
+                        order by observed_on desc, recorded_at desc,
+                                 revision_sequence desc
                     ) as row_num
-                    from staging_license_snapshot_version
+                    from staging_license_revision
                     where version_run_id in ({placeholders})
                 )
                 select count(distinct link.facility_id)

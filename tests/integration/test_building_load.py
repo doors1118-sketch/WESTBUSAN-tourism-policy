@@ -164,3 +164,129 @@ def test_same_day_building_correction_appends_system_time_version(
         (first_run.run_id, date(2020, 1, 1)),
         (corrected_run.run_id, date(2021, 1, 1)),
     ]
+
+
+def test_same_run_building_correction_appends_revision(tmp_path: Path) -> None:
+    """A resumed collector must retain both same-day building payload revisions."""
+    db = Database(tmp_path / "same-run-building.duckdb", Path("sql"))
+    db.migrate()
+    run = RunContext(
+        uuid4(),
+        "test",
+        datetime(2026, 8, 16, tzinfo=UTC),
+        business_date=date(2026, 8, 16),
+    )
+    values = {
+        "building_id": "B1",
+        "sigungu_cd": "26380",
+        "bjdong_cd": "10100",
+        "plat_gb_cd": "0",
+        "bun": "0001",
+        "ji": "0000",
+        "road_address": "부산광역시 사하구 하단동 1",
+        "lot_address": "부산광역시 사하구 하단동 1",
+        "approval_date": date(2000, 1, 1),
+        "use_approval_date": date(2000, 1, 1),
+        "main_use": "숙박시설",
+        "total_area": 100.0,
+        "ground_floor_count": 3,
+        "underground_floor_count": 0,
+        "closed_indicator": None,
+        "is_closed": False,
+    }
+    building_load._store_building(
+        db,
+        BuildingRecord(**values, permit_date=date(2020, 1, 1)),
+        "parcel",
+        run,
+        {},
+        lambda: None,
+    )
+    building_load._store_building(
+        db,
+        BuildingRecord(**values, permit_date=date(2021, 1, 1)),
+        "parcel",
+        run,
+        {},
+        lambda: None,
+    )
+
+    assert db.query(
+        """select revision_sequence, permit_date
+           from staging_building_revision
+           where version_run_id = ? order by revision_sequence""",
+        [run.run_id],
+    ) == [(1, date(2020, 1, 1)), (2, date(2021, 1, 1))]
+
+
+def test_building_collection_ignores_later_blocked_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parcel targeting is frozen to the target run's captured input lineage."""
+    db = Database(tmp_path / "building-lineage.duckdb", Path("sql"))
+    db.migrate()
+    load_legal_dong_codes(Path("tests/fixtures/reference/legal_dong_codes.csv"), db)
+    target = RunContext(
+        uuid4(),
+        "daily",
+        datetime(2026, 8, 16, tzinfo=UTC),
+        business_date=date(2026, 8, 16),
+    )
+    blocked = RunContext(
+        uuid4(),
+        "daily",
+        datetime(2026, 8, 17, tzinfo=UTC),
+        business_date=date(2026, 8, 16),
+    )
+    for run, status in ((target, "RUNNING"), (blocked, "BLOCKED")):
+        db.connection.execute(
+            """insert into pipeline_run (
+                   run_id, mode, started_at, status, business_date
+               ) values (?, ?, ?, ?, ?)""",
+            [run.run_id, run.mode, run.started_at, status, run.business_date],
+        )
+    db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [target.run_id, target.run_id],
+    )
+    load_license_snapshot(
+        db,
+        [
+            normalize_license(
+                "lodgings",
+                {"MNG_NO": "kept", "LOTNO_ADDR": "부산광역시 서구 충무동1가 12-3"},
+                date(2026, 8, 16),
+            )
+        ],
+        target.run_id,
+    )
+    load_license_snapshot(
+        db,
+        [
+            normalize_license(
+                "lodgings",
+                {"MNG_NO": "blocked", "LOTNO_ADDR": "부산광역시 서구 충무동1가 99-1"},
+                date(2026, 8, 16),
+            )
+        ],
+        blocked.run_id,
+    )
+
+    class EmptyPager:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def iter_url(self, *_: object, **__: object) -> list[ApiPage]:
+            return [ApiPage([], 0, 1, 1, b'{"data":[]}', "empty")]
+
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(building_load, "DataGoKrPager", EmptyPager)
+
+    result = collect_buildings_for_licenses(
+        db,
+        SourceRegistry.load(Path("config/sources.yaml")),
+        target,
+        raw_store=RawStore(tmp_path / "data"),
+    )
+
+    assert result.parcel_queries == 1
