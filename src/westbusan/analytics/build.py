@@ -345,6 +345,7 @@ def _facility_rows(
         [run_id],
     )
     completed = latest_complete_snapshot_runs(db, run_id)
+    active_designations = _active_designation_facility_ids(db, run_id)
     by_facility: dict[object, list[tuple[object, ...]]] = defaultdict(list)
     for row in snapshots:
         source_id = str(row[3])
@@ -368,12 +369,7 @@ def _facility_rows(
         source_names = [str(item[3]) for item in items]
         sources = set(source_names)
         age, age_quality, recent_permit = building_ages.get(facility_id, (None, "missing", None))
-        has_designation = bool(
-            db.query(
-                "select 1 from bridge_facility_designation where facility_id = ? limit 1",
-                [facility_id],
-            )
-        )
+        has_designation = facility_id in active_designations
         rows.append(
             {
                 "facility_id": facility_id,
@@ -396,6 +392,62 @@ def _facility_rows(
             }
         )
     return rows
+
+
+def _active_designation_facility_ids(
+    db: Database, run_id: UUID
+) -> set[object]:
+    """Resolve designation state from the target run's latest complete snapshot."""
+    visible = _visible_run_ids(db, run_id)
+    placeholders = ",".join("?" for _ in visible)
+    history_exists = bool(
+        db.query(
+            "select 1 from facility_designation_history where run_id = ? limit 1",
+            [run_id],
+        )
+    )
+    links = db.query(
+        """select facility_id, source_id, source_record_id
+           from facility_designation_history where run_id = ?""",
+        [run_id],
+    ) if history_exists else db.query(
+        """select facility_id, source_id, source_record_id
+           from bridge_facility_designation"""
+    )
+    snapshots = db.query(
+        f"""select source_id, source_record_id, status_code, status_name,
+                   closure_date, observed_on, last_loaded_run_id
+            from (
+                select *, row_number() over (
+                    partition by source_id, source_record_id
+                    order by observed_on desc, source_updated_at desc nulls last
+                ) as row_number
+                from staging_license_snapshot
+                where first_loaded_run_id in ({placeholders})
+                  and source_id = 'tourist_pensions'
+            ) where row_number = 1""",
+        list(visible),
+    )
+    by_key = {
+        (str(source_id), str(source_record_id)): row
+        for row in snapshots
+        for source_id, source_record_id in [row[:2]]
+    }
+    completed = latest_complete_snapshot_runs(db, run_id)
+    active: set[object] = set()
+    for facility_id, source_id, source_record_id in links:
+        row = by_key.get((str(source_id), str(source_record_id)))
+        if row is None:
+            continue
+        _, _, code, name, closure, observed, loaded_run = row
+        if (
+            str(source_id) in completed
+            and loaded_run != completed[str(source_id)]
+        ):
+            continue
+        if is_active_status(code, name, closure, observed):
+            active.add(facility_id)
+    return active
 
 
 def _building_ages(
@@ -900,23 +952,79 @@ def _same_period_inventory(
     """Build the room distribution from this period's snapshot, never today’s one."""
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
-    rows = db.query(
-        f"""select link.facility_id, snapshot.source_id, snapshot.source_record_id,
-                   snapshot.room_count, snapshot.status_code, snapshot.status_name,
-                   snapshot.closure_date, snapshot.observed_on, snapshot.version_run_id
-        from run_facility_license as link
-        join run_facility as facility
-          on facility.run_id = link.run_id and facility.facility_id = link.facility_id
-        join staging_license_revision as snapshot
-          on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
-        where link.run_id = ? and facility.district = ? and snapshot.observed_on::varchar like ?
-          and snapshot.source_id <> 'tourist_pensions'
-          and snapshot.version_run_id in ({placeholders})
-          and (? is null or snapshot.observed_on <= ?)""",
-        [run_id, district, f"{period}%", *visible_runs, as_of, as_of],
+    history_exists = bool(
+        db.query(
+            f"""select 1 from facility_component_history
+                where run_id in ({placeholders}) limit 1""",
+            list(visible_runs),
+        )
     )
+    if history_exists:
+        rows = db.query(
+            f"""with ranked_component as (
+                    select history.*, row_number() over (
+                        partition by history.source_id, history.source_record_id
+                        order by producer.business_date desc nulls last,
+                                 producer.started_at desc nulls last,
+                                 history.recorded_at desc, history.run_id desc
+                    ) as component_rank
+                    from facility_component_history as history
+                    left join pipeline_run as producer on producer.run_id = history.run_id
+                    where history.run_id in ({placeholders}) and history.district = ?
+                ), ranked_snapshot as (
+                    select component.facility_id, snapshot.*,
+                           row_number() over (
+                               partition by component.source_id, component.source_record_id
+                               order by snapshot.observed_on desc, snapshot.recorded_at desc,
+                                        snapshot.revision_sequence desc
+                           ) as snapshot_rank
+                    from ranked_component as component
+                    join staging_license_revision as snapshot
+                      on snapshot.version_run_id = component.source_snapshot_run_id
+                     and snapshot.source_id = component.source_id
+                     and snapshot.source_record_id = component.source_record_id
+                    where component.component_rank = 1
+                      and snapshot.observed_on::varchar like ?
+                      and (? is null or snapshot.observed_on <= ?)
+                )
+                select facility_id, source_id, source_record_id, room_count,
+                       status_code, status_name, closure_date, observed_on,
+                       version_run_id
+                from ranked_snapshot where snapshot_rank = 1""",
+            [*visible_runs, district, f"{period}%", as_of, as_of],
+        )
+    else:
+        rows = db.query(
+            f"""select link.facility_id, snapshot.source_id,
+                       snapshot.source_record_id, snapshot.room_count,
+                       snapshot.status_code, snapshot.status_name,
+                       snapshot.closure_date, snapshot.observed_on,
+                       snapshot.version_run_id
+                from run_facility_license as link
+                join run_facility as facility
+                  on facility.run_id = link.run_id and facility.facility_id = link.facility_id
+                join staging_license_revision as snapshot
+                  on snapshot.source_id = link.source_id
+                 and snapshot.source_record_id = link.source_record_id
+                where link.run_id = ? and facility.district = ?
+                  and snapshot.observed_on::varchar like ?
+                  and snapshot.version_run_id in ({placeholders})
+                  and (? is null or snapshot.observed_on <= ?)""",
+            [run_id, district, f"{period}%", *visible_runs, as_of, as_of],
+        )
     completed = latest_complete_snapshot_runs(db, run_id, period=period)
-    observed_snapshot_rows = bool(rows)
+    completed_run_ids = tuple(completed.values())
+    completed_placeholders = ",".join("?" for _ in completed_run_ids)
+    observed_snapshot_rows = bool(rows) or bool(
+        completed_run_ids
+        and db.query(
+            f"""select 1 from staging_license_revision
+                where district = ? and observed_on::varchar like ?
+                  and version_run_id in ({completed_placeholders})
+                limit 1""",
+            [district, f"{period}%", *completed_run_ids],
+        )
+    )
     rows = [
         row
         for row in rows

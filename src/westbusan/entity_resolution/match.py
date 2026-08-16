@@ -262,6 +262,12 @@ def build_facilities(
     components, designation_targets, unmatched_designations = _attach_designations(
         records, decisions, physical_components
     )
+    component_facility_ids = _canonical_component_ids(
+        db,
+        {tuple(keys) for keys in components.values()},
+        run_id,
+        write,
+    )
 
     evidence_by_key: dict[str, list[dict[str, object]]] = defaultdict(list)
     review_rows: dict[UUID, tuple[UUID | None, UUID | None, str]] = {}
@@ -304,8 +310,8 @@ def build_facilities(
         elif decision.label == "review" and left_key in components and right_key in components:
             add_review(
                 "duplicate-review:" + "|".join(sorted((left_key, right_key))),
-                _facility_id(components[left_key]),
-                _facility_id(components[right_key]),
+                component_facility_ids[components[left_key]],
+                component_facility_ids[components[right_key]],
                 evidence,
             )
 
@@ -314,8 +320,8 @@ def build_facilities(
         right_key = _registration_key(right)
         add_review(
             "blocked-transitive-merge:" + "|".join(sorted((left_key, right_key))),
-            _facility_id(components[left_key]),
-            _facility_id(components[right_key]),
+            component_facility_ids[components[left_key]],
+            component_facility_ids[components[right_key]],
             {
                 "decision": "blocked_transitive_merge",
                 "left_registration_key": left_key,
@@ -346,9 +352,15 @@ def build_facilities(
     write("delete from run_facility_building where run_id = ?", [run_id])
     write("delete from run_facility_license where run_id = ?", [run_id])
     write("delete from run_facility where run_id = ?", [run_id])
+    write(
+        "delete from facility_component_history where run_id = ?", [run_id]
+    )
+    write(
+        "delete from facility_designation_history where run_id = ?", [run_id]
+    )
     for component in {tuple(keys) for keys in components.values()}:
         guard()
-        facility_id = _facility_id(component)
+        facility_id = component_facility_ids[component]
         desired_facilities.add(facility_id)
         component_records = [records_by_key[key] for key in component]
         canonical = next(
@@ -383,6 +395,31 @@ def build_facilities(
             source_id = str(record["source_id"])
             source_record_id = str(record["source_record_id"])
             desired_license_links.add((facility_id, source_id, source_record_id))
+            write(
+                """
+                insert into facility_component_history (
+                    run_id, facility_id, source_id, source_record_id,
+                    source_snapshot_run_id, component_signature, district,
+                    region_group
+                ) values (?, ?, ?, ?, ?, ?, ?, ?)
+                on conflict (run_id, source_id, source_record_id) do update set
+                    facility_id = excluded.facility_id,
+                    source_snapshot_run_id = excluded.source_snapshot_run_id,
+                    component_signature = excluded.component_signature,
+                    district = excluded.district,
+                    region_group = excluded.region_group
+                """,
+                [
+                    run_id,
+                    facility_id,
+                    source_id,
+                    source_record_id,
+                    record["selected_version_run_id"],
+                    "|".join(component),
+                    district,
+                    region_group,
+                ],
+            )
             evidence = json.dumps(
                 {"registration_key": key, "merge_evidence": evidence_by_key[key]},
                 ensure_ascii=False,
@@ -437,11 +474,29 @@ def build_facilities(
         designation = next(
             record for record in records if _registration_key(record) == designation_key
         )
-        facility_id = _facility_id(component)
+        facility_id = component_facility_ids[component]
         source_id = str(designation["source_id"])
         source_record_id = str(designation["source_record_id"])
         desired_designation_links.add((facility_id, source_id, source_record_id))
         guard()
+        write(
+            """
+            insert into facility_designation_history (
+                run_id, facility_id, source_id, source_record_id,
+                source_snapshot_run_id
+            ) values (?, ?, ?, ?, ?)
+            on conflict (run_id, source_id, source_record_id) do update set
+                facility_id = excluded.facility_id,
+                source_snapshot_run_id = excluded.source_snapshot_run_id
+            """,
+            [
+                run_id,
+                facility_id,
+                source_id,
+                source_record_id,
+                designation["selected_version_run_id"],
+            ],
+        )
         write(
             """
             insert into bridge_facility_designation (
@@ -724,23 +779,10 @@ def _adjudications(
 
 
 def _default_calibration_allows_auto_merge() -> bool:
-    path = (
-        Path(__file__).resolve().parents[3]
-        / "config"
-        / "entity_resolution_labeled_pairs_2026-08.csv"
-    )
-    if not path.exists():
-        return False
-    try:
-        result = evaluate_auto_merge_calibration(
-            path, classify_pair, sample_version="2026-08-initial-reviewed"
-        )
-    except (OSError, ValueError, KeyError):
-        return False
-    return (
-        result.algorithm_version == ALGORITHM_VERSION
-        and result.confidence_lower_bound >= 0.70
-    )
+    # The bundled labeled pairs are a developer regression fixture, not a
+    # representative production sample.  Automatic publication merges remain
+    # disabled until a separately governed, versioned calibration is supplied.
+    return False
 
 
 def _safe_physical_merge_edges(
@@ -861,6 +903,91 @@ def _components(
     for key in parent:
         groups[find(key)].append(key)
     return {key: tuple(sorted(groups[find(key)])) for key in parent}
+
+
+def _canonical_component_ids(
+    db: Database,
+    components: set[tuple[str, ...]],
+    run_id: UUID,
+    writer: Callable[[str, list[object] | None], None],
+) -> dict[tuple[str, ...], UUID]:
+    """Reuse a survivor identity as the observed registration component evolves."""
+    previous_by_key = {
+        f"{source_id}:{source_record_id}": facility_id
+        for facility_id, source_id, source_record_id in db.query(
+            "select facility_id, source_id, source_record_id from bridge_facility_license"
+        )
+    }
+    aliases = {
+        alias: canonical
+        for alias, canonical in db.query(
+            "select alias_facility_id, canonical_facility_id from facility_identity_alias"
+        )
+    }
+
+    def canonical(facility_id: UUID) -> UUID:
+        seen: set[UUID] = set()
+        while facility_id in aliases and facility_id not in seen:
+            seen.add(facility_id)
+            facility_id = aliases[facility_id]
+        return facility_id
+
+    anchors = {
+        facility_id: str(anchor)
+        for facility_id, anchor in db.query(
+            "select facility_id, anchor_registration_key from facility_identity_anchor"
+        )
+    }
+    result: dict[tuple[str, ...], UUID] = {}
+    assigned: set[UUID] = set()
+    for component in sorted(components):
+        candidates = {
+            canonical(previous_by_key[key])
+            for key in component
+            if key in previous_by_key
+        }
+        available = candidates - assigned
+        anchored = {
+            facility_id
+            for facility_id in available
+            if anchors.get(facility_id) in component
+        }
+        if anchored:
+            survivor = min(anchored, key=str)
+        elif available:
+            survivor = min(available, key=str)
+        else:
+            survivor = _facility_id((component[0],))
+            if survivor in assigned:
+                survivor = uuid5(
+                    NAMESPACE_URL,
+                    "facility-split:" + "|".join(component),
+                )
+        assigned.add(survivor)
+        result[component] = survivor
+        if survivor not in anchors:
+            writer(
+                """
+                insert into facility_identity_anchor (
+                    facility_id, anchor_registration_key, established_run_id
+                ) values (?, ?, ?)
+                on conflict do nothing
+                """,
+                [survivor, component[0], run_id],
+            )
+            anchors[survivor] = component[0]
+        for losing_id in sorted(candidates - {survivor}, key=str):
+            writer(
+                """
+                insert into facility_identity_alias (
+                    alias_facility_id, canonical_facility_id, reason, created_run_id
+                ) values (?, ?, 'component_merge_survivor', ?)
+                on conflict (alias_facility_id) do nothing
+                """,
+                [losing_id, survivor, run_id],
+            )
+            aliases[losing_id] = survivor
+    return result
 
 
 def _facility_id(registration_keys: tuple[str, ...]) -> UUID:

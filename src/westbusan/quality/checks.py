@@ -778,35 +778,18 @@ def _coverage_check(
 
 
 def _entity_precision_check() -> CheckResult:
-    fixture = (
-        Path(__file__).parents[3]
-        / "config"
-        / "entity_resolution_labeled_pairs_2026-08.csv"
-    )
-    try:
-        calibration = evaluate_auto_merge_calibration(
-            fixture,
-            classify_pair,
-            sample_version="2026-08-initial-reviewed",
-        )
-    except (OSError, ValueError) as error:
-        return CheckResult("entity_auto_merge_calibration", "failed", "INVALID_OR_DEGENERATE_LABELED_SAMPLE", ">=0.70 Wilson 95% confidence lower bound", "required", table_name="entity_resolution_labeled_sample", evidence={"error": str(error), "fixture": fixture.name})
-    actual = {
-        "point_precision": calibration.point_precision,
-        "confidence_lower_bound": calibration.confidence_lower_bound,
-        "predicted_positive": calibration.predicted_positive,
-    }
+    """Report the safe production mode until representative calibration exists."""
     return CheckResult(
         "entity_auto_merge_calibration",
-        "passed" if calibration.confidence_lower_bound >= 0.70 else "failed",
-        actual,
-        ">=0.70 Wilson 95% confidence lower bound",
-        "required",
+        "skipped",
+        "DISABLED_REVIEW_ONLY",
+        "representative versioned production calibration before enabling auto-merge",
+        "informational",
         table_name="entity_resolution_labeled_sample",
         evidence={
-            "fixture": fixture.name,
-            "sample_version": calibration.sample_version,
-            "algorithm_version": calibration.algorithm_version,
+            "developer_fixture": "entity_resolution_labeled_pairs_2026-08.csv",
+            "developer_fixture_is_production_calibration": False,
+            "automatic_publication_merge_enabled": False,
         },
     )
 
@@ -827,31 +810,44 @@ def _building_and_duplicate_warnings(db: Database, run_id: UUID) -> list[CheckRe
 
 
 def _designation_coverage_check(db: Database, run_id: UUID) -> CheckResult:
-    total = int(
-        db.query(
-            """
-            select count(*) from staging_license_snapshot
-            where source_id = 'tourist_pensions' and last_loaded_run_id = ?
-            """,
+    designation_keys = {
+        f"{source_id}:{source_record_id}"
+        for source_id, source_record_id in db.query(
+            """select source_id, source_record_id from staging_license_snapshot
+               where source_id = 'tourist_pensions' and last_loaded_run_id = ?""",
             [run_id],
-        )[0][0]
-    )
-    linked = int(
-        db.query(
-            """
-            select count(*)
-            from bridge_facility_designation as designation
-            join staging_license_snapshot as snapshot
-              on snapshot.source_id = designation.source_id
-             and snapshot.source_record_id = designation.source_record_id
-            where snapshot.last_loaded_run_id = ?
-            """,
+        )
+    }
+    linked_keys = {
+        f"{source_id}:{source_record_id}"
+        for source_id, source_record_id in db.query(
+            """select designation.source_id, designation.source_record_id
+               from bridge_facility_designation as designation
+               join staging_license_snapshot as snapshot
+                 on snapshot.source_id = designation.source_id
+                and snapshot.source_record_id = designation.source_record_id
+               where snapshot.last_loaded_run_id = ?""",
             [run_id],
-        )[0][0]
-    )
-    coverage = linked / total if total else None
+        )
+    }
+    unmatched = designation_keys - linked_keys
+    reviewed: set[str] = set()
+    for (raw_evidence,) in db.query(
+        "select evidence_json from duplicate_review"
+    ):
+        try:
+            evidence = json.loads(str(raw_evidence))
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if evidence.get("decision") == "unmatched_designation":
+            reviewed.add(str(evidence.get("registration_key")))
+    explicit = unmatched & reviewed
+    unreviewed = unmatched - explicit
+    total = len(designation_keys)
+    linked = len(designation_keys & linked_keys)
+    coverage = (linked + len(explicit)) / total if total else None
     status: CheckStatus = (
-        "skipped" if total == 0 else "passed" if linked == total else "warning"
+        "skipped" if total == 0 else "warning" if unreviewed else "passed"
     )
     return CheckResult(
         "tourist_pension_designation_link_coverage",
@@ -863,7 +859,9 @@ def _designation_coverage_check(db: Database, run_id: UUID) -> CheckResult:
         evidence={
             "designation_records": total,
             "linked_designations": linked,
-            "unmatched_designations": total - linked,
+            "unmatched_designations": len(unmatched),
+            "explicit_unmatched_reviews": len(explicit),
+            "unreviewed_unmatched": len(unreviewed),
         },
     )
 

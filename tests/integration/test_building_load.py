@@ -1,7 +1,7 @@
 import json
 from datetime import UTC, date, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 
@@ -11,6 +11,7 @@ from westbusan.buildings import load as building_load
 from westbusan.buildings.load import (
     collect_buildings_for_licenses,
     load_legal_dong_codes,
+    record_building_link_adjudication,
 )
 from westbusan.buildings.normalize import BuildingRecord
 from westbusan.db import Database
@@ -315,6 +316,17 @@ def test_multi_title_parcel_is_review_only_and_never_counted_as_resolved(
         Path("tests/fixtures/buildings/title.json").read_text(encoding="utf-8")
     )[0]
     second = {**first, "mgmBldrgstPk": "26140-1002", "newPlatPlc": "부산광역시 서구 충무대로 1 2동"}
+    stale_building_id = uuid5(NAMESPACE_URL, str(first["mgmBldrgstPk"]))
+    db.connection.execute(
+        "insert into dim_building (building_id, building_key) values (?, ?)",
+        [stale_building_id, first["mgmBldrgstPk"]],
+    )
+    db.connection.execute(
+        """insert into bridge_license_building
+           (source_id, source_record_id, building_id, parcel_hash)
+           values ('lodgings', 'BUSAN-1', ?, 'stale')""",
+        [stale_building_id],
+    )
 
     class FakePager:
         def __init__(self, *_: object, **__: object) -> None:
@@ -347,5 +359,65 @@ def test_multi_title_parcel_is_review_only_and_never_counted_as_resolved(
     assert result.bridge_rows == 0
     assert db.query("select count(*) from bridge_license_building") == [(0,)]
     assert db.query(
-        "select source_id, source_record_id from building_link_review"
-    ) == [("lodgings", "BUSAN-1")]
+        """select source_id, source_record_id, review_status,
+                  candidate_version is not null
+             from building_link_review"""
+    ) == [("lodgings", "BUSAN-1", "pending", True)]
+
+
+def test_building_adjudication_requires_exact_candidate_version_and_resets_on_change(
+    tmp_path: Path,
+) -> None:
+    """Catches stale resolved title decisions surviving a changed parcel fan-out."""
+    db = Database(tmp_path / "building-review.duckdb", Path("sql")); db.migrate()
+    building_load._store_ambiguous_building_candidates(
+        db,
+        "parcel-1",
+        [("lodgings", "L1")],
+        ["B1", "B1", "B2"],
+        lambda: None,
+    )
+    version, candidates = db.query(
+        "select candidate_version, candidate_building_ids_json from building_link_review"
+    )[0]
+    assert json.loads(candidates) == ["B1", "B2"]
+
+    record_building_link_adjudication(
+        db,
+        "lodgings",
+        "L1",
+        parcel_hash="parcel-1",
+        candidate_version=version,
+        selected_building_key="B1",
+        reviewer="reviewer-1",
+        rationale="title and entrance confirmed",
+    )
+    assert db.query(
+        "select review_status from building_link_review"
+    ) == [("resolved",)]
+    assert db.query("select count(*) from bridge_license_building") == [(1,)]
+
+    building_load._store_ambiguous_building_candidates(
+        db,
+        "parcel-1",
+        [("lodgings", "L1")],
+        ["B2", "B3"],
+        lambda: None,
+    )
+
+    assert db.query(
+        """select review_status, selected_building_id, reviewer, rationale
+             from building_link_review"""
+    ) == [("pending", None, None, None)]
+    assert db.query("select count(*) from bridge_license_building") == [(0,)]
+    with pytest.raises(ValueError, match="version changed"):
+        record_building_link_adjudication(
+            db,
+            "lodgings",
+            "L1",
+            parcel_hash="parcel-1",
+            candidate_version=version,
+            selected_building_key="B2",
+            reviewer="reviewer-2",
+            rationale="stale decision",
+        )

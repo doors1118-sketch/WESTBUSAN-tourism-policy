@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +10,7 @@ from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.db import Database
 from westbusan.entity_resolution.match import build_facilities, record_pair_adjudication
+from westbusan.models import SourceStatus
 
 
 @pytest.mark.parametrize(
@@ -122,7 +123,9 @@ def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_p
                 "MNG_NO": "L1",
                 "BPLC_NM": "부산바다호텔",
                 "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
-                "SITETEL": "051-123-4567",
+                    "SITETEL": "051-123-4567",
+                    "DTL_STATE_GBN": "01",
+                    "DTL_STATE_NM": "영업/정상",
             },
             date(2026, 8, 16),
         ),
@@ -132,7 +135,9 @@ def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_p
                 "MNG_NO": "T1",
                 "BPLC_NM": "부산 바다 호텔",
                 "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
-                "SITETEL": "0511234567",
+                    "SITETEL": "0511234567",
+                    "DTL_STATE_GBN": "01",
+                    "DTL_STATE_NM": "영업/정상",
             },
             date(2026, 8, 16),
         ),
@@ -141,13 +146,24 @@ def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_p
             {
                 "MNG_NO": "L2",
                 "BPLC_NM": "별도 게스트하우스",
-                "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
+                    "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
+                    "DTL_STATE_GBN": "01",
+                    "DTL_STATE_NM": "영업/정상",
             },
             date(2026, 8, 16),
         ),
     ]
     run_id = uuid4()
     assert load_license_snapshot(db, records, run_id) == 3
+    record_pair_adjudication(
+        db,
+        "lodgings:L1",
+        "tourist_accommodations:T1",
+        decision="merge",
+        reviewer="reviewer-1",
+        rationale="same operator and premises confirmed",
+        data_version="2026-08-16",
+    )
 
     result = build_facilities(db, run_id)
 
@@ -192,6 +208,142 @@ def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_p
         order by facility_id, source_id, source_record_id
         """
     ) == first_links
+
+
+def test_production_build_blocks_unadjudicated_auto_merge(tmp_path: Path) -> None:
+    """A hand-crafted calibration fixture cannot authorize production merges."""
+    db = Database(tmp_path / "no-auto.duckdb", Path("sql")); db.migrate()
+    run_id = uuid4()
+    load_license_snapshot(
+        db,
+        [
+            _license("lodgings", "L1", "바다호텔", "부산광역시 사하구 바다로 1", "051-111-1111"),
+            _license("tourist_accommodations", "T1", "바다 호텔", "부산광역시 사하구 바다로 1", "051-111-1111"),
+        ],
+        run_id,
+    )
+
+    result = build_facilities(db, run_id)
+
+    assert result.facility_count == 2
+    assert result.review_pairs == 1
+
+
+def test_canonical_facility_id_survives_component_addition_and_removal(
+    tmp_path: Path,
+) -> None:
+    """Catches hashing the current component into a facility ID that changes over time."""
+    db = Database(tmp_path / "stable-id.duckdb", Path("sql")); db.migrate()
+    first, second, third = uuid4(), uuid4(), uuid4()
+    for run_id, started in (
+        (first, "2026-08-16"),
+        (second, "2026-08-17"),
+        (third, "2026-08-18"),
+    ):
+        db.connection.execute(
+            "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', ?, 'DONE')",
+            [run_id, started],
+        )
+    load_license_snapshot(
+        db,
+        [_license("lodgings", "L1", "바다호텔", "부산광역시 사하구 바다로 1", "051-111-1111")],
+        first,
+    )
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, first)
+    )
+    build_facilities(db, first)
+    canonical = db.query("select facility_id from bridge_facility_license")[0][0]
+
+    load_license_snapshot(
+        db,
+        [_license(
+            "tourist_accommodations", "T1", "바다 호텔",
+            "부산광역시 사하구 바다로 1", "051-111-1111",
+            observed_on=date(2026, 8, 17),
+        )],
+        second,
+    )
+    db.record_source_status(
+        SourceStatus(
+            "tourist_accommodations",
+            datetime(2026, 8, 17, tzinfo=UTC),
+            "READY",
+            {},
+            second,
+        )
+    )
+    record_pair_adjudication(
+        db,
+        "lodgings:L1",
+        "tourist_accommodations:T1",
+        decision="merge",
+        reviewer="reviewer-1",
+        rationale="same physical premises",
+        data_version="2026-08-17",
+    )
+    build_facilities(db, second)
+    assert {
+        row[0] for row in db.query("select facility_id from bridge_facility_license")
+    } == {canonical}
+
+    db.record_source_status(
+        SourceStatus(
+            "tourist_accommodations",
+            datetime(2026, 8, 18, tzinfo=UTC),
+            "EMPTY",
+            {},
+            third,
+        )
+    )
+    build_facilities(db, third)
+
+    assert db.query(
+        "select facility_id, source_id, source_record_id from bridge_facility_license"
+    ) == [(canonical, "lodgings", "L1")]
+    assert db.query(
+        "select count(*) from facility_component_history where facility_id = ?",
+        [canonical],
+    ) == [(4,)]
+
+
+def test_component_merge_persists_losing_facility_as_survivor_alias(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "survivor-alias.duckdb", Path("sql")); db.migrate()
+    first = uuid4()
+    load_license_snapshot(
+        db,
+        [
+            _license("lodgings", "A", "바다호텔", "부산광역시 사하구 바다로 1", "051-111-1111"),
+            _license("tourist_accommodations", "B", "바다 호텔", "부산광역시 사하구 바다로 1", "051-111-1111"),
+        ],
+        first,
+    )
+    build_facilities(db, first)
+    original_ids = {
+        row[0] for row in db.query("select facility_id from bridge_facility_license")
+    }
+    assert len(original_ids) == 2
+    record_pair_adjudication(
+        db,
+        "lodgings:A",
+        "tourist_accommodations:B",
+        decision="merge",
+        reviewer="reviewer-1",
+        rationale="same physical facility",
+        data_version="2026-08-16",
+    )
+
+    build_facilities(db, uuid4())
+
+    survivor = db.query("select distinct facility_id from bridge_facility_license")[0][0]
+    losing = next(iter(original_ids - {survivor}))
+    assert db.query(
+        """select canonical_facility_id, reason from facility_identity_alias
+           where alias_facility_id = ?""",
+        [losing],
+    ) == [(survivor, "component_merge_survivor")]
 
 
 def test_unmatched_tourist_pension_is_reviewed_without_creating_a_facility(tmp_path: Path) -> None:
@@ -567,6 +719,8 @@ def _license(
         "MNG_NO": source_record_id,
         "BPLC_NM": name,
         "ROAD_NM_ADDR": address,
+        "DTL_STATE_GBN": "01",
+        "DTL_STATE_NM": "영업/정상",
     }
     if phone is not None:
         row["SITETEL"] = phone

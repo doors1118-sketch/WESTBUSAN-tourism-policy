@@ -40,13 +40,12 @@ def test_warning_only_report_can_publish() -> None:
 
 
 def test_entity_calibration_gate_reports_versioned_confidence_lower_bound() -> None:
-    """Catches reverting to an unsupported 99% point-precision claim."""
+    """A developer fixture cannot authorize production auto-merge."""
     check = _entity_precision_check()
 
-    assert check.status == "passed"
-    assert check.expected == ">=0.70 Wilson 95% confidence lower bound"
-    assert check.evidence["sample_version"] == "2026-08-initial-reviewed"
-    assert check.actual["confidence_lower_bound"] < check.actual["point_precision"]
+    assert check.status == "skipped"
+    assert check.actual == "DISABLED_REVIEW_ONLY"
+    assert check.evidence["developer_fixture_is_production_calibration"] is False
 
 
 def test_unmatched_tourist_pension_designation_has_explicit_coverage_gate(
@@ -76,7 +75,39 @@ def test_unmatched_tourist_pension_designation_has_explicit_coverage_gate(
         "designation_records": 1,
         "linked_designations": 0,
         "unmatched_designations": 1,
+        "explicit_unmatched_reviews": 0,
+        "unreviewed_unmatched": 1,
     }
+
+
+def test_reviewed_unmatched_designation_satisfies_explicit_evidence_gate(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "reviewed-designation.duckdb", Path("sql")); db.migrate()
+    run_id = uuid4()
+    db.connection.execute(
+        """
+        insert into staging_license_snapshot (
+            source_id, source_record_id, observed_on, first_loaded_run_id,
+            last_loaded_run_id, region_quality, room_count_quality,
+            source_payload_json, record_hash
+        ) values ('tourist_pensions', 'P1', '2026-08-16', ?, ?, 'unresolved',
+                  'missing', '{}', 'p1')
+        """,
+        [run_id, run_id],
+    )
+    db.connection.execute(
+        """insert into duplicate_review (review_id, evidence_json)
+           values (?, '{"decision":"unmatched_designation","registration_key":"tourist_pensions:P1"}')""",
+        [uuid4()],
+    )
+
+    check = _designation_coverage_check(db, run_id)
+
+    assert check.status == "passed"
+    assert check.actual == 1.0
+    assert check.evidence["explicit_unmatched_reviews"] == 1
+    assert check.evidence["unreviewed_unmatched"] == 0
 
 
 def test_quality_active_facility_count_uses_status_and_snapshot_membership(

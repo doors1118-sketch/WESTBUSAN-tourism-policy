@@ -209,10 +209,15 @@ def collect_buildings_for_licenses(
             responses["closed_register_basis_outline"],
             heartbeat,
         )
-        titles = [
+        title_rows = [
             normalize_building_title(row)
             for row in responses["building_register_title"]
         ]
+        titles_by_id: dict[str, BuildingRecord] = {}
+        for title in title_rows:
+            if title.building_id is not None:
+                titles_by_id.setdefault(title.building_id, title)
+        titles = list(titles_by_id.values())
         enrichments = [
             normalize_building_title(row)
             for source_id, rows in responses.items()
@@ -220,10 +225,22 @@ def collect_buildings_for_licenses(
             not in {"building_register_title", "closed_register_basis_outline"}
             for row in rows
         ]
-        valid_title_ids = [
-            title.building_id for title in titles if title.building_id is not None
-        ]
+        valid_title_ids = sorted(titles_by_id)
         resolved_single_title = len(valid_title_ids) == 1
+        for source_id, source_record_id in licenses_by_parcel[parcel_hash]:
+            db.connection.execute(
+                """delete from bridge_license_building
+                   where source_id = ? and source_record_id = ?""",
+                [source_id, source_record_id],
+            )
+            if resolved_single_title:
+                db.connection.execute(
+                    """update building_link_review
+                       set review_status = 'superseded'
+                       where source_id = ? and source_record_id = ?
+                         and parcel_hash = ? and review_status = 'pending'""",
+                    [source_id, source_record_id, parcel_hash],
+                )
         for title in titles:
             heartbeat()
             if title.building_id is None:
@@ -274,7 +291,10 @@ def _store_ambiguous_building_candidates(
     progress: ProgressCallback,
 ) -> None:
     """Persist parcel fan-out as review evidence, never as a resolved bridge."""
-    candidates = json.dumps(sorted(building_ids), ensure_ascii=False)
+    distinct_ids = sorted(set(building_ids))
+    candidates = json.dumps(distinct_ids, ensure_ascii=False)
+    candidate_version = hashlib.sha256(candidates.encode("utf-8")).hexdigest()
+    candidate_uuids = {uuid5(NAMESPACE_URL, key) for key in distinct_ids}
     for source_id, source_record_id in licenses:
         review_id = uuid5(
             NAMESPACE_URL,
@@ -283,25 +303,116 @@ def _store_ambiguous_building_candidates(
         evidence = json.dumps(
             {
                 "decision": "ambiguous_parcel_multi_title",
-                "candidate_count": len(building_ids),
+                "candidate_count": len(distinct_ids),
+                "candidate_version": candidate_version,
                 "resolved": False,
             },
             ensure_ascii=False,
             sort_keys=True,
         )
         progress()
+        prior = db.query(
+            """select review_status, adjudicated_candidate_version,
+                      selected_building_id, reviewer, rationale
+               from building_link_review where review_id = ?""",
+            [review_id],
+        )
+        retain_resolution = bool(
+            prior
+            and prior[0][0] == "resolved"
+            and prior[0][1] == candidate_version
+            and prior[0][2] in candidate_uuids
+        )
+        review_status = "resolved" if retain_resolution else "pending"
+        selected = prior[0][2] if retain_resolution else None
+        reviewer = prior[0][3] if retain_resolution else None
+        rationale = prior[0][4] if retain_resolution else None
+        adjudicated_version = candidate_version if retain_resolution else None
+        db.connection.execute(
+            """delete from bridge_license_building
+               where source_id = ? and source_record_id = ?""",
+            [source_id, source_record_id],
+        )
+        if selected is not None:
+            db.connection.execute(
+                """insert into bridge_license_building
+                   (source_id, source_record_id, building_id, parcel_hash)
+                   values (?, ?, ?, ?) on conflict do nothing""",
+                [source_id, source_record_id, selected, parcel_hash],
+            )
         db.connection.execute(
             """
             insert into building_link_review (
                 review_id, source_id, source_record_id, parcel_hash,
-                candidate_building_ids_json, evidence_json
-            ) values (?, ?, ?, ?, ?, ?)
+                candidate_building_ids_json, evidence_json, candidate_version,
+                adjudicated_candidate_version, selected_building_id,
+                review_status, reviewer, rationale
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (review_id) do update set
                 candidate_building_ids_json = excluded.candidate_building_ids_json,
-                evidence_json = excluded.evidence_json
+                evidence_json = excluded.evidence_json,
+                candidate_version = excluded.candidate_version,
+                adjudicated_candidate_version = excluded.adjudicated_candidate_version,
+                selected_building_id = excluded.selected_building_id,
+                review_status = excluded.review_status,
+                reviewer = excluded.reviewer,
+                rationale = excluded.rationale
             """,
-            [review_id, source_id, source_record_id, parcel_hash, candidates, evidence],
+            [
+                review_id, source_id, source_record_id, parcel_hash, candidates,
+                evidence, candidate_version, adjudicated_version, selected,
+                review_status, reviewer, rationale,
+            ],
         )
+
+
+def record_building_link_adjudication(
+    db: Database,
+    source_id: str,
+    source_record_id: str,
+    *,
+    parcel_hash: str,
+    candidate_version: str,
+    selected_building_key: str,
+    reviewer: str,
+    rationale: str,
+) -> None:
+    """Resolve only the exact immutable candidate set a reviewer inspected."""
+    rows = db.query(
+        """select review_id, candidate_version, candidate_building_ids_json
+           from building_link_review
+           where source_id = ? and source_record_id = ? and parcel_hash = ?""",
+        [source_id, source_record_id, parcel_hash],
+    )
+    if len(rows) != 1 or rows[0][1] != candidate_version:
+        raise ValueError("building candidate version changed; review again")
+    candidates = set(json.loads(str(rows[0][2])))
+    if selected_building_key not in candidates:
+        raise ValueError("selected building is not in the reviewed candidate set")
+    selected = uuid5(NAMESPACE_URL, selected_building_key)
+    db.connection.execute(
+        """insert into dim_building (building_id, building_key)
+           values (?, ?) on conflict do nothing""",
+        [selected, selected_building_key],
+    )
+    db.connection.execute(
+        """delete from bridge_license_building
+           where source_id = ? and source_record_id = ?""",
+        [source_id, source_record_id],
+    )
+    db.connection.execute(
+        """insert into bridge_license_building
+           (source_id, source_record_id, building_id, parcel_hash)
+           values (?, ?, ?, ?)""",
+        [source_id, source_record_id, selected, parcel_hash],
+    )
+    db.connection.execute(
+        """update building_link_review
+           set review_status = 'resolved', selected_building_id = ?,
+               adjudicated_candidate_version = ?, reviewer = ?, rationale = ?
+           where review_id = ?""",
+        [selected, candidate_version, reviewer, rationale, rows[0][0]],
+    )
 
 
 def _parcel_responses(

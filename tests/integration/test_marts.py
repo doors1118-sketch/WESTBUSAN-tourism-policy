@@ -10,7 +10,7 @@ from westbusan.accommodation.normalize import normalize_license
 from westbusan.analytics.build import build_marts, mart_manifest_is_valid
 from westbusan.config import PolicyConfig
 from westbusan.db import Database
-from westbusan.entity_resolution.match import build_facilities
+from westbusan.entity_resolution.match import build_facilities, record_pair_adjudication
 from westbusan.models import SourceStatus
 
 
@@ -33,6 +33,15 @@ def test_marts_deduplicate_physical_facilities_but_preserve_registrations(
         _license("tourist_pensions", "pension", "미연결 관광펜션", "부산광역시 사하구 산길 9", 4),
     ]
     load_license_snapshot(db, records, run_id)
+    record_pair_adjudication(
+        db,
+        "lodgings:west-l",
+        "tourist_accommodations:west-t",
+        decision="merge",
+        reviewer="test-reviewer",
+        rationale="same physical premises",
+        data_version="2026-08-16",
+    )
     build_facilities(db, run_id)
 
     result = build_marts(db, run_id, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
@@ -94,6 +103,55 @@ def test_build_marts_end_to_end_keeps_tourist_pension_out_of_supply(tmp_path: Pa
     ) == [(True,)]
 
 
+def test_designation_flag_uses_latest_complete_active_snapshot(tmp_path: Path) -> None:
+    """Catches a stale designation bridge surviving a later inactive snapshot."""
+    db = Database(tmp_path / "designation-status.duckdb", Path("sql")); db.migrate()
+    first, second = uuid4(), uuid4()
+    for run_id, started in ((first, "2026-08-16"), (second, "2026-08-17")):
+        db.connection.execute(
+            "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', ?, 'DONE')",
+            [run_id, started],
+        )
+    physical = _license(
+        "rural_homestays", "R1", "농가민박", "부산광역시 기장군 농가로 1", 4
+    )
+    active = _license(
+        "tourist_pensions", "R1", "농가민박", "부산광역시 기장군 농가로 1", 4
+    )
+    load_license_snapshot(db, [physical, active], first)
+    for source in ("rural_homestays", "tourist_pensions"):
+        db.record_source_status(
+            SourceStatus(source, datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, first)
+        )
+    build_facilities(db, first)
+    assert db.query("select count(*) from bridge_facility_designation") == [(1,)]
+
+    inactive = replace(
+        _license(
+            "tourist_pensions", "R1", "농가민박",
+            "부산광역시 기장군 농가로 1", 4, date(2026, 8, 17),
+        ),
+        status_code="02",
+        status_name="폐업",
+    )
+    load_license_snapshot(db, [inactive], second)
+    db.record_source_status(
+        SourceStatus(
+            "tourist_pensions",
+            datetime(2026, 8, 17, tzinfo=UTC),
+            "READY",
+            {},
+            second,
+        )
+    )
+
+    build_marts(db, second, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+
+    assert db.query(
+        "select has_tourist_pension_designation from mart_facility_current"
+    ) == [(False,)]
+
+
 def test_inactive_status_or_closed_status_name_never_enters_active_inventory(
     tmp_path: Path,
 ) -> None:
@@ -143,6 +201,50 @@ def test_record_absent_from_later_complete_snapshot_ceases_current_membership(
     assert db.query("select count(*) from mart_facility_current") == [(0,)]
 
 
+def test_two_successive_full_snapshots_preserve_each_months_membership(
+    tmp_path: Path,
+) -> None:
+    """Catches reconstructing January through February's reduced current bridge."""
+    db = Database(tmp_path / "two-snapshots.duckdb", Path("sql")); db.migrate()
+    january, february = uuid4(), uuid4()
+    for run_id, started in ((january, "2026-01-31"), (february, "2026-02-28")):
+        db.connection.execute(
+            "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', ?, 'DONE')",
+            [run_id, started],
+        )
+    january_rows = [
+        _license("lodgings", "A", "호텔A", "부산광역시 사하구 길 1", 10, date(2026, 1, 31)),
+        _license("lodgings", "B", "호텔B", "부산광역시 사하구 길 2", 20, date(2026, 1, 31)),
+    ]
+    load_license_snapshot(db, january_rows, january)
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 1, 31, tzinfo=UTC), "READY", {}, january)
+    )
+    build_facilities(db, january)
+
+    load_license_snapshot(
+        db,
+        [_license("lodgings", "A", "호텔A", "부산광역시 사하구 길 1", 10, date(2026, 2, 28))],
+        february,
+    )
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 2, 28, tzinfo=UTC), "READY", {}, february)
+    )
+    build_facilities(db, february)
+    build_marts(
+        db,
+        february,
+        PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+    )
+
+    assert db.query(
+        """select period, physical_facility_count, room_sum
+           from mart_region_month
+           where district = '사하구' and period in ('2026-01', '2026-02')
+           order by period"""
+    ) == [("2026-01", 2, 30.0), ("2026-02", 1, 10.0)]
+
+
 def test_stock_before_first_observed_full_snapshot_is_null_not_zero(
     tmp_path: Path,
 ) -> None:
@@ -175,7 +277,17 @@ def test_historical_registrations_count_distinct_source_record_pairs(
         _license("lodgings", "L1", "공동운영호텔", "부산광역시 사하구 길 1", 10, date(2026, 1, 15)),
         _license("lodgings", "L2", "공동운영호텔", "부산광역시 사하구 길 1", 10, date(2026, 1, 15)),
     ]
-    load_license_snapshot(db, records, run); build_facilities(db, run)
+    load_license_snapshot(db, records, run)
+    record_pair_adjudication(
+        db,
+        "lodgings:L1",
+        "lodgings:L2",
+        decision="merge",
+        reviewer="test-reviewer",
+        rationale="same physical premises with two legal records",
+        data_version="2026-01-15",
+    )
+    build_facilities(db, run)
 
     build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
 
@@ -370,7 +482,11 @@ def test_build_marts_excludes_facility_closed_on_its_historical_observation(tmp_
     """A facility closed on the observed date cannot contribute historical supply."""
     db = Database(tmp_path / "closed.duckdb", Path("sql")); db.migrate(); run = uuid4()
     closed = replace(_license("lodgings", "closed", "폐업", "부산광역시 사하구 길 1", 10, date(2026, 1, 15)), closure_date=date(2026, 1, 15))
-    load_license_snapshot(db, [closed], run); build_facilities(db, run)
+    load_license_snapshot(db, [closed], run)
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 1, 15, tzinfo=UTC), "READY", {}, run)
+    )
+    build_facilities(db, run)
     build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
     assert db.query("select physical_facility_count from mart_region_month where district = '사하구' and period = '2026-01'") == [(0,)]
 
