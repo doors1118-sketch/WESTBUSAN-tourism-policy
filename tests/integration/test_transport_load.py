@@ -299,9 +299,12 @@ def test_live_collectors_store_odcloud_and_data_go_pages_before_transport_facts(
     assert '"row_count": 1' in db.query(
         "select detail_json from source_status where source_id = 'busan_metro_odcloud_discovery' order by checked_at desc"
     )[0][0]
-    assert '"publication_date": "2026-07-22"' in db.query(
+    detail = json.loads(db.query(
         "select detail_json from source_status where source_id = 'busan_metro_odcloud_discovery' order by checked_at desc"
-    )[0][0]
+    )[0][0])
+    assert detail["publication_date"] == "2026-07-22"
+    assert detail["registered_at_provenance"] == "data_go_file_detail.registDt"
+    assert detail["modified_at_provenance"] == "data_go_file_detail.updtDt"
     assert db.query(
         "select distinct source_revision from fact_transport_flow where source_id = 'busan_metro_odcloud_discovery'"
     )[0][0].startswith("odcloud:99999999-9999-9999-9999-999999999999:")

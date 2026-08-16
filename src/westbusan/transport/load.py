@@ -277,7 +277,11 @@ def _load_odcloud(
                 "registered_at": revision.registered_at.isoformat()
                 if revision.registered_at
                 else None,
+                "registered_at_provenance": revision.metadata[
+                    "registered_at_provenance"
+                ],
                 "modified_at": revision.modified_at.isoformat() if revision.modified_at else None,
+                "modified_at_provenance": revision.metadata["modified_at_provenance"],
                 "publication_date": revision.published_at.isoformat()
                 if revision.published_at
                 else None,
@@ -306,7 +310,11 @@ def _load_odcloud(
                 "registered_at": revision.registered_at.isoformat()
                 if revision.registered_at
                 else None,
+                "registered_at_provenance": revision.metadata[
+                    "registered_at_provenance"
+                ],
                 "modified_at": revision.modified_at.isoformat() if revision.modified_at else None,
+                "modified_at_provenance": revision.metadata["modified_at_provenance"],
                 "data_as_of": revision.data_as_of.isoformat() if revision.data_as_of else None,
                 "row_count": revision.row_count,
                 "schema_fingerprint": revision.schema_fingerprint,
@@ -337,7 +345,9 @@ def _load_odcloud(
             "registered_at": revision.registered_at.isoformat()
             if revision.registered_at
             else None,
+            "registered_at_provenance": revision.metadata["registered_at_provenance"],
             "modified_at": revision.modified_at.isoformat() if revision.modified_at else None,
+            "modified_at_provenance": revision.metadata["modified_at_provenance"],
             "data_as_of": revision.data_as_of.isoformat() if revision.data_as_of else None,
             "row_count": revision.row_count,
             "schema_fingerprint": revision.schema_fingerprint,
