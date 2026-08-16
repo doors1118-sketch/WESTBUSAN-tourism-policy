@@ -255,6 +255,7 @@ def _source_spec(entry: object) -> SourceSpec:
         portal_detail_url=_optional_string(entry, "portal_detail_url"),
         inspection_required=_boolean(entry, "inspection_required", False),
         immutable_file_hashing=_boolean(entry, "immutable_file_hashing", False),
+        temporal_semantics=_string(entry, "temporal_semantics", "unspecified"),
     )
 
 

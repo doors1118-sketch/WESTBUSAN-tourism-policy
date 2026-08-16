@@ -30,6 +30,16 @@ def test_registry_contains_all_accommodation_sources() -> None:
     assert registry.get("tourist_pensions").additive_facility is False
 
 
+def test_every_accommodation_source_is_scoped_to_busan_current_stock() -> None:
+    """Catches a nationwide current-state API being treated as Busan history."""
+    registry = SourceRegistry.load(Path("config/sources.yaml"))
+
+    for source_id in registry.ids(group="accommodation"):
+        source = registry.get(source_id)
+        assert source.required_parameters == {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+        assert source.temporal_semantics == "current_snapshot_only"
+
+
 def test_registry_configures_odcloud_file_detail_profile() -> None:
     source = SourceRegistry.load(Path("config/sources.yaml")).get(
         "busan_metro_odcloud_discovery"

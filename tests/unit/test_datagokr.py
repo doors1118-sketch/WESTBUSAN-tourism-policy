@@ -16,6 +16,40 @@ from westbusan.sources.datagokr import DataGoKrPager, parse_data_page
 FIXTURES = Path(__file__).parents[1] / "fixtures" / "datagokr"
 
 
+def test_iter_pages_sends_registered_parameters_on_every_page() -> None:
+    """Catches the required jurisdiction filter disappearing after page one."""
+    requests: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(dict(request.url.params))
+        page_no = int(request.url.params["pageNo"])
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"MNG_NO": f"row-{page_no}"}],
+                "totalCount": 2,
+                "pageNo": page_no,
+                "numOfRows": 1,
+            },
+        )
+
+    pager = DataGoKrPager.for_test(httpx.MockTransport(handler), "test-key")
+    spec = SourceSpec(
+        "lodgings",
+        "https://example.test/lodgings",
+        page_size=1,
+        required_parameters={"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"},
+    )
+
+    pages = list(pager.iter_pages(spec, {}))
+
+    assert len(pages) == 2
+    assert [item["cond[OPN_ATMY_GRP_CD::EQ]"] for item in requests] == [
+        "6260000",
+        "6260000",
+    ]
+
+
 def test_parse_standardized_json_page() -> None:
     body = json.dumps(
         {"data": [{"BPLC_NM": "A호텔"}], "totalCount": 1, "pageNo": 1, "numOfRows": 100}

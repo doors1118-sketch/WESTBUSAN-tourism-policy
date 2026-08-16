@@ -11,6 +11,8 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
+    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    temporal_semantics: current_snapshot_only
   - source_id: tourist_accommodations
     url: https://apis.data.go.kr/1741000/tourist_accommodations
     operation: info
@@ -21,6 +23,8 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
+    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    temporal_semantics: current_snapshot_only
   - source_id: foreigner_city_homestays
     url: https://apis.data.go.kr/1741000/foreigner_city_homestays
     operation: info
@@ -31,6 +35,8 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
+    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    temporal_semantics: current_snapshot_only
   - source_id: rural_homestays
     url: https://apis.data.go.kr/1741000/rural_homestays
     operation: info
@@ -41,6 +47,8 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
+    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    temporal_semantics: current_snapshot_only
   - source_id: hanok_experience
     url: https://apis.data.go.kr/1741000/hanok_experience
     operation: info
@@ -51,6 +59,8 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
+    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    temporal_semantics: current_snapshot_only
   - source_id: tourist_pensions
     url: https://apis.data.go.kr/1741000/tourist_pensions
     operation: info
@@ -61,6 +71,8 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
+    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    temporal_semantics: current_snapshot_only
     additive_facility: false
 
   - source_id: building_register_title

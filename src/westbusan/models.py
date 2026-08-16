@@ -43,6 +43,7 @@ class SourceSpec:
     portal_detail_url: str | None = None
     inspection_required: bool = False
     immutable_file_hashing: bool = False
+    temporal_semantics: str = "unspecified"
 
     @property
     def endpoint_url(self) -> str:
