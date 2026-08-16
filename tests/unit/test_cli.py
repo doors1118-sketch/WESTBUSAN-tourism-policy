@@ -34,7 +34,7 @@ def test_summary_exit_codes_distinguish_publish_warning_and_block() -> None:
     assert exit_code_for_summary(_summary(published=False, warnings=0, failed=1)) == 1
 
 
-def test_cli_help_lists_all_six_operational_commands() -> None:
+def test_cli_help_lists_all_operational_commands() -> None:
     """Catches unsupported annotations preventing the CLI from constructing."""
     result = CliRunner().invoke(app, ["--help"])
 
@@ -42,6 +42,7 @@ def test_cli_help_lists_all_six_operational_commands() -> None:
     assert {
         "init-db",
         "probe",
+        "schema-approve",
         "backfill",
         "daily",
         "quality",
