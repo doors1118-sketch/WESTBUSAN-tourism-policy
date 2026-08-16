@@ -126,6 +126,25 @@ def build_facilities(
     """Build physical facilities from latest snapshots, preserving every registration."""
     heartbeat = progress or (lambda: None)
     guard = fence_check or (lambda: None)
+
+    def write(sql: str, parameters: list[object] | None = None) -> None:
+        if fence_check is None:
+            db.connection.execute(sql, parameters or [])
+            return
+        began = False
+        try:
+            db.connection.execute("begin transaction")
+            began = True
+            guard()
+            db.connection.execute(sql, parameters or [])
+            guard()
+            db.connection.execute("commit")
+            began = False
+        except Exception:
+            if began:
+                db.connection.execute("rollback")
+            raise
+
     heartbeat()
     records = _latest_records(db, run_id)
     building_ids = _building_ids(db)
@@ -235,10 +254,10 @@ def build_facilities(
     desired_building_links: set[tuple[UUID, UUID]] = set()
     heartbeat()
     guard()
-    db.connection.execute("delete from run_duplicate_review where run_id = ?", [run_id])
-    db.connection.execute("delete from run_facility_building where run_id = ?", [run_id])
-    db.connection.execute("delete from run_facility_license where run_id = ?", [run_id])
-    db.connection.execute("delete from run_facility where run_id = ?", [run_id])
+    write("delete from run_duplicate_review where run_id = ?", [run_id])
+    write("delete from run_facility_building where run_id = ?", [run_id])
+    write("delete from run_facility_license where run_id = ?", [run_id])
+    write("delete from run_facility where run_id = ?", [run_id])
     for component in {tuple(keys) for keys in components.values()}:
         guard()
         facility_id = _facility_id(component)
@@ -253,7 +272,7 @@ def build_facilities(
             (record["region_group"] for record in component_records if record["region_group"]),
             None,
         )
-        db.connection.execute(
+        write(
             """
             insert into dim_facility (facility_id, canonical_name, district, region_group)
             values (?, ?, ?, ?)
@@ -264,7 +283,7 @@ def build_facilities(
             """,
             [facility_id, canonical, district, region_group],
         )
-        db.connection.execute(
+        write(
             """insert into run_facility (
                    run_id, facility_id, canonical_name, district, region_group
                ) values (?, ?, ?, ?, ?)""",
@@ -281,7 +300,7 @@ def build_facilities(
                 ensure_ascii=False,
                 sort_keys=True,
             )
-            db.connection.execute(
+            write(
                 """
                 insert into bridge_facility_license
                     (facility_id, source_id, source_record_id, evidence_json)
@@ -291,7 +310,7 @@ def build_facilities(
                 """,
                 [facility_id, source_id, source_record_id, evidence],
             )
-            db.connection.execute(
+            write(
                 """insert into run_facility_license (
                        run_id, facility_id, source_id, source_record_id, evidence_json
                    ) values (?, ?, ?, ?, ?)""",
@@ -299,7 +318,7 @@ def build_facilities(
             )
             for building_id in record["building_ids"]:
                 desired_building_links.add((facility_id, building_id))
-                db.connection.execute(
+                write(
                     """
                     insert into bridge_facility_building (facility_id, building_id)
                     values (?, ?)
@@ -307,7 +326,7 @@ def build_facilities(
                     """,
                     [facility_id, building_id],
                 )
-                db.connection.execute(
+                write(
                     """insert into run_facility_building (
                            run_id, facility_id, building_id
                        ) values (?, ?, ?)""",
@@ -319,7 +338,7 @@ def build_facilities(
     ):
         if (facility_id, str(source_id), str(source_record_id)) not in desired_license_links:
             guard()
-            db.connection.execute(
+            write(
                 """
                 delete from bridge_facility_license
                 where facility_id = ? and source_id = ? and source_record_id = ?
@@ -331,20 +350,20 @@ def build_facilities(
     ):
         if (facility_id, building_id) not in desired_building_links:
             guard()
-            db.connection.execute(
+            write(
                 "delete from bridge_facility_building where facility_id = ? and building_id = ?",
                 [facility_id, building_id],
             )
     for (facility_id,) in db.query("select facility_id from dim_facility"):
         if facility_id not in desired_facilities:
             guard()
-            db.connection.execute("delete from dim_facility where facility_id = ?", [facility_id])
+            write("delete from dim_facility where facility_id = ?", [facility_id])
 
     guard()
-    db.connection.execute("delete from duplicate_review where review_status = 'pending'")
+    write("delete from duplicate_review where review_status = 'pending'")
     for review_id, (left_id, right_id, evidence) in review_rows.items():
         guard()
-        db.connection.execute(
+        write(
             """
             insert into duplicate_review
                 (review_id, left_facility_id, right_facility_id, evidence_json)
@@ -356,7 +375,7 @@ def build_facilities(
             """,
             [review_id, left_id, right_id, evidence],
         )
-        db.connection.execute(
+        write(
             """insert into run_duplicate_review (
                    run_id, review_id, left_facility_id, right_facility_id,
                    evidence_json
