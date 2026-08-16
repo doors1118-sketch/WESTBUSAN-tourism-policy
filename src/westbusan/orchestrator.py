@@ -300,37 +300,46 @@ class Pipeline:
         warnings = sum(check.status == "warning" for check in report.checks)
         if not failed:
             build_marts(self.db, run.run_id, self.settings.policy)
-        publication = publish_if_valid(self.db, run.run_id, report)
-        status = (
-            "PUBLISHED_WITH_WARNINGS"
-            if publication.published and warnings
-            else "PUBLISHED"
-            if publication.published
-            else "BLOCKED"
-        )
         finished = datetime.now(UTC)
-        self.db.connection.execute(
-            """update pipeline_run set status = ?, finished_at = ?
-               where run_id = ? and status = 'RUNNING'""",
-            [status, finished, run.run_id],
+        raw_artifacts = int(
+            self.db.scalar(
+                "select count(*) from raw_artifact where run_id = ?", [run.run_id]
+            )
         )
-        summary = RunSummary(
+        published_summary = RunSummary(
             run.run_id,
             run.mode,
-            status,
-            publication.published,
-            int(
-                self.db.scalar(
-                    "select count(*) from raw_artifact where run_id = ?", [run.run_id]
-                )
-            ),
+            "PUBLISHED_WITH_WARNINGS" if warnings else "PUBLISHED",
+            True,
+            raw_artifacts,
             total_rows,
             warnings,
             failed,
             run.started_at,
             finished,
         )
-        self._persist_summary(summary)
+        publication = publish_if_valid(
+            self.db,
+            run.run_id,
+            report,
+            finalize=lambda: self._write_terminal_summary(published_summary),
+        )
+        if publication.published:
+            summary = published_summary
+        else:
+            summary = RunSummary(
+                run.run_id,
+                run.mode,
+                "BLOCKED",
+                False,
+                raw_artifacts,
+                total_rows,
+                warnings,
+                failed,
+                run.started_at,
+                finished,
+            )
+            self._commit_terminal_summary(summary)
         logger.write("run_complete", **summary.as_dict())
         return summary
 
@@ -354,13 +363,19 @@ class Pipeline:
             )
         )
         rows = self.db.query(
-            """select run_id, status, attempt
+            """select run_id, status, attempt, started_at::varchar
                from pipeline_run where logical_run_key = ?
                order by attempt desc limit 1""",
             [logical_key],
         )
         if rows:
-            prior_run_id, prior_status, prior_attempt = rows[0]
+            prior_run_id, prior_status, prior_attempt, prior_started_at = rows[0]
+            if current_published_run(self.db) == prior_run_id:
+                return None, self._recover_current_publication(
+                    prior_run_id,
+                    mode,
+                    datetime.fromisoformat(str(prior_started_at)),
+                )
             if str(prior_status) in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}:
                 return None, self._load_summary(prior_run_id)
             if str(prior_status) == "RUNNING":
@@ -399,7 +414,10 @@ class Pipeline:
     def _persist_summary(self, summary: RunSummary) -> None:
         self.db.connection.execute(
             """
-            insert into pipeline_run_summary values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            insert into pipeline_run_summary (
+                run_id, mode, status, published, raw_artifacts, row_count,
+                warning_count, failed_required_checks, started_at, finished_at
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (run_id) do nothing
             """,
             [
@@ -415,6 +433,97 @@ class Pipeline:
                 summary.finished_at,
             ],
         )
+
+    def _write_terminal_summary(
+        self, summary: RunSummary, *, recovery: bool = False
+    ) -> None:
+        rows = self.db.query(
+            "select status from pipeline_run where run_id = ?", [summary.run_id]
+        )
+        if len(rows) != 1:
+            raise RuntimeError(f"pipeline run {summary.run_id} is missing")
+        current_status = str(rows[0][0])
+        if current_status == "RUNNING":
+            self.db.connection.execute(
+                """update pipeline_run set status = ?, finished_at = ?
+                   where run_id = ? and status = 'RUNNING'""",
+                [summary.status, summary.finished_at, summary.run_id],
+            )
+        elif not recovery or current_status != summary.status:
+            raise RuntimeError(
+                f"pipeline run {summary.run_id} cannot finalize from {current_status}"
+            )
+        self._persist_summary(summary)
+
+    def _commit_terminal_summary(
+        self, summary: RunSummary, *, recovery: bool = False
+    ) -> None:
+        began = False
+        try:
+            self.db.connection.execute("begin transaction")
+            began = True
+            self._write_terminal_summary(summary, recovery=recovery)
+            self.db.connection.execute("commit")
+            began = False
+        except Exception:
+            if began:
+                self.db.connection.execute("rollback")
+            raise
+
+    def _recover_current_publication(
+        self, run_id: UUID, mode: str, started_at: datetime
+    ) -> RunSummary:
+        rows = self.db.query(
+            """select mode, status, published, raw_artifacts, row_count,
+                      warning_count, failed_required_checks,
+                      started_at::varchar, finished_at::varchar
+               from pipeline_run_summary where run_id = ?""",
+            [run_id],
+        )
+        if rows:
+            values = [run_id, *rows[0]]
+            values[-2] = datetime.fromisoformat(str(values[-2]))
+            values[-1] = datetime.fromisoformat(str(values[-1]))
+            summary = RunSummary(*values)
+        else:
+            warnings = int(
+                self.db.scalar(
+                    """select count(*) from fact_data_quality
+                       where run_id = ? and status = 'warning'""",
+                    [run_id],
+                )
+            )
+            failed = int(
+                self.db.scalar(
+                    """select count(*) from fact_data_quality
+                       where run_id = ? and status = 'failed'
+                         and severity = 'required'""",
+                    [run_id],
+                )
+            )
+            published_at = self.db.scalar(
+                """select published_at::varchar from publication_state
+                   where publication_key = 'current' and published_run_id = ?""",
+                [run_id],
+            )
+            summary = RunSummary(
+                run_id,
+                mode,
+                "PUBLISHED_WITH_WARNINGS" if warnings else "PUBLISHED",
+                True,
+                int(
+                    self.db.scalar(
+                        "select count(*) from raw_artifact where run_id = ?", [run_id]
+                    )
+                ),
+                0,
+                warnings,
+                failed,
+                started_at,
+                datetime.fromisoformat(str(published_at)),
+            )
+        self._commit_terminal_summary(summary, recovery=True)
+        return summary
 
     def _load_summary(self, run_id: UUID) -> RunSummary:
         rows = self.db.query(

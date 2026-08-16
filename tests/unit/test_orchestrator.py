@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 import westbusan.orchestrator as orchestrator_module
 from westbusan.models import SourceSpec, SourceStatus
 from westbusan.orchestrator import (
@@ -207,9 +209,9 @@ def test_republishing_current_run_cannot_append_to_its_duplicate_snapshot(
     real_publish = orchestrator_module.publish_if_valid
     captured_reports = []
 
-    def capture_report(db, run_id, report):
+    def capture_report(db, run_id, report, **kwargs):
         captured_reports.append(report)
-        return real_publish(db, run_id, report)
+        return real_publish(db, run_id, report, **kwargs)
 
     monkeypatch.setattr(orchestrator_module, "publish_if_valid", capture_report)
     published = pipeline.daily(date(2026, 8, 16))
@@ -227,6 +229,115 @@ def test_republishing_current_run_cannot_append_to_its_duplicate_snapshot(
            where run_id = ? and review_id = ?""",
         [published.run_id, bogus_review],
     ) == 0
+
+
+def test_publication_and_terminal_summary_roll_back_together_on_summary_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches a committed pointer whose pipeline status or summary is incomplete."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    persist_summary = pipeline._persist_summary
+
+    def fail_summary(summary):
+        raise RuntimeError("injected summary failure")
+
+    monkeypatch.setattr(pipeline, "_persist_summary", fail_summary)
+
+    with pytest.raises(RuntimeError, match="injected summary failure"):
+        pipeline.daily(date(2026, 8, 16))
+
+    run_id = pipeline.db.scalar("select run_id from pipeline_run")
+    assert pipeline.db.scalar(
+        "select count(*) from publication_state where is_current"
+    ) == 0
+    assert pipeline.db.scalar(
+        "select count(*) from publication_duplicate_review_snapshot"
+    ) == 0
+    assert pipeline.db.scalar(
+        "select status from pipeline_run where run_id = ?", [run_id]
+    ) == "RUNNING"
+    assert pipeline.db.scalar(
+        "select count(*) from pipeline_run_summary where run_id = ?", [run_id]
+    ) == 0
+
+    monkeypatch.setattr(pipeline, "_persist_summary", persist_summary)
+    retried = pipeline.daily(date(2026, 8, 16))
+
+    assert retried.run_id == run_id
+    assert retried.published is True
+    assert pipeline.db.scalar(
+        "select published_run_id from publication_state where is_current"
+    ) == run_id
+
+
+def test_blocked_status_and_summary_roll_back_together_on_summary_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches a blocked terminal status committed without its immutable summary."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    persist_summary = pipeline._persist_summary
+    monkeypatch.setattr(
+        pipeline,
+        "_persist_summary",
+        lambda summary: (_ for _ in ()).throw(RuntimeError("blocked summary failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="blocked summary failure"):
+        pipeline.backfill(
+            date(2026, 8, 16),
+            date(2026, 8, 16),
+            source_ids=["lodgings"],
+        )
+
+    run_id = pipeline.db.scalar("select run_id from pipeline_run")
+    assert pipeline.db.scalar(
+        "select status from pipeline_run where run_id = ?", [run_id]
+    ) == "RUNNING"
+    assert pipeline.db.scalar(
+        "select count(*) from pipeline_run_summary where run_id = ?", [run_id]
+    ) == 0
+
+    monkeypatch.setattr(pipeline, "_persist_summary", persist_summary)
+    retried = pipeline.backfill(
+        date(2026, 8, 16), date(2026, 8, 16), source_ids=["lodgings"]
+    )
+
+    assert retried.run_id == run_id
+    assert retried.status == "BLOCKED"
+    assert pipeline.db.scalar(
+        "select count(*) from pipeline_run_summary where run_id = ?", [run_id]
+    ) == 1
+
+
+def test_current_pointer_with_running_status_is_recovered_without_resuming(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches a legacy published RUNNING row being reopened and recollected."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    published = pipeline.daily(date(2026, 8, 16))
+    pipeline.db.connection.execute(
+        "delete from pipeline_run_summary where run_id = ?", [published.run_id]
+    )
+    pipeline.db.connection.execute(
+        "update pipeline_run set status = 'RUNNING', finished_at = null where run_id = ?",
+        [published.run_id],
+    )
+
+    def fail_if_collected(*args, **kwargs):
+        raise AssertionError("a published RUNNING row was resumed")
+
+    monkeypatch.setattr(pipeline, "_collect_fixture_source", fail_if_collected)
+
+    recovered = pipeline.daily(date(2026, 8, 16))
+
+    assert recovered.run_id == published.run_id
+    assert recovered.published is True
+    assert pipeline.db.scalar(
+        "select status from pipeline_run where run_id = ?", [published.run_id]
+    ) in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}
+    assert pipeline.db.scalar(
+        "select count(*) from pipeline_run_summary where run_id = ?", [published.run_id]
+    ) == 1
 
 
 def test_family_loader_failures_finalize_a_run_scoped_blocked_summary(

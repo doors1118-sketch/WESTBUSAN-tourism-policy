@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -28,7 +29,13 @@ def can_publish(report: QualityReport) -> bool:
     return not report.has_failed_required_check
 
 
-def publish_if_valid(db: Database, run_id: UUID, report: QualityReport) -> PublishResult:
+def publish_if_valid(
+    db: Database,
+    run_id: UUID,
+    report: QualityReport,
+    *,
+    finalize: Callable[[], None] | None = None,
+) -> PublishResult:
     """Advance only for this exact, complete, untampered quality suite."""
     if not can_publish(report) or not persisted_report_is_valid(db, run_id, report):
         return PublishResult(False, run_id, current_published_run(db), "invalid_quality_suite")
@@ -45,18 +52,20 @@ def publish_if_valid(db: Database, run_id: UUID, report: QualityReport) -> Publi
                 return PublishResult(False, run_id, current_published_run(db), "invalid_quality_suite")
             current = current_published_run(db)
             if current == run_id:
+                if finalize is not None:
+                    finalize()
                 db.connection.execute("commit")
                 began = False
                 return PublishResult(True, run_id, run_id)
             _snapshot_duplicate_review(db, run_id)
             _write_current_pointer(db, run_id)
+            if finalize is not None:
+                finalize()
             db.connection.execute("commit")
             began = False
             return PublishResult(True, run_id, run_id)
         except duckdb.Error as error:
             _rollback_if_started(db, began)
-            if current_published_run(db) == run_id:
-                return PublishResult(True, run_id, run_id)
             if attempt < 2 and _is_transaction_conflict(error):
                 continue
             raise
