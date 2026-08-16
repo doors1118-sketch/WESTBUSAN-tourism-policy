@@ -34,6 +34,7 @@ class SourceSpec:
     format_value: str = "json"
     operation: str | None = None
     group: str = ""
+    required_for_publication: bool = False
     cadence: str = "daily"
     additive_facility: bool = True
     source_type: str = "api"

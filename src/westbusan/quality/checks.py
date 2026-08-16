@@ -26,6 +26,7 @@ Severity = Literal["required", "warning", "informational"]
 _ACCOMMODATION_SOURCES = frozenset({"lodgings", "tourist_accommodations", "foreigner_city_homestays", "rural_homestays", "hanok_experience", "tourist_pensions"})
 _MONTHLY_SOURCES = frozenset({"building_register_title", "building_register_basis_outline", "building_permit_basis_outline", "building_permit_site", "closed_register_basis_outline", "tourism_data_lab", "area_tourism_demand", "area_tourism_consumption", "tourism_concentration_rate", "area_tourism_destination_division", "related_tourism_destinations"})
 _TOURISM_SOURCES = frozenset({"tourism_data_lab", "area_tourism_demand", "area_tourism_consumption", "tourism_concentration_rate", "area_tourism_destination_division", "related_tourism_destinations"})
+_BUILDING_SOURCES = frozenset({"building_register_title", "building_register_basis_outline", "building_permit_basis_outline", "building_permit_site", "closed_register_basis_outline"})
 _UNAVAILABLE = frozenset({"AUTH_FAILED", "QUOTA_EXCEEDED", "SPEC_UNRESOLVED", "HTTP_FAILED", "SCHEMA_CHANGED"})
 _IDENTIFIER_FIELDS = frozenset({"MNG_NO", "MGT_NO", "management_number", "source_record_id", "id"})
 _TOURISM_OPERATION_PREFIXES = {
@@ -64,6 +65,7 @@ class QualityReport:
     run_id: UUID | None = None
     report_hash: str | None = None
     expected_check_ids: tuple[str, ...] = ()
+    expected_contract_ids: tuple[str, ...] = ()
     complete: bool = False
 
     @property
@@ -76,6 +78,7 @@ class _ArtifactPage:
     source_id: str
     operation: str
     partition: str | None
+    source_date: date | None
     page_no: int | None
     page_size: int | None
     total_count: int | None
@@ -92,7 +95,12 @@ def run_quality_suite(db: Database, run_id: UUID) -> QualityReport:
     """
     statuses = _run_statuses(db, run_id)
     artifacts = _run_artifacts(db, run_id)
-    source_ids = sorted(set(statuses) | set(artifacts))
+    contracts = _source_contracts(db)
+    source_ids = sorted(
+        set(statuses)
+        | set(artifacts)
+        | {source_id for source_id, required in contracts.items() if required}
+    )
     checks: list[CheckResult] = []
     if not source_ids:
         checks.append(CheckResult("run_inputs_present", "failed", 0, ">0 run-scoped source status or raw artifact", "required", table_name="raw_artifact", evidence={"run_id": str(run_id)}))
@@ -101,7 +109,9 @@ def run_quality_suite(db: Database, run_id: UUID) -> QualityReport:
     for source_id in source_ids:
         source_statuses = statuses.get(source_id, [])
         source_artifacts = artifacts.get(source_id, [])
-        required = _required_contract(source_id, source_statuses, bool(source_artifacts))
+        required = _required_contract(
+            source_id, source_statuses, bool(source_artifacts), contracts.get(source_id)
+        )
         checks.append(_readiness_check(source_id, source_statuses, required))
         pages = _parse_artifacts(source_id, source_artifacts)
         parsed[source_id] = pages
@@ -122,7 +132,33 @@ def run_quality_suite(db: Database, run_id: UUID) -> QualityReport:
     checks.extend(_monthly_freshness_checks(parsed))
 
     report = QualityReport([_redacted_check(check) for check in checks], run_id=run_id)
-    return _persist_suite(db, report)
+    return _persist_suite(db, report, _contract_check_ids(contracts))
+
+
+def approve_schema_baseline(
+    db: Database,
+    source_id: str,
+    operation: str,
+    schema_fingerprint: str,
+    *,
+    partition: str | None = None,
+    approval_method: str = "inspection",
+) -> None:
+    """Record an explicit contract approval; collection evidence never self-approves."""
+    if not source_id or not operation or not schema_fingerprint:
+        raise ValueError("schema approval requires source_id, operation, and fingerprint")
+    db.connection.execute(
+        """
+        insert into quality_schema_baseline (
+            source_id, operation, partition_key, approved_schema_fingerprint, approval_method
+        ) values (?, ?, ?, ?, ?)
+        on conflict (source_id, operation, partition_key) do update set
+            approved_schema_fingerprint = excluded.approved_schema_fingerprint,
+            approval_method = excluded.approval_method,
+            approved_at = now()
+        """,
+        [source_id, operation, partition or "*", schema_fingerprint, approval_method],
+    )
 
 
 def _run_statuses(db: Database, run_id: UUID) -> dict[str, list[tuple[str, dict[str, object]]]]:
@@ -139,13 +175,32 @@ def _run_artifacts(db: Database, run_id: UUID) -> dict[str, list[tuple[str, date
     return result
 
 
-def _required_contract(source_id: str, statuses: list[tuple[str, dict[str, object]]], has_artifacts: bool) -> bool:
-    if has_artifacts or source_id in _ACCOMMODATION_SOURCES:
+def _source_contracts(db: Database) -> dict[str, bool]:
+    return {
+        str(source_id): bool(required)
+        for source_id, required in db.query(
+            "select source_id, required_for_publication from quality_source_contract"
+        )
+    }
+
+
+def _required_contract(
+    source_id: str,
+    statuses: list[tuple[str, dict[str, object]]],
+    has_artifacts: bool,
+    configured: bool | None,
+) -> bool:
+    if configured is not None:
+        return configured
+    if has_artifacts:
         return True
     if not statuses:
         return False
     detail = statuses[-1][1]
-    return not (detail.get("optional") is True or detail.get("required") is False)
+    contract = detail.get("readiness_contract", detail.get("required"))
+    if isinstance(contract, dict):
+        contract = contract.get("required_for_publication", contract.get("required"))
+    return contract is True
 
 
 def _readiness_check(source_id: str, statuses: list[tuple[str, dict[str, object]]], required: bool) -> CheckResult:
@@ -161,13 +216,17 @@ def _parse_artifacts(source_id: str, artifacts: list[tuple[str, date | None, dic
     pages: list[_ArtifactPage] = []
     for path_text, source_date, metadata in artifacts:
         operation = str(metadata.get("operation") or "unknown")
-        partition = _partition(source_date) or _metadata_partition(metadata)
+        partition = (
+            _metadata_partition(metadata) or _partition(source_date)
+            if source_id in _BUILDING_SOURCES
+            else _partition(source_date) or _metadata_partition(metadata)
+        )
         try:
             page = parse_data_page(Path(path_text).read_bytes(), "application/json")
         except (OSError, ValueError, TypeError) as error:
-            pages.append(_ArtifactPage(source_id, operation, partition, None, None, None, None, None, str(error)))
+            pages.append(_ArtifactPage(source_id, operation, partition, source_date, None, None, None, None, None, str(error)))
         else:
-            pages.append(_ArtifactPage(source_id, operation, partition, page.page_no, page.page_size, page.total_count, page.schema_fingerprint, page.rows, None))
+            pages.append(_ArtifactPage(source_id, operation, partition, source_date, page.page_no, page.page_size, page.total_count, page.schema_fingerprint, page.rows, None))
     return pages
 
 
@@ -182,17 +241,61 @@ def _raw_contract_checks(db: Database, run_id: UUID, source_id: str, pages: list
     malformed = [page for page in pages if page.error or page.rows is None]
     missing_ids = sum(1 for page in pages if page.rows is not None and source_id in _ACCOMMODATION_SOURCES for row in page.rows if not _has_identifier(row))
     structure = CheckResult("required_record_structure", "passed" if not malformed and not missing_ids else "failed", {"malformed_pages": len(malformed), "missing_identifier_rows": missing_ids}, {"malformed_pages": 0, "missing_identifier_rows": 0}, severity, source_id, "raw_artifact", {"malformed_page_errors": sorted(page.error for page in malformed if page.error)})
-    checks = [structure, _schema_check(source_id, pages, statuses, severity), _reconciliation_check(db, run_id, source_id, pages, severity)]
+    checks = [structure, _schema_check(db, source_id, pages, statuses, severity), _reconciliation_check(db, run_id, source_id, pages, severity)]
     if source_id in _TOURISM_SOURCES:
         checks.append(_date_parse_check(db, run_id, source_id, pages, severity))
     return checks
 
 
-def _schema_check(source_id: str, pages: list[_ArtifactPage], statuses: list[tuple[str, dict[str, object]]], severity: Severity) -> CheckResult:
-    observed = sorted({page.schema_fingerprint for page in pages if page.schema_fingerprint})
-    approved = sorted({str(detail["schema_fingerprint"]) for _, detail in statuses if isinstance(detail.get("schema_fingerprint"), str)})
-    passed = bool(observed and approved and set(observed).issubset(approved))
-    return CheckResult("schema_fingerprint_approved", "passed" if passed else "failed", observed or "MISSING_SCHEMA_FINGERPRINT", approved or "run-scoped approved source_status fingerprint", severity, source_id, "raw_artifact", {"observed_fingerprints": observed, "approved_fingerprints": approved})
+def _schema_check(db: Database, source_id: str, pages: list[_ArtifactPage], statuses: list[tuple[str, dict[str, object]]], severity: Severity) -> CheckResult:
+    changed_in_run = any(status == "SCHEMA_CHANGED" for status, _ in statuses)
+    by_contract: dict[tuple[str, str | None], set[str]] = defaultdict(set)
+    for page in pages:
+        if page.schema_fingerprint:
+            by_contract[(page.operation, page.partition)].add(page.schema_fingerprint)
+    outcomes: list[dict[str, object]] = []
+    for (operation, partition), observed in sorted(
+        by_contract.items(), key=lambda item: (item[0][0], item[0][1] or "")
+    ):
+        baseline = _schema_baseline(db, source_id, operation, partition)
+        outcomes.append(
+            {
+                "operation": operation,
+                "partition": partition,
+                "observed": sorted(observed),
+                "approved_baseline": baseline,
+            }
+        )
+    passed = bool(outcomes) and not changed_in_run and all(
+        item["approved_baseline"] is not None
+        and item["observed"] == [item["approved_baseline"]]
+        for item in outcomes
+    )
+    return CheckResult(
+        "schema_fingerprint_approved",
+        "passed" if passed else "failed",
+        outcomes or "MISSING_SCHEMA_FINGERPRINT",
+        "explicitly approved schema baseline per source operation/partition",
+        severity,
+        source_id,
+        "quality_schema_baseline",
+        {"schema_changed_in_run": changed_in_run, "operations": outcomes},
+    )
+
+
+def _schema_baseline(
+    db: Database, source_id: str, operation: str, partition: str | None
+) -> str | None:
+    rows = db.query(
+        """
+        select approved_schema_fingerprint from quality_schema_baseline
+        where source_id = ? and operation = ? and partition_key in (?, '*')
+        order by case when partition_key = ? then 0 else 1 end
+        limit 1
+        """,
+        [source_id, operation, partition or "*", partition or "*"],
+    )
+    return str(rows[0][0]) if rows else None
 
 
 def _reconciliation_check(db: Database, run_id: UUID, source_id: str, pages: list[_ArtifactPage], severity: Severity) -> CheckResult:
@@ -221,9 +324,31 @@ def _target_count(db: Database, run_id: UUID, source_id: str, operation: str, pa
         return int(db.query("select count(*) from staging_license_snapshot where source_id = ? and last_loaded_run_id = ? and observed_on = ?", [source_id, run_id, partition])[0][0])
     if source_id in _TOURISM_SOURCES:
         prefix = _TOURISM_OPERATION_PREFIXES.get(operation)
-        if prefix is None:
+        period_prefix = partition[:7] if partition else None
+        if prefix is None or period_prefix is None:
             return None
-        return int(db.query("select count(*) from fact_tourism_demand where source_id = ? and loaded_run_id = ? and metric_code like ?", [source_id, run_id, f"{prefix}%"])[0][0])
+        return int(
+            db.query(
+                """
+                select count(*) from fact_tourism_demand
+                where source_id = ? and loaded_run_id = ? and metric_code like ?
+                  and period like ?
+                """,
+                [source_id, run_id, f"{prefix}%", f"{period_prefix}%"],
+            )[0][0]
+        )
+    if source_id in _BUILDING_SOURCES:
+        if partition is None:
+            return None
+        return int(
+            db.query(
+                """
+                select coalesce(sum(row_count), 0) from staging_building_response
+                where run_id = ? and source_id = ? and operation = ? and parcel_hash = ?
+                """,
+                [run_id, source_id, operation, partition],
+            )[0][0]
+        )
     return None
 
 
@@ -304,7 +429,7 @@ def _monthly_freshness_checks(parsed: dict[str, list[_ArtifactPage]]) -> list[Ch
     for source_id, pages in sorted(parsed.items()):
         if source_id not in _MONTHLY_SOURCES:
             continue
-        dates = [date.fromisoformat(page.partition) for page in pages if page.partition]
+        dates = [page.source_date for page in pages if page.source_date is not None]
         if not dates:
             checks.append(CheckResult("monthly_source_freshness", "warning", "MISSING_SOURCE_DATE", "source_date no more than 75 days old", "warning", source_id, "raw_artifact", {}))
             continue
@@ -314,11 +439,44 @@ def _monthly_freshness_checks(parsed: dict[str, list[_ArtifactPage]]) -> list[Ch
     return checks
 
 
-def _persist_suite(db: Database, report: QualityReport) -> QualityReport:
+def _contract_check_ids(contracts: dict[str, bool]) -> tuple[str, ...]:
+    names = (
+        "source_readiness",
+        "required_record_structure",
+        "schema_fingerprint_approved",
+        "raw_total_matches_staging",
+    )
+    return tuple(
+        f"{source_id}:{name}"
+        for source_id, required in sorted(contracts.items())
+        if required
+        for name in names
+    )
+
+
+def _persist_suite(
+    db: Database, report: QualityReport, contract_ids: tuple[str, ...]
+) -> QualityReport:
     assert report.run_id is not None
     expected_ids = tuple(str(uuid5(NAMESPACE_URL, f"quality:{report.run_id}:{index}:{_canonical_json(_payload(check))}")) for index, check in enumerate(report.checks))
     report_hash = _hash_checks(report.checks)
-    completed = replace(report, report_hash=report_hash, expected_check_ids=expected_ids, complete=True)
+    actual_contract_ids = tuple(
+        sorted(
+            f"{check.source_id}:{check.name}"
+            for check in report.checks
+            if check.source_id is not None
+            and f"{check.source_id}:{check.name}" in contract_ids
+        )
+    )
+    if actual_contract_ids != tuple(sorted(contract_ids)):
+        raise ValueError("quality suite omitted a canonical required source check")
+    completed = replace(
+        report,
+        report_hash=report_hash,
+        expected_check_ids=expected_ids,
+        expected_contract_ids=tuple(sorted(contract_ids)),
+        complete=True,
+    )
     began = False
     try:
         db.connection.execute("begin transaction")
@@ -327,7 +485,20 @@ def _persist_suite(db: Database, report: QualityReport) -> QualityReport:
         db.connection.execute("delete from quality_suite_manifest where run_id = ?", [report.run_id])
         for check_id, check in zip(expected_ids, report.checks, strict=True):
             db.connection.execute("""insert into fact_data_quality (check_id, run_id, check_name, status, actual_json, expected_json, severity, source_id, table_name, evidence_json) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", [UUID(check_id), report.run_id, check.name, check.status, _canonical_json(check.actual), _canonical_json(check.expected), check.severity, check.source_id, check.table_name, _canonical_json(check.evidence)])
-        db.connection.execute("insert into quality_suite_manifest (run_id, report_hash, expected_checks_json, check_count) values (?, ?, ?, ?)", [report.run_id, report_hash, _canonical_json(sorted(expected_ids)), len(expected_ids)])
+        db.connection.execute(
+            """
+            insert into quality_suite_manifest (
+                run_id, report_hash, expected_checks_json, contract_checks_json, check_count
+            ) values (?, ?, ?, ?, ?)
+            """,
+            [
+                report.run_id,
+                report_hash,
+                _canonical_json(sorted(expected_ids)),
+                _canonical_json(sorted(contract_ids)),
+                len(expected_ids),
+            ],
+        )
         db.connection.execute("commit")
         began = False
     except Exception:
@@ -338,24 +509,38 @@ def _persist_suite(db: Database, report: QualityReport) -> QualityReport:
 
 def persisted_report_is_valid(db: Database, run_id: UUID, report: QualityReport) -> bool:
     """Verify a supplied report against the immutable completed suite manifest."""
-    if not report.complete or report.run_id != run_id or not report.report_hash or not report.expected_check_ids or not report.checks:
+    if not report.complete or report.run_id != run_id or not report.report_hash or not report.expected_check_ids or not report.expected_contract_ids or not report.checks:
         return False
     if _hash_checks(report.checks) != report.report_hash:
         return False
-    manifest = db.query("select report_hash, expected_checks_json, check_count from quality_suite_manifest where run_id = ?", [run_id])
+    manifest = db.query("select report_hash, expected_checks_json, contract_checks_json, check_count from quality_suite_manifest where run_id = ?", [run_id])
     if len(manifest) != 1:
         return False
-    manifest_hash, expected_json, check_count = manifest[0]
+    manifest_hash, expected_json, contract_json, check_count = manifest[0]
     try:
         expected = tuple(json.loads(expected_json))
+        contracts = tuple(json.loads(contract_json))
     except (TypeError, ValueError, json.JSONDecodeError):
         return False
-    if report.report_hash != manifest_hash or tuple(sorted(report.expected_check_ids)) != expected or len(expected) != check_count:
+    canonical_contracts = _contract_check_ids(_source_contracts(db))
+    if report.report_hash != manifest_hash or tuple(sorted(report.expected_check_ids)) != expected or tuple(sorted(report.expected_contract_ids)) != contracts or len(expected) != check_count:
+        return False
+    if contracts != tuple(sorted(canonical_contracts)):
         return False
     rows = db.query("select check_id, check_name, status, actual_json, expected_json, severity, source_id, table_name, evidence_json from fact_data_quality where run_id = ? order by check_id", [run_id])
     if len(rows) != check_count or tuple(sorted(str(row[0]) for row in rows)) != expected:
         return False
     checks = [CheckResult(str(name), str(status), _json_value(actual), _json_value(expected_value), str(severity), str(source) if source is not None else None, str(table) if table is not None else None, _json_object(evidence)) for _, name, status, actual, expected_value, severity, source, table, evidence in rows]
+    actual_contracts = tuple(
+        sorted(
+            f"{check.source_id}:{check.name}"
+            for check in checks
+            if check.source_id is not None
+            and f"{check.source_id}:{check.name}" in contracts
+        )
+    )
+    if actual_contracts != contracts:
+        return False
     return _hash_checks(checks) == manifest_hash == report.report_hash
 
 
@@ -413,6 +598,8 @@ def _partition(source_date: date | None) -> str | None:
 
 
 def _metadata_partition(metadata: dict[str, object]) -> str | None:
+    if metadata.get("quality_partition") not in (None, ""):
+        return str(metadata["quality_partition"])
     parameters = metadata.get("parameters")
     if not isinstance(parameters, dict):
         return None
@@ -434,6 +621,8 @@ def _target_table(source_id: str) -> str:
         return "staging_license_snapshot"
     if source_id in _TOURISM_SOURCES:
         return "fact_tourism_demand"
+    if source_id in _BUILDING_SOURCES:
+        return "staging_building_response"
     return "unmapped_run_scoped_target"
 
 

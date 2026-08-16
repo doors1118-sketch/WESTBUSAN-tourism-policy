@@ -246,6 +246,7 @@ def _source_spec(entry: object) -> SourceSpec:
         format_value=_string(entry, "format_value", "json"),
         operation=_optional_string(entry, "operation"),
         group=_string(entry, "group", ""),
+        required_for_publication=_boolean(entry, "required_for_publication", False),
         cadence=_string(entry, "cadence", "daily"),
         additive_facility=_boolean(entry, "additive_facility", True),
         source_type=_string(entry, "source_type", "api"),

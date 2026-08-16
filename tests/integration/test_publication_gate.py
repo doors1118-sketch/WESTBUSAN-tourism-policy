@@ -6,7 +6,11 @@ from uuid import uuid4
 
 from westbusan.db import Database
 from westbusan.models import SourceStatus
-from westbusan.quality.checks import QualityReport, run_quality_suite
+from westbusan.quality.checks import (
+    QualityReport,
+    approve_schema_baseline,
+    run_quality_suite,
+)
 from westbusan.quality.publish import current_published_run, publish_if_valid
 from westbusan.sources.datagokr import parse_data_page
 
@@ -42,29 +46,47 @@ def test_publication_is_idempotent_for_a_verified_valid_run(tmp_path: Path) -> N
 
 
 def _valid_report(db: Database, tmp_path: Path, run_id) -> QualityReport:
-    body = json.dumps(
-        {"data": [{"MNG_NO": "L1"}], "totalCount": 1, "pageNo": 1, "numOfRows": 1}
-    ).encode()
-    page = parse_data_page(body, "application/json")
-    path = tmp_path / f"{run_id}.json"
-    path.write_bytes(body)
-    db.connection.execute(
-        """
-        insert into raw_artifact (
-            artifact_id, run_id, source_id, ingest_date, request_json, request_hash,
-            content_hash, path, created_at, source_date
-        ) values (?, ?, 'lodgings', ?, '{}', 'request', ?, ?, ?, ?)
-        """,
-        [
-            uuid4(),
-            run_id,
-            date(2026, 8, 16),
-            hashlib.sha256(body).hexdigest(),
-            str(path),
-            datetime(2026, 8, 16, tzinfo=UTC),
-            date(2026, 8, 16),
-        ],
-    )
+    for source_id in _CORE_ACCOMMODATION_SOURCES:
+        body = json.dumps(
+            {
+                "data": [{"MNG_NO": "L1"}] if source_id == "lodgings" else [],
+                "totalCount": 1 if source_id == "lodgings" else 0,
+                "pageNo": 1,
+                "numOfRows": 1,
+            }
+        ).encode()
+        page = parse_data_page(body, "application/json")
+        path = tmp_path / f"{run_id}-{source_id}.json"
+        path.write_bytes(body)
+        db.connection.execute(
+            """
+            insert into raw_artifact (
+                artifact_id, run_id, source_id, ingest_date, request_json, request_hash,
+                content_hash, path, created_at, source_date
+            ) values (?, ?, ?, ?, ?, 'request', ?, ?, ?, ?)
+            """,
+            [
+                uuid4(),
+                run_id,
+                source_id,
+                date(2026, 8, 16),
+                json.dumps({"operation": "info", "parameters": {"as_of": "2026-08-16"}}),
+                hashlib.sha256(body).hexdigest(),
+                str(path),
+                datetime(2026, 8, 16, tzinfo=UTC),
+                date(2026, 8, 16),
+            ],
+        )
+        approve_schema_baseline(db, source_id, "info", page.schema_fingerprint)
+        db.record_source_status(
+            SourceStatus(
+                source_id,
+                datetime(2026, 8, 16, tzinfo=UTC),
+                "READY" if source_id == "lodgings" else "EMPTY",
+                {"schema_fingerprint": page.schema_fingerprint},
+                run_id,
+            )
+        )
     db.connection.execute(
         """
         insert into staging_license_snapshot (
@@ -75,15 +97,6 @@ def _valid_report(db: Database, tmp_path: Path, run_id) -> QualityReport:
         """,
         [date(2026, 8, 16), run_id, run_id],
     )
-    db.record_source_status(
-        SourceStatus(
-            "lodgings",
-            datetime(2026, 8, 16, tzinfo=UTC),
-            "READY",
-            {"required": True, "schema_fingerprint": page.schema_fingerprint},
-            run_id,
-        )
-    )
     return run_quality_suite(db, run_id)
 
 
@@ -91,3 +104,13 @@ def _db(tmp_path: Path) -> Database:
     db = Database(tmp_path / "test.duckdb", Path("sql"))
     db.migrate()
     return db
+
+
+_CORE_ACCOMMODATION_SOURCES = (
+    "lodgings",
+    "tourist_accommodations",
+    "foreigner_city_homestays",
+    "rural_homestays",
+    "hanok_experience",
+    "tourist_pensions",
+)

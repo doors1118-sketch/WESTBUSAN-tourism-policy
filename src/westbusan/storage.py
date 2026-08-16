@@ -56,7 +56,7 @@ class RawStore:
         return RawArtifact(
             artifact_id=uuid5(
                 NAMESPACE_URL,
-                f"{source_id}:{ingest_date.isoformat()}:{request_hash}:{content_hash}",
+                f"{run.run_id}:{source_id}:{ingest_date.isoformat()}:{request_hash}:{content_hash}",
             ),
             run_id=run.run_id,
             source_id=source_id,

@@ -76,10 +76,11 @@ def test_same_parcel_is_requested_once_and_links_each_license(
     monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
     monkeypatch.setattr(building_load, "DataGoKrPager", FakePager)
 
+    run = RunContext.start("test", datetime.now(UTC))
     result = collect_buildings_for_licenses(
         db,
         SourceRegistry.load(Path("config/sources.yaml")),
-        RunContext.start("test", datetime.now(UTC)),
+        run,
         raw_store=RawStore(tmp_path / "data"),
     )
 
@@ -94,6 +95,12 @@ def test_same_parcel_is_requested_once_and_links_each_license(
     assert all('"endpoint"' in request_json for request_json in request_jsons)
     assert all('"schema_fingerprint"' in request_json for request_json in request_jsons)
     assert all(path.exists() for path in artifact_paths)
+    assert db.query(
+        "select count(*) from staging_building_response where run_id = ?", [run.run_id]
+    ) == [(5,)]
+    assert db.query(
+        "select count(*) from source_status where run_id = ?", [run.run_id]
+    ) == [(5,)]
     assert db.query("select permit_date, is_closed from staging_building_snapshot") == [
         (date(1997, 1, 1), False)
     ]

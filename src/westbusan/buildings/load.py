@@ -10,6 +10,7 @@ import re
 import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
@@ -17,7 +18,7 @@ from westbusan.buildings.normalize import BuildingRecord, normalize_building_tit
 from westbusan.db import Database
 from westbusan.entity_resolution.normalize import NormalizedAddress
 from westbusan.http import SafeHttpClient
-from westbusan.models import RunContext
+from westbusan.models import RunContext, SourceStatus
 from westbusan.sources.datagokr import DataGoKrPager
 from westbusan.sources.registry import SourceRegistry
 from westbusan.storage import RawStore
@@ -206,19 +207,78 @@ def _parcel_responses(
                 **query.parameters,
                 "endpoint": spec.endpoint_url,
                 "operation": spec.operation or "",
+                "quality_partition": query.request_hash,
                 "pageNo": page.page_no,
                 "numOfRows": spec.page_size,
+                "total_count": page.total_count,
                 "schema_fingerprint": page.schema_fingerprint,
                 spec.format_parameter: spec.format_value,
                 "serviceKey": service_key,
             }
-            artifact = raw_store.write(run, source_id, request, page.raw_body, ".json")
+            artifact = raw_store.write(
+                run,
+                source_id,
+                request,
+                page.raw_body,
+                ".json",
+                source_date=run.started_at.date(),
+            )
             db.record_artifact(artifact)
+            _record_building_page(db, run, source_id, spec.operation or "", query, page, artifact.artifact_id)
             if page.rows:
                 raw_store.write_rows(artifact, page.rows)
             rows.extend(page.rows)
         responses[source_id] = rows
     return responses
+
+
+def _record_building_page(
+    db: Database,
+    run: RunContext,
+    source_id: str,
+    operation: str,
+    query: ParcelQuery,
+    page,
+    artifact_id,
+) -> None:
+    """Persist one raw building response as its own run-scoped reconciliation target."""
+    db.connection.execute(
+        """
+        insert into staging_building_response (
+            run_id, source_id, operation, parcel_hash, source_date, page_no,
+            total_count, row_count, schema_fingerprint, artifact_id
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict (run_id, source_id, operation, parcel_hash, page_no) do update set
+            total_count = excluded.total_count, row_count = excluded.row_count,
+            schema_fingerprint = excluded.schema_fingerprint,
+            artifact_id = excluded.artifact_id
+        """,
+        [
+            run.run_id,
+            source_id,
+            operation,
+            query.request_hash,
+            run.started_at.date(),
+            page.page_no,
+            page.total_count,
+            len(page.rows),
+            page.schema_fingerprint,
+            artifact_id,
+        ],
+    )
+    db.record_source_status(
+        SourceStatus(
+            source_id=source_id,
+            checked_at=datetime.now(UTC),
+            status="READY" if page.rows else "EMPTY",
+            detail={
+                "operation": operation,
+                "schema_fingerprint": page.schema_fingerprint,
+                "parcel_hash": query.request_hash,
+            },
+            run_id=run.run_id,
+        )
+    )
 
 
 def _store_building(

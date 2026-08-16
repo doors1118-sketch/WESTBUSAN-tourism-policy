@@ -10,8 +10,8 @@
 
 ## Validation
 
-- `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest tests/unit/test_quality_checks.py tests/integration/test_publication_gate.py -v`: 9 passed.
-- `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest -q`: 110 passed, 2 skipped.
+- `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest tests/unit/test_quality_checks.py tests/unit/test_quality_hardening.py tests/unit/test_storage.py tests/integration/test_publication_gate.py tests/integration/test_building_load.py -q`: 22 passed.
+- `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest -q`: 121 passed, 2 skipped.
 - `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m ruff check src tests`: passed.
 
 ## Constraint audit
@@ -29,3 +29,12 @@
 - Legal-dong import, zero/missing building coverage, source-date freshness, and active-facility change warnings are emitted from their actual tables. The labeled entity-resolution fixture is evaluated for every accommodation suite.
 - Redaction is recursive for service/API keys, tokens, auth, secrets, credentials, and passwords in source status, raw-request, and quality evidence persistence.
 - Added adversarial tests for forged/foreign/unpersisted/tampered reports, stale snapshots, missing evidence, readiness contracts, missing pages, secret leakage, obsolete evidence cleanup, and stable idempotent publication timestamps.
+
+## Review hardening round 2
+
+- Added canonical persisted source contracts and matching source configuration: the six accommodation inventory sources are required for publication, while building, tourism, transport, and manual-file sources are explicitly optional unless configured otherwise. A run cannot self-certify by emitting only optional evidence.
+- Added explicit schema-baseline approval by source, operation, and optional partition contract. Collector statuses and raw fingerprints remain observations only; a `SCHEMA_CHANGED` event blocks the gate even if a later status says `READY`.
+- Reconciliation now compares tourism demand by source, operation, run, and source-month; building responses are stored one-to-one by run, source operation, parcel, and page rather than compared to a merged snapshot.
+- Raw artifact identity now includes the run ID while retaining content-addressed files, so same-day identical reruns retain evidence for both runs.
+- Publication retries only transaction conflicts. It rereads the pointer after a conflict, treats an already-published identical run as idempotent success without touching its timestamp, and propagates unrelated storage errors.
+- Added reproductions for optional-only runs, schema-change masking, two-month tourism backfills, per-parcel building operations, same-day duplicated raw content, and concurrent publishers.

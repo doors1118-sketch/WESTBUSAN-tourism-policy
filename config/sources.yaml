@@ -5,6 +5,7 @@ sources:
     url: https://apis.data.go.kr/1741000/lodgings
     operation: info
     group: accommodation
+    required_for_publication: true
     cadence: daily
     page_size: 1000
     format_parameter: returnType
@@ -14,6 +15,7 @@ sources:
     url: https://apis.data.go.kr/1741000/tourist_accommodations
     operation: info
     group: accommodation
+    required_for_publication: true
     cadence: daily
     page_size: 1000
     format_parameter: returnType
@@ -23,6 +25,7 @@ sources:
     url: https://apis.data.go.kr/1741000/foreigner_city_homestays
     operation: info
     group: accommodation
+    required_for_publication: true
     cadence: daily
     page_size: 1000
     format_parameter: returnType
@@ -32,6 +35,7 @@ sources:
     url: https://apis.data.go.kr/1741000/rural_homestays
     operation: info
     group: accommodation
+    required_for_publication: true
     cadence: daily
     page_size: 1000
     format_parameter: returnType
@@ -41,6 +45,7 @@ sources:
     url: https://apis.data.go.kr/1741000/hanok_experience
     operation: info
     group: accommodation
+    required_for_publication: true
     cadence: daily
     page_size: 1000
     format_parameter: returnType
@@ -50,6 +55,7 @@ sources:
     url: https://apis.data.go.kr/1741000/tourist_pensions
     operation: info
     group: accommodation
+    required_for_publication: true
     cadence: daily
     page_size: 1000
     format_parameter: returnType
