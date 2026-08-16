@@ -254,6 +254,56 @@ def test_valid_transport_csv_uses_file_native_quality_contract(tmp_path: Path) -
     assert all(check.severity == "required" for check in checks.values())
 
 
+@pytest.mark.parametrize("invalid_kind", ("malformed_csv", "fact_mismatch"))
+def test_invalid_transport_file_or_fact_reconciliation_fails_closed(
+    tmp_path: Path,
+    invalid_kind: str,
+) -> None:
+    """Malformed native bytes and count-preserving fact tamper both block the run."""
+    db = _db(tmp_path)
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 16, tzinfo=UTC),
+        business_date=date(2022, 6, 30),
+    )
+    ensure_integrity_run(db, run.run_id, business_date=run.cutoff_date)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    file_path = inbox / "KORAIL_근무지_2022.csv"
+    if invalid_kind == "malformed_csv":
+        file_path.write_text("기간,기간\n2022-04,2022-06\n", encoding="utf-8")
+    else:
+        file_path.write_bytes(Path("tests/fixtures/transport/railway.csv").read_bytes())
+    registry = SourceRegistry.load(Path("config/sources.yaml"))
+    selected = SourceRegistry((registry.get("korail_workplace_ticketing_file"),))
+    load_transport(
+        db,
+        selected,
+        date(2022, 4, 1),
+        date(2022, 6, 30),
+        run,
+        inbox_dir=inbox,
+    )
+    if invalid_kind == "fact_mismatch":
+        db.connection.execute(
+            """update fact_transport_flow set metric_value = metric_value + 1
+               where source_id = 'korail_workplace_ticketing_file'
+                 and metric_code = 'korail_workplace_smart_ticket_count'"""
+        )
+
+    report = _run_quality_suite(db, run.run_id)
+    reconciliation = _check(
+        report,
+        "raw_total_matches_staging",
+        "korail_workplace_ticketing_file",
+    )
+
+    assert reconciliation.status == "failed"
+    assert reconciliation.severity == "required"
+    assert report.has_failed_required_check is True
+
+
 def test_monthly_freshness_uses_run_business_cutoff_not_wall_clock(
     tmp_path: Path,
 ) -> None:

@@ -28,7 +28,10 @@ from westbusan.revisions import (
 )
 from westbusan.sources.datagokr import parse_data_page
 from westbusan.sources.files import read_tabular_rows
-from westbusan.transport.load import normalize_transport_rows
+from westbusan.transport.load import (
+    normalize_transport_rows,
+    transport_fact_expectations,
+)
 
 CheckStatus = Literal["passed", "failed", "warning", "skipped"]
 Severity = Literal["required", "warning", "informational"]
@@ -106,6 +109,7 @@ class _ArtifactPage:
     rows: list[dict[str, object]] | None
     error: str | None
     content_hash_ok: bool
+    content_hash: str
 
 
 def run_quality_suite(
@@ -404,6 +408,7 @@ def _parse_artifacts(
                     None,
                     str(error),
                     content_hash_ok,
+                    expected_hash,
                 )
             )
         else:
@@ -421,6 +426,7 @@ def _parse_artifacts(
                     rows,
                     None,
                     content_hash_ok,
+                    expected_hash,
                 )
             )
     return pages
@@ -489,17 +495,68 @@ def _file_reconciliation_check(
     pages: list[_ArtifactPage],
     severity: Severity,
 ) -> CheckResult:
-    expected = sum(
-        len(record.measures)
+    malformed = [page for page in pages if page.error or page.rows is None]
+    expectations = [
+        expectation
         for page in pages
         for row in page.rows or []
-        for record in normalize_transport_rows(source_id, row)
+        for expectation in transport_fact_expectations(
+            source_id, [row], page.content_hash
+        )
+    ]
+    actual_rows = db.query(
+        """select fact.observation_key, fact.metric_code, fact.period,
+                  fact.district, fact.region_group, fact.dimension_json,
+                  fact.dimension_json_hash, fact.source_revision,
+                  fact.metric_value, fact.unit, fact.source_payload_json
+           from fact_transport_flow as fact
+           join run_fact_observation as membership
+             on membership.family = 'transport'
+            and membership.observation_key = fact.observation_key
+           where membership.run_id = ? and fact.source_id = ?""",
+        [run_id, source_id],
     )
-    actual = _transport_observation_count(db, run_id, source_id)
+    actual_periods = {str(row[2]) for row in actual_rows}
+    selected_expectations = [
+        expectation
+        for expectation in expectations
+        if not actual_periods or expectation.period in actual_periods
+    ]
+    expected_by_key = {
+        expectation.observation_key: (
+            expectation.metric_code,
+            expectation.period,
+            expectation.district,
+            expectation.region_group,
+            expectation.dimension_json,
+            expectation.dimension_json_hash,
+            expectation.source_revision,
+            expectation.metric_value,
+            expectation.unit,
+            expectation.source_payload_json,
+        )
+        for expectation in selected_expectations
+    }
+    actual_by_key = {str(row[0]): tuple(row[1:]) for row in actual_rows}
+    missing = sorted(expected_by_key.keys() - actual_by_key.keys())
+    extra = sorted(actual_by_key.keys() - expected_by_key.keys())
+    mismatched = sorted(
+        key
+        for key in expected_by_key.keys() & actual_by_key.keys()
+        if expected_by_key[key] != actual_by_key[key]
+    )
+    passed = bool(expected_by_key) and not malformed and not missing and not extra and not mismatched
     return CheckResult(
         "raw_total_matches_staging",
-        "passed" if expected == actual else "failed",
-        {"expected_facts": expected, "target_facts": actual},
+        "passed" if passed else "failed",
+        {
+            "expected_facts": len(expected_by_key),
+            "target_facts": len(actual_by_key),
+            "malformed_artifacts": len(malformed),
+            "missing_observation_keys": missing,
+            "extra_observation_keys": extra,
+            "mismatched_observation_keys": mismatched,
+        },
         "file-native normalized facts equal run-scoped transport observations",
         severity,
         source_id,

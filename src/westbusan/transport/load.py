@@ -118,6 +118,24 @@ class TransportRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class TransportFactExpectation:
+    """Deterministic fact identity and values shared by loading and quality checks."""
+
+    source_id: str
+    metric_code: str
+    period: str
+    district: str
+    region_group: str
+    dimension_json: str
+    dimension_json_hash: str
+    source_revision: str
+    metric_value: int | float
+    unit: str
+    source_payload_json: str
+    observation_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class LoadResult:
     records_loaded: int
     artifacts_written: int
@@ -160,6 +178,20 @@ def normalize_transport_rows(
     if source_id == "srt_station_boarding_file" and _srt_month_fields(row):
         return tuple(_srt_wide_records(source_id, row))
     return (normalize_transport_row(source_id, row),)
+
+
+def transport_fact_expectations(
+    source_id: str,
+    rows: list[dict[str, object]],
+    source_revision: str,
+) -> tuple[TransportFactExpectation, ...]:
+    """Derive the exact fact rows that native transport records can produce."""
+    return tuple(
+        expectation
+        for row in rows
+        for record in normalize_transport_rows(source_id, row)
+        for expectation in _record_fact_expectations(record, source_revision)
+    )
 
 
 def load_transport(
@@ -865,23 +897,8 @@ def _persist_record(
     progress: ProgressCallback,
 ) -> bool:
     inserted = False
-    for measure in record.measures:
-        progress()
-        dimensions = {
-            **record.dimensions,
-            **measure.dimensions,
-            "interpretation": "access_or_visitor_pressure_proxy_not_tourism_or_occupancy",
-        }
-        dimension_json = json.dumps(dimensions, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-        dimension_hash = hashlib.sha256(dimension_json.encode()).hexdigest()
-        payload = json.dumps(record.source_payload_json, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-        revision = source_revision or artifact.content_hash
-        observation_key = hashlib.sha256(
-            (
-                f"{record.source_id}|{measure.metric_code}|{record.period}|"
-                f"{record.district}|{dimension_hash}|{revision}"
-            ).encode()
-        ).hexdigest()
+    revision = source_revision or artifact.content_hash
+    for expectation in _record_fact_expectations(record, revision):
         progress()
         rows = db.query(
             """
@@ -895,6 +912,64 @@ def _persist_record(
             returning metric_code
             """,
             [
+                expectation.source_id,
+                expectation.metric_code,
+                expectation.period,
+                expectation.district,
+                expectation.region_group,
+                expectation.dimension_json,
+                expectation.dimension_json_hash,
+                expectation.source_revision,
+                expectation.metric_value,
+                expectation.unit,
+                expectation.source_payload_json,
+                artifact.artifact_id,
+                run.run_id,
+                expectation.observation_key,
+            ],
+        )
+        db.connection.execute(
+            """insert into run_fact_observation (run_id, family, observation_key)
+               values (?, 'transport', ?) on conflict do nothing""",
+            [run.run_id, expectation.observation_key],
+        )
+        inserted = inserted or bool(rows)
+    return inserted
+
+
+def _record_fact_expectations(
+    record: TransportRecord, source_revision: str
+) -> tuple[TransportFactExpectation, ...]:
+    payload = json.dumps(
+        record.source_payload_json,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    expectations: list[TransportFactExpectation] = []
+    for measure in record.measures:
+        dimensions = {
+            **record.dimensions,
+            **measure.dimensions,
+            "interpretation": "access_or_visitor_pressure_proxy_not_tourism_or_occupancy",
+        }
+        dimension_json = json.dumps(
+            dimensions,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        dimension_hash = hashlib.sha256(dimension_json.encode()).hexdigest()
+        observation_key = hashlib.sha256(
+            (
+                f"{record.source_id}|{measure.metric_code}|{record.period}|"
+                f"{record.district}|{dimension_hash}|{source_revision}"
+            ).encode()
+        ).hexdigest()
+        expectations.append(
+            TransportFactExpectation(
                 record.source_id,
                 measure.metric_code,
                 record.period,
@@ -902,22 +977,14 @@ def _persist_record(
                 record.region_group,
                 dimension_json,
                 dimension_hash,
-                revision,
+                source_revision,
                 measure.value,
                 measure.unit,
                 payload,
-                artifact.artifact_id,
-                run.run_id,
                 observation_key,
-            ],
+            )
         )
-        db.connection.execute(
-            """insert into run_fact_observation (run_id, family, observation_key)
-               values (?, 'transport', ?) on conflict do nothing""",
-            [run.run_id, observation_key],
-        )
-        inserted = inserted or bool(rows)
-    return inserted
+    return tuple(expectations)
 
 
 def _live_skip_reason(spec: SourceSpec, db: Database) -> str | None:
