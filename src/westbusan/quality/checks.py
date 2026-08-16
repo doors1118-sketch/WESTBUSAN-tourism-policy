@@ -800,29 +800,22 @@ def _building_and_duplicate_warnings(db: Database, run_id: UUID) -> list[CheckRe
 
 
 def _active_facility_count(db: Database, run_id: UUID) -> int:
-    visible = _quality_visible_runs(db, run_id)
-    placeholders = ",".join("?" for _ in visible)
+    ensure_run_rebuildable(db, run_id)
+    cutoff = _run_cutoff(db, run_id)
     return int(
         db.query(
-            f"""with latest as (
-                    select *, row_number() over (
-                        partition by source_id, source_record_id
-                        order by observed_on desc, recorded_at desc,
-                                 revision_sequence desc
-                    ) as row_num
-                    from staging_license_revision
-                    where version_run_id in ({placeholders})
-                )
-                select count(distinct link.facility_id)
+            """select count(distinct link.facility_id)
                 from run_facility_license as link
-                join latest as snapshot
-                  on snapshot.source_id = link.source_id
+                join staging_license_revision as snapshot
+                  on snapshot.version_run_id = link.selected_version_run_id
+                 and snapshot.source_id = link.source_id
                  and snapshot.source_record_id = link.source_record_id
-                 and snapshot.row_num = 1
+                 and snapshot.observed_on = link.selected_observed_on
+                 and snapshot.revision_sequence = link.selected_revision_sequence
                 where link.run_id = ?
                   and (snapshot.closure_date is null
-                       or snapshot.closure_date > snapshot.observed_on)""",
-            [*visible, run_id],
+                       or snapshot.closure_date > ?)""",
+            [run_id, cutoff],
         )[0][0]
     )
 

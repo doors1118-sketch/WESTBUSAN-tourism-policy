@@ -220,32 +220,24 @@ def _as_of_date(db: Database, run_id: UUID) -> date | None:
 def _facility_rows(
     db: Database, run_id: UUID, as_of: date | None
 ) -> list[dict[str, object]]:
-    visible_runs = _visible_run_ids(db, run_id)
-    placeholders = ",".join("?" for _ in visible_runs)
     snapshots = db.query(
-        f"""
-        with latest as (
-            select *, row_number() over (
-                partition by source_id, source_record_id
-                order by observed_on desc, recorded_at desc, revision_sequence desc
-            ) as row_num
-            from staging_license_revision
-            where version_run_id in ({placeholders}) and (? is null or observed_on <= ?)
-        )
-        select link.facility_id, facility.district, facility.region_group,
+        """select link.facility_id, facility.district, facility.region_group,
                snap.source_id, snap.room_count, snap.license_date, snap.closure_date,
                snap.observed_on
         from run_facility_license as link
         join run_facility as facility
           on facility.run_id = link.run_id and facility.facility_id = link.facility_id
-        join latest as snap on snap.source_id = link.source_id
-                         and snap.source_record_id = link.source_record_id
-                         and snap.row_num = 1
+        join staging_license_revision as snap
+          on snap.version_run_id = link.selected_version_run_id
+         and snap.source_id = link.source_id
+         and snap.source_record_id = link.source_record_id
+         and snap.observed_on = link.selected_observed_on
+         and snap.revision_sequence = link.selected_revision_sequence
         where link.run_id = ?
           and facility.district is not null and facility.region_group is not null
-          and (snap.closure_date is null or snap.closure_date > snap.observed_on)
+          and (snap.closure_date is null or ? is null or snap.closure_date > ?)
         """,
-        [*visible_runs, as_of, as_of, run_id],
+        [run_id, as_of, as_of],
     )
     by_facility: dict[object, list[tuple[object, ...]]] = defaultdict(list)
     for row in snapshots:

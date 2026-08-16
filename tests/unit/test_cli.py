@@ -285,8 +285,9 @@ def test_migrate_legacy_command_approves_only_backfilled_self_lineage(
         [run_id, facility_id],
     )
     pipeline.db.connection.execute(
-        """insert into run_facility_license
-           values (?, ?, 'lodgings', 'legacy', '{}')""",
+        """insert into run_facility_license (
+               run_id, facility_id, source_id, source_record_id, evidence_json
+           ) values (?, ?, 'lodgings', 'legacy', '{}')""",
         [run_id, facility_id],
     )
     pipeline.db.connection.execute(

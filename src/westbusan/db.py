@@ -239,6 +239,35 @@ def migrate_legacy_run(
                values (?, ?) on conflict do nothing""",
             [run_id, run_id],
         )
+        db.connection.execute(
+            """with selected as (
+                   select revision.*, row_number() over (
+                       partition by revision.source_id, revision.source_record_id
+                       order by revision.observed_on desc,
+                                revision.source_updated_at desc nulls last,
+                                producer.started_at desc nulls last,
+                                revision.recorded_at desc,
+                                revision.revision_sequence desc
+                   ) as revision_rank
+                   from staging_license_revision as revision
+                   join pipeline_run_input as lineage
+                     on lineage.run_id = ?
+                    and lineage.input_run_id = revision.version_run_id
+                   left join pipeline_run as producer
+                     on producer.run_id = revision.version_run_id
+                   join pipeline_run as target on target.run_id = ?
+                   where revision.observed_on <= target.business_date
+               )
+               update run_facility_license as link
+                  set selected_version_run_id = selected.version_run_id,
+                      selected_observed_on = selected.observed_on,
+                      selected_revision_sequence = selected.revision_sequence
+                 from selected
+                where link.run_id = ? and selected.revision_rank = 1
+                  and selected.source_id = link.source_id
+                  and selected.source_record_id = link.source_record_id""",
+            [run_id, run_id, run_id],
+        )
         evidence = _legacy_evidence_counts(db, run_id)
         missing = {
             name: count
@@ -359,6 +388,17 @@ def _legacy_evidence_counts(db: Database, run_id: UUID) -> dict[str, int]:
                      where snapshot.producer_run_id = license.run_id
                        and snapshot.source_id = license.source_id
                        and snapshot.source_record_id = license.source_record_id
+                   )""",
+                [run_id],
+            )
+        ),
+        "missing_selected_license_revisions": int(
+            db.scalar(
+                """select count(*) from run_facility_license
+                   where run_id = ? and (
+                     selected_version_run_id is null
+                     or selected_observed_on is null
+                     or selected_revision_sequence is null
                    )""",
                 [run_id],
             )

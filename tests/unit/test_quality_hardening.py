@@ -11,16 +11,68 @@ from uuid import uuid4
 
 import pytest
 
+from westbusan.accommodation.load import load_license_snapshot
+from westbusan.accommodation.normalize import normalize_license
 from westbusan.db import Database
+from westbusan.entity_resolution.match import build_facilities
 from westbusan.models import SourceStatus
 from westbusan.quality import publish as publish_module
 from westbusan.quality.checks import (
     QualityReport,
+    _active_facility_count,
     approve_schema_baseline,
     run_quality_suite,
 )
 from westbusan.quality.publish import current_published_run, publish_if_valid
 from westbusan.sources.datagokr import parse_data_page
+
+
+def test_active_facility_count_uses_target_business_date_revision_identity(
+    tmp_path: Path,
+) -> None:
+    """A closure observed after the target cutoff cannot rewrite historical quality."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date
+           ) values (?, 'daily', now(), 'RUNNING', '2026-08-16')""",
+        [run_id],
+    )
+    db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [run_id, run_id],
+    )
+    base = {
+        "MNG_NO": "L1",
+        "BPLC_NM": "기준일 영업 호텔",
+        "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
+    }
+    load_license_snapshot(
+        db,
+        [normalize_license("lodgings", base, date(2026, 8, 16))],
+        run_id,
+    )
+    build_facilities(db, run_id)
+    load_license_snapshot(
+        db,
+        [
+            normalize_license(
+                "lodgings",
+                {**base, "CLSBIZ_DE": "20260817"},
+                date(2026, 8, 17),
+            )
+        ],
+        run_id,
+    )
+
+    assert _active_facility_count(db, run_id) == 1
+    assert db.query(
+        """select selected_version_run_id, selected_observed_on,
+                  selected_revision_sequence
+           from run_facility_license where run_id = ?""",
+        [run_id],
+    ) == [(run_id, date(2026, 8, 16), 1)]
 
 
 def test_publication_rejects_empty_foreign_unpersisted_and_tampered_reports(

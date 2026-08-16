@@ -312,9 +312,20 @@ def build_facilities(
             )
             write(
                 """insert into run_facility_license (
-                       run_id, facility_id, source_id, source_record_id, evidence_json
-                   ) values (?, ?, ?, ?, ?)""",
-                [run_id, facility_id, source_id, source_record_id, evidence],
+                       run_id, facility_id, source_id, source_record_id, evidence_json,
+                       selected_version_run_id, selected_observed_on,
+                       selected_revision_sequence
+                   ) values (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    run_id,
+                    facility_id,
+                    source_id,
+                    source_record_id,
+                    evidence,
+                    record["selected_version_run_id"],
+                    record["selected_observed_on"],
+                    record["selected_revision_sequence"],
+                ],
             )
             for building_id in record["building_ids"]:
                 desired_building_links.add((facility_id, building_id))
@@ -447,7 +458,8 @@ def _latest_records(db: Database, run_id: UUID) -> list[dict[str, object]]:
     rows = db.query(
         f"""
         select source_id, source_record_id, source_name, normalized_name, road_address,
-               lot_address, district, region_group, normalized_phone, longitude, latitude
+               lot_address, district, region_group, normalized_phone, longitude, latitude,
+               version_run_id, observed_on, revision_sequence
         from (
             select snapshot.*, row_number() over (
                 partition by source_id, source_record_id
@@ -467,6 +479,7 @@ def _latest_records(db: Database, run_id: UUID) -> list[dict[str, object]]:
     fields = (
         "source_id", "source_record_id", "source_name", "normalized_name", "road_address",
         "lot_address", "district", "region_group", "normalized_phone", "longitude", "latitude",
+        "selected_version_run_id", "selected_observed_on", "selected_revision_sequence",
     )
     return [dict(zip(fields, row, strict=True)) for row in rows]
 
