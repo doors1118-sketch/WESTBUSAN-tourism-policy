@@ -8,7 +8,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 
 from westbusan.db import Database
@@ -57,8 +57,19 @@ _STATION_DISTRICTS = {
     "부산역": "동구",
 }
 _HOUR_FIELD = re.compile(r"^\d{2}시-\d{2}시$")
+_SRT_MONTH_FIELD = re.compile(r"^((?:19|20)\d{2})년(\d{1,2})월$")
 _METRO_SOURCES = {"busan_metro_odcloud_discovery", "busan_metro"}
 _OD_SOURCES = {"public_transport_od_usage"}
+_KORAIL_MEASURES = {
+    "korail_workplace_ticketing_file": {
+        "이용인원": ("korail_workplace_passenger_count", "passengers"),
+        "이용건수": ("korail_workplace_usage_count", "count"),
+    },
+    "korail_residence_ticketing_file": {
+        "이용인원": ("korail_residence_passenger_count", "passengers"),
+        "이용건수": ("korail_residence_usage_count", "count"),
+    },
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +118,15 @@ def normalize_transport_row(source_id: str, row: dict[str, object]) -> Transport
     if source_id in _OD_SOURCES:
         return _od_record(source_id, row)
     return _railway_record(source_id, row)
+
+
+def normalize_transport_rows(
+    source_id: str, row: dict[str, object]
+) -> tuple[TransportRecord, ...]:
+    """Expand a source row only when its documented schema carries several months."""
+    if source_id == "srt_station_boarding_file" and _srt_month_fields(row):
+        return tuple(_srt_wide_records(source_id, row))
+    return (normalize_transport_row(source_id, row),)
 
 
 def load_transport(
@@ -200,7 +220,14 @@ def _load_live(
         _status(db, spec.source_id, "AUTH_FAILED", {"error": str(error)})
     except QuotaError as error:
         _status(db, spec.source_id, "QUOTA_EXCEEDED", {"error": str(error)})
-    except (HttpStatusError, SchemaError, ValueError, KeyError, TypeError) as error:
+    except HttpStatusError as error:
+        _status(
+            db,
+            spec.source_id,
+            "AUTH_FAILED" if error.status_code in {401, 403} else "SCHEMA_CHANGED",
+            {"error": str(error)},
+        )
+    except (SchemaError, ValueError, KeyError, TypeError) as error:
         _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)})
     return 0, 0, False
 
@@ -216,6 +243,8 @@ def _load_odcloud(
     source_revision = f"odcloud:{revision.uddi}:{revision.schema_fingerprint}"
     loaded = artifacts = 0
     for page in iter_revision_pages(_namespace(spec.url), revision, client, page_size=spec.page_size):
+        if revision.row_count is None:
+            revision = replace(revision, row_count=page.total_count)
         artifact = raw_store.write(
             run,
             spec.source_id,
@@ -223,7 +252,9 @@ def _load_odcloud(
                 "namespace": _namespace(spec.url),
                 "uddi": revision.uddi,
                 "path": revision.path,
-                "publication_date": revision.published_at.isoformat(),
+                "publication_date": revision.published_at.isoformat() if revision.published_at else None,
+                "published_at_quality": revision.metadata["published_at_quality"],
+                "data_as_of": revision.data_as_of.isoformat() if revision.data_as_of else None,
                 "row_count": revision.row_count,
                 "schema_fingerprint": revision.schema_fingerprint,
                 "source_revision": source_revision,
@@ -232,7 +263,7 @@ def _load_odcloud(
             },
             page.raw_body,
             ".json",
-            None if revision.published_at == date.min else revision.published_at,
+            revision.published_at,
         )
         db.record_artifact(artifact)
         artifacts += 1
@@ -247,7 +278,9 @@ def _load_odcloud(
         "READY",
         {
             "uddi": revision.uddi,
-            "publication_date": revision.published_at.isoformat(),
+            "publication_date": revision.published_at.isoformat() if revision.published_at else None,
+            "published_at_quality": revision.metadata["published_at_quality"],
+            "data_as_of": revision.data_as_of.isoformat() if revision.data_as_of else None,
             "row_count": revision.row_count,
             "schema_fingerprint": revision.schema_fingerprint,
         },
@@ -301,9 +334,9 @@ def _persist_rows(
 ) -> int:
     loaded = 0
     for row in rows:
-        record = normalize_transport_row(source_id, row)
-        _persist_record(db, record, artifact, run, source_revision=source_revision)
-        loaded += 1
+        for record in normalize_transport_rows(source_id, row):
+            _persist_record(db, record, artifact, run, source_revision=source_revision)
+            loaded += 1
     return loaded
 
 
@@ -373,12 +406,15 @@ def _od_record(source_id: str, row: Mapping[str, object]) -> TransportRecord:
 
 
 def _railway_record(source_id: str, row: Mapping[str, object]) -> TransportRecord:
-    station = _optional_text(row, "station", "station_name", "역명", "역사명")
-    excluded = {"period", "month", "baseYm", "base_ym", "년월", "조사연도", "station", "station_name", "역명", "역사명"}
+    station = _optional_text(row, "station", "station_name", "역명", "역사명", "승차역")
+    excluded = {"period", "month", "baseYm", "base_ym", "년월", "집계년도", "집계월", "조사연도", "station", "station_name", "역명", "역사명", "승차역"}
     measures = _railway_measures(source_id, row, excluded)
     if not measures:
         raise ValueError("railway row has no recognized source-native measure")
-    district = _district(_optional_text(row, "district", "구군", "자치구"), station)
+    district = _district(
+        _optional_text(row, "district", "구군", "자치구", "근무지시군구명", "거주지시군구명"),
+        station,
+    )
     measure_fields = {
         str(measure.dimensions["native_field"])
         for measure in measures
@@ -388,7 +424,7 @@ def _railway_record(source_id: str, row: Mapping[str, object]) -> TransportRecor
     dimensions.update({"station": station, "evidence_role": _evidence_role(source_id)})
     return TransportRecord(
         source_id,
-        _period(row),
+        _railway_period(source_id, row),
         district,
         _REGION_BY_DISTRICT.get(district, "unresolved"),
         dimensions,
@@ -414,18 +450,62 @@ def _railway_measures(
             if field is not None:
                 measures.append(TransportMeasure(f"srt_{direction}", _number(row[field]), "passengers", {"native_field": field}))
         return measures
-    prefix = "korail_workplace" if "workplace" in source_id else "korail_residence"
     measures = []
-    for field, value in row.items():
-        if field in excluded or value in (None, ""):
-            continue
-        try:
-            number = _number(value)
-        except ValueError:
-            continue
-        unit = "percent" if any(token in field.lower() for token in ("비율", "율", "rate", "%")) else "source_native"
-        measures.append(TransportMeasure(f"{prefix}_{_slug(field)}", number, unit, {"native_field": field}))
+    for field, (metric_code, unit) in _KORAIL_MEASURES.get(source_id, {}).items():
+        if row.get(field) not in (None, ""):
+            measures.append(TransportMeasure(metric_code, _number(row[field]), unit, {"native_field": field}))
     return measures
+
+
+def _srt_month_fields(row: Mapping[str, object]) -> tuple[tuple[str, int, int], ...]:
+    fields = []
+    for field in row:
+        matched = _SRT_MONTH_FIELD.match(field)
+        if matched is not None:
+            fields.append((field, int(matched.group(1)), int(matched.group(2))))
+    return tuple(fields)
+
+
+def _srt_wide_records(
+    source_id: str, row: Mapping[str, object]
+) -> list[TransportRecord]:
+    station = _text(row, "승차역")
+    month_fields = _srt_month_fields(row)
+    dimensions = _source_dimensions(
+        row, {"승차역", *(field for field, _, _ in month_fields)}
+    )
+    dimensions.update(
+        {
+            "station": station,
+            "source_shape": "wide_monthly_boarding",
+            "evidence_role": _evidence_role(source_id),
+        }
+    )
+    district = _district(None, station)
+    records = []
+    for field, year, month in month_fields:
+        if row.get(field) in (None, ""):
+            continue
+        records.append(
+            TransportRecord(
+                source_id,
+                f"{year:04d}-{month:02d}",
+                district,
+                _REGION_BY_DISTRICT.get(district, "unresolved"),
+                dimensions,
+                dict(row),
+                (
+                    TransportMeasure(
+                        "srt_boarding", _number(row[field]), "passengers", {"native_field": field}
+                    ),
+                ),
+                station=station,
+                boarding=_number(row[field]),
+            )
+        )
+    if not records:
+        raise ValueError("SRT wide row has no monthly boarding value")
+    return records
 
 
 def _persist_record(
@@ -517,6 +597,10 @@ def _artifact_seen_before(db: Database, artifact: RawArtifact) -> bool:
 
 
 def _period(row: Mapping[str, object]) -> str:
+    year = _optional_value(row, "집계년도")
+    month = _optional_value(row, "집계월")
+    if year is not None and month is not None:
+        return f"{int(str(year)):04d}-{int(str(month)):02d}"
     value = _required(row, "opr_ym", "period", "month", "baseYm", "base_ym", "년월", "년월일", "service_date", "date")
     text = str(value).strip()
     digits = "".join(character for character in text if character.isdigit())
@@ -527,6 +611,12 @@ def _period(row: Mapping[str, object]) -> str:
     if len(text) in {7, 10} and text[4:5] == "-":
         return text
     raise ValueError(f"invalid transport period: {value!r}")
+
+
+def _railway_period(source_id: str, row: Mapping[str, object]) -> str:
+    if source_id in _KORAIL_MEASURES:
+        return "2022-04..2022-06"
+    return _period(row)
 
 
 def _metro_direction(value: str) -> str:
@@ -617,4 +707,5 @@ __all__ = [
     "TransportRecord",
     "load_transport",
     "normalize_transport_row",
+    "normalize_transport_rows",
 ]

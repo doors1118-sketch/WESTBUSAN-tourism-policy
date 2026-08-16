@@ -18,7 +18,7 @@ _SUPPORTED = {".csv", ".xlsx"}
 _FILENAME_RULES = {
     "korail_workplace_ticketing_file": (("korail", "한국철도공사"), ("근무",)),
     "korail_residence_ticketing_file": (("korail", "한국철도공사"), ("거주",)),
-    "srt_station_boarding_file": (("srt",), ("역", "승하차", "승차", "하차")),
+    "srt_station_boarding_file": (("srt", "에스알"), ("역", "승하차", "승차", "하차")),
 }
 
 
@@ -36,7 +36,7 @@ class FileSource:
         if not path.is_file():
             raise FileNotFoundError(path)
         body = path.read_bytes()
-        source_date, source_date_quality = _source_date(path)
+        source_date, source_date_quality, source_date_granularity, source_date_value = _source_date(path)
         artifact = self.store.write(
             run,
             source_id,
@@ -45,6 +45,8 @@ class FileSource:
                 "filename": path.name,
                 "content_hash": file_fingerprint(path),
                 "source_date_quality": source_date_quality,
+                "source_date_granularity": source_date_granularity,
+                "source_date_value": source_date_value,
             },
             body,
             path.suffix.lower(),
@@ -136,15 +138,22 @@ def _matches_filename(name: str, rule: tuple[tuple[str, ...], tuple[str, ...]]) 
     )
 
 
-def _source_date(path: Path) -> tuple[date | None, str]:
+def _source_date(path: Path) -> tuple[date | None, str, str, str | None]:
     match = re.search(r"(?<!\d)((?:19|20)\d{2})(?:[-_.]?(\d{2}))?(?:[-_.]?(\d{2}))?", path.name)
     if match:
         year, month, day = match.groups()
+        if month is None:
+            return None, "filename", "year", year
         try:
-            return date(int(year), int(month or 1), int(day or 1)), "filename"
+            return (
+                date(int(year), int(month), int(day or 1)),
+                "filename",
+                "day" if day is not None else "month",
+                f"{year}-{month}-{day}" if day is not None else f"{year}-{month}",
+            )
         except ValueError:
             pass
-    return None, "unknown"
+    return None, "unknown", "unknown", None
 
 
 __all__ = ["FileSource", "file_fingerprint", "read_tabular_rows"]

@@ -26,7 +26,8 @@ class DatasetRevision:
 
     uddi: str
     path: str
-    published_at: date
+    published_at: date | None
+    data_as_of: date | None
     row_count: int | None
     schema_fingerprint: str
     metadata: Mapping[str, object]
@@ -62,8 +63,10 @@ def select_latest_revision(document: Mapping[str, object]) -> DatasetRevision:
         raise SchemaError("ODCloud Swagger has no paths object")
     definitions = document.get("definitions")
     definition_map = definitions if isinstance(definitions, Mapping) else {}
+    file_details = document.get("x-file-details")
+    detail_map = file_details if isinstance(file_details, Mapping) else {}
     revisions = [
-        _revision(str(path), operation, definition_map)
+        _revision(str(path), operation, definition_map, detail_map)
         for path, methods in paths.items()
         if isinstance(methods, Mapping)
         for operation in (_get_operation(methods),)
@@ -71,7 +74,14 @@ def select_latest_revision(document: Mapping[str, object]) -> DatasetRevision:
     ]
     if not revisions:
         raise SchemaError("ODCloud Swagger contains no UDDI dataset paths")
-    return max(revisions, key=lambda revision: (revision.published_at, revision.uddi))
+    return max(
+        revisions,
+        key=lambda revision: (
+            revision.published_at or date.min,
+            revision.data_as_of or date.min,
+            revision.uddi,
+        ),
+    )
 
 
 def iter_revision_pages(
@@ -115,14 +125,20 @@ def _get_operation(methods: Mapping[str, object]) -> Mapping[str, object] | None
 
 
 def _revision(
-    path: str, operation: Mapping[str, object], definitions: Mapping[str, object]
+    path: str,
+    operation: Mapping[str, object],
+    definitions: Mapping[str, object],
+    file_details: Mapping[str, object],
 ) -> DatasetRevision:
     matched = _UDDI_PATH.search(path)
     if matched is None:
         raise SchemaError("ODCloud path does not end in a UDDI")
     uddi = matched.group(1)
     metadata = dict(operation)
-    published = _publication_date(metadata, path) or date.min
+    published = _publication_date(metadata, file_details.get(uddi))
+    data_as_of = _data_as_of(metadata, path)
+    metadata["published_at_quality"] = "portal_metadata" if published else "unknown"
+    metadata["data_as_of"] = data_as_of.isoformat() if data_as_of else None
     schema = _model_schema(metadata, definitions)
     fingerprint = hashlib.sha256(
         json.dumps(schema, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
@@ -131,17 +147,33 @@ def _revision(
         uddi=uddi,
         path=path,
         published_at=published,
+        data_as_of=data_as_of,
         row_count=_row_count(metadata),
         schema_fingerprint=fingerprint,
         metadata=metadata,
     )
 
 
-def _publication_date(metadata: Mapping[str, object], path: str) -> date | None:
+def _publication_date(metadata: Mapping[str, object], configured_detail: object) -> date | None:
     for name in ("x-published-at", "publishedAt", "published_at", "dataRegDt"):
         parsed = _date(metadata.get(name))
         if parsed is not None:
             return parsed
+    detail = metadata.get("x-file-detail")
+    if isinstance(detail, Mapping):
+        for name in ("published_at", "publishedAt", "dataRegDt", "modifiedAt"):
+            parsed = _date(detail.get(name))
+            if parsed is not None:
+                return parsed
+    if isinstance(configured_detail, Mapping):
+        for name in ("published_at", "publishedAt", "dataRegDt", "modifiedAt"):
+            parsed = _date(configured_detail.get(name))
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _data_as_of(metadata: Mapping[str, object], path: str) -> date | None:
     for value in (metadata.get("summary"), metadata.get("description"), path):
         parsed = _date(value)
         if parsed is not None:

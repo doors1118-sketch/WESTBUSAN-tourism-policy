@@ -26,10 +26,11 @@ def test_ingest_preserves_csv_under_content_addressed_raw_storage(tmp_path: Path
     )
 
     assert artifact.path.read_bytes() == path.read_bytes()
-    assert artifact.source_date is not None
-    assert artifact.source_date.isoformat() == "2022-01-01"
+    assert artifact.source_date is None
     assert artifact.content_hash == file_fingerprint(path)
     assert "KORAIL_근무지_2022.csv" in artifact.request_json
+    assert '"source_date_granularity":"year"' in artifact.request_json
+    assert '"source_date_value":"2022"' in artifact.request_json
 
 
 def test_unknown_file_date_is_not_replaced_with_filesystem_mtime(tmp_path: Path) -> None:
@@ -68,6 +69,7 @@ def test_korean_official_filename_patterns_find_applied_files(tmp_path: Path) ->
         "한국철도공사_근무지별_2022.csv",
         "한국철도공사_거주지별_2022.csv",
         "SRT_역별_승하차_202408.xlsx",
+        "(주)에스알_월별역별 승하차 인원수_20240831.csv",
     ):
         (inbox / name).write_bytes(b"example")
     source = FileSource(tmp_path / "data")
@@ -79,5 +81,6 @@ def test_korean_official_filename_patterns_find_applied_files(tmp_path: Path) ->
         "한국철도공사_거주지별_2022.csv"
     ]
     assert [path.name for path in source.discover(inbox, "srt_station_boarding_file")] == [
-        "SRT_역별_승하차_202408.xlsx"
+        "(주)에스알_월별역별 승하차 인원수_20240831.csv",
+        "SRT_역별_승하차_202408.xlsx",
     ]

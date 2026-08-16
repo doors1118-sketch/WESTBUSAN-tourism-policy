@@ -29,7 +29,8 @@ def test_select_latest_revision_uses_publication_date_then_identifier() -> None:
     revision = select_latest_revision(revisions)
 
     assert revision.uddi == "99999999-9999-9999-9999-999999999999"
-    assert revision.published_at.isoformat() == "2024-07-31"
+    assert revision.published_at.isoformat() == "2024-08-15"
+    assert revision.data_as_of.isoformat() == "2024-07-31"
     assert revision.path == "/3057229/v1/uddi:99999999-9999-9999-9999-999999999999"
     assert revision.row_count is None
     assert len(revision.schema_fingerprint) == 64
@@ -46,6 +47,44 @@ def test_discover_latest_dataset_reads_metadata_without_assuming_revision_order(
 
     assert revision.uddi == "99999999-9999-9999-9999-999999999999"
     assert revision.metadata["summary"] == "부산교통공사_시간대별 승하차인원_20240731"
+
+
+def test_operation_title_cutoff_is_not_used_as_a_publication_date() -> None:
+    revision = select_latest_revision(
+        {
+            "paths": {
+                "/3057229/v1/uddi:cutoff": {
+                    "get": {
+                        "summary": "부산교통공사_시간대별 승하차인원_20240731",
+                        "responses": {"200": {"schema": {"$ref": "#/definitions/cutoff"}}},
+                    }
+                }
+            }
+        }
+    )
+
+    assert revision.published_at is None
+    assert revision.data_as_of.isoformat() == "2024-07-31"
+    assert revision.metadata["published_at_quality"] == "unknown"
+
+
+def test_official_file_detail_configuration_supplies_publication_date_when_available() -> None:
+    revision = select_latest_revision(
+        {
+            "x-file-details": {"configured": {"dataRegDt": "2024-08-01"}},
+            "paths": {
+                "/3057229/v1/uddi:configured": {
+                    "get": {
+                        "summary": "부산교통공사_시간대별 승하차인원_20240731",
+                        "responses": {"200": {"schema": {"$ref": "#/definitions/configured"}}},
+                    }
+                }
+            },
+        }
+    )
+
+    assert revision.published_at.isoformat() == "2024-08-01"
+    assert revision.metadata["published_at_quality"] == "portal_metadata"
 
 
 def test_revision_pager_keeps_each_selected_uddi_page_at_the_source_grain() -> None:

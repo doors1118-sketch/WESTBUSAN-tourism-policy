@@ -1,5 +1,5 @@
 import json
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from westbusan.db import Database
@@ -10,6 +10,7 @@ from westbusan.transport.load import (
     TransportMeasure,
     load_transport,
     normalize_transport_row,
+    normalize_transport_rows,
 )
 
 
@@ -72,7 +73,7 @@ def test_normalize_official_od_row_keeps_all_location_codes_without_inventing_mo
 def test_normalize_srt_keeps_boarding_and_alighting_as_separate_native_measures() -> None:
     record = normalize_transport_row(
         "srt_station_boarding_file",
-        {"년월": "202408", "역명": "부산역", "승차인원": 120, "하차인원": 110, "비고": "잠정"},
+        {"집계년도": 2024, "집계월": 8, "역명": "부산역", "승차인원": 120, "하차인원": 110, "비고": "잠정"},
     )
 
     assert [(measure.metric_code, measure.value) for measure in record.measures] == [
@@ -82,6 +83,44 @@ def test_normalize_srt_keeps_boarding_and_alighting_as_separate_native_measures(
     assert record.dimensions["비고"] == "잠정"
     assert "승차인원" not in record.dimensions
     assert "하차인원" not in record.dimensions
+
+
+def test_normalize_wide_srt_boarding_unpivots_month_columns_without_inventing_alighting() -> None:
+    records = normalize_transport_rows(
+        "srt_station_boarding_file",
+        {"승차역": "부산역", "2019년1월": 30, "2019년2월": 40, "권역": "부산"},
+    )
+
+    assert [record.period for record in records] == ["2019-01", "2019-02"]
+    assert all(record.alighting is None for record in records)
+    assert [(measure.metric_code, measure.value) for measure in records[0].measures] == [
+        ("srt_boarding", 30)
+    ]
+    assert records[0].dimensions["권역"] == "부산"
+
+
+def test_korail_survey_uses_only_reviewed_measure_fields_and_fixed_context_period() -> None:
+    record = normalize_transport_row(
+        "korail_workplace_ticketing_file",
+        {
+            "고객등급": "일반",
+            "권종": "일반",
+            "열차종": "KTX",
+            "발매구분": "창구",
+            "근무지시도코드": 26,
+            "근무지시군구코드": 26530,
+            "근무지시군구명": "사상구",
+            "차종": "승용",
+            "이용인원": 100,
+        },
+    )
+
+    assert record.period == "2022-04..2022-06"
+    assert [(measure.metric_code, measure.value, measure.unit) for measure in record.measures] == [
+        ("korail_workplace_passenger_count", 100, "passengers")
+    ]
+    assert record.dimensions["근무지시군구코드"] == 26530
+    assert record.dimensions["고객등급"] == "일반"
 
 
 def test_load_transport_registers_static_korail_file_at_native_grain(tmp_path: Path) -> None:
@@ -102,10 +141,10 @@ def test_load_transport_registers_static_korail_file_at_native_grain(tmp_path: P
     assert db.query(
         "select period, metric_code, unit, source_revision from fact_transport_flow order by district"
     ) == [
-        ("2022-08", "korail_workplace_count", "source_native", db.query("select content_hash from raw_artifact")[0][0]),
-        ("2022-08", "korail_workplace_count", "source_native", db.query("select content_hash from raw_artifact")[0][0]),
+        ("2022-04..2022-06", "korail_workplace_passenger_count", "passengers", db.query("select content_hash from raw_artifact")[0][0]),
+        ("2022-04..2022-06", "korail_workplace_passenger_count", "passengers", db.query("select content_hash from raw_artifact")[0][0]),
     ]
-    assert db.query("select source_date from raw_artifact") == [(date(2022, 1, 1),)]
+    assert db.query("select source_date from raw_artifact") == [(None,)]
 
 
 def test_repeated_file_hash_is_auditable_without_duplicate_transport_facts(tmp_path: Path) -> None:
@@ -204,6 +243,12 @@ def test_live_collectors_store_odcloud_and_data_go_pages_before_transport_facts(
     )
     assert db.query("select count(*) from raw_artifact") == [(2,)]
     assert db.query("select count(*) from fact_transport_flow") == [(4,)]
+    assert '"row_count":1' in db.query(
+        "select request_json from raw_artifact where source_id = 'busan_metro_odcloud_discovery'"
+    )[0][0]
+    assert '"row_count": 1' in db.query(
+        "select detail_json from source_status where source_id = 'busan_metro_odcloud_discovery' order by checked_at desc"
+    )[0][0]
     assert db.query(
         "select distinct source_revision from fact_transport_flow where source_id = 'busan_metro_odcloud_discovery'"
     )[0][0].startswith("odcloud:99999999-9999-9999-9999-999999999999:")
