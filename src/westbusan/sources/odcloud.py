@@ -22,6 +22,7 @@ _DATE = re.compile(r"(?<!\d)((?:19|20)\d{2})[^\d]?(\d{2})[^\d]?(\d{2})(?!\d)")
 _PUBLIC_DATA_PATH = re.compile(r"/data/(\d+)/fileData\.do")
 _INPUT_TAG = re.compile(r"<input\b[^>]*>", re.IGNORECASE)
 _ATTRIBUTE = re.compile(r"([:\w-]+)\s*=\s*([\"'])(.*?)\2", re.IGNORECASE)
+_DATASET_HOST = "api.odcloud.kr"
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,15 +43,36 @@ class DatasetRevision:
     portal_detail_raw_body: bytes | None = None
 
 
+class _DatasetHostAuth(httpx.Auth):
+    """Attach the ODCloud credential only to its official dataset host."""
+
+    def __init__(self, api_key: str) -> None:
+        self.api_key = api_key
+
+    def auth_flow(self, request: httpx.Request):
+        if request.url.scheme == "https" and request.url.host == _DATASET_HOST:
+            request.headers["Authorization"] = self.api_key
+        else:
+            request.headers.pop("Authorization", None)
+        yield request
+
+
+def build_odcloud_metadata_client(
+    *, transport: httpx.BaseTransport | None = None
+) -> SafeHttpClient:
+    """Build an unauthenticated client for public Swagger and portal metadata."""
+    return SafeHttpClient(httpx.Client(transport=transport, timeout=30.0))
+
+
 def build_odcloud_client(
     api_key: str, *, transport: httpx.BaseTransport | None = None
 ) -> SafeHttpClient:
-    """Build an ODCloud client that keeps its credential out of request metadata."""
+    """Build a dataset client whose credential is scoped to ``api.odcloud.kr``."""
     if not api_key:
         raise ValueError("ODCloud API key must not be empty")
     return SafeHttpClient(
         httpx.Client(
-            headers={"Authorization": api_key}, transport=transport, timeout=30.0
+            auth=_DatasetHostAuth(api_key), transport=transport, timeout=30.0
         )
     )
 
@@ -380,6 +402,7 @@ def _page_integer(decoded: Mapping[str, object], names: tuple[str, ...], default
 __all__ = [
     "DatasetRevision",
     "build_odcloud_client",
+    "build_odcloud_metadata_client",
     "discover_latest_dataset",
     "iter_revision_pages",
     "select_latest_revision",

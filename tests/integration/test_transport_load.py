@@ -3,13 +3,15 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
+import westbusan.transport.load as transport_load_module
 from westbusan.db import Database
 from westbusan.http import HttpResult, SafeHttpClient
 from westbusan.models import RunContext
 from westbusan.sources.files import read_tabular_rows
-from westbusan.sources.odcloud import discover_latest_dataset
+from westbusan.sources.odcloud import build_odcloud_client, discover_latest_dataset
 from westbusan.sources.registry import SourceRegistry, record_inspection
 from westbusan.transport.load import (
     TransportMeasure,
@@ -133,6 +135,7 @@ def test_korail_residence_survey_preserves_legal_dong_codes_as_dimensions() -> N
     ]
     assert record.dimensions["법정동시도코드"] == "26"
     assert record.dimensions["법정동시군구코드"] == "380"
+    assert record.dimensions["차량보유"] == "미보유"
 
 
 def test_load_transport_registers_static_korail_file_at_native_grain(tmp_path: Path) -> None:
@@ -311,6 +314,77 @@ def test_live_collectors_store_odcloud_and_data_go_pages_before_transport_facts(
     requests = db.query("select request_json from raw_artifact")
     assert all("data-go-secret" not in request[0] for request in requests)
     assert all("odcloud-secret" not in request[0] for request in requests)
+
+
+def test_live_odcloud_collection_scopes_credential_to_dataset_host(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data_dir = tmp_path / "data"
+    db = Database(data_dir / "test.duckdb", Path("sql"))
+    db.migrate()
+    spec = SourceRegistry.load(Path("config/sources.yaml")).get(
+        "busan_metro_odcloud_discovery"
+    )
+    registry = SourceRegistry((spec,))
+    swagger = Path("tests/fixtures/odcloud/swagger.json").read_bytes()
+    file_detail = Path("tests/fixtures/odcloud/file_detail.json").read_bytes()
+    metro_row = json.loads(
+        Path("tests/fixtures/transport/metro_rows.json").read_text(encoding="utf-8")
+    )[0]
+    outgoing: list[tuple[str, str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        outgoing.append((request.url.host, request.headers.get("Authorization")))
+        if request.url.host == "infuser.odcloud.kr":
+            return httpx.Response(200, content=swagger)
+        if request.url.host == "www.data.go.kr" and request.url.path.endswith("fileData.do"):
+            return httpx.Response(
+                200,
+                content=(
+                    b'<html><body><input id="publicDataDetailPk" '
+                    b'value="uddi:99999999-9999-9999-9999-999999999999"></body></html>'
+                ),
+                headers={"content-type": "text/html"},
+            )
+        if request.url.host == "www.data.go.kr":
+            return httpx.Response(200, content=file_detail)
+        if request.url.host == "api.odcloud.kr":
+            return httpx.Response(
+                200,
+                json={"data": [metro_row], "totalCount": 1, "page": 1, "perPage": 1000},
+            )
+        raise AssertionError(request.url)
+
+    transport = httpx.MockTransport(handler)
+    metadata_client = SafeHttpClient(httpx.Client(transport=transport), sleeper=lambda _: None)
+    dataset_client = build_odcloud_client("odcloud-secret", transport=transport)
+    monkeypatch.setattr(
+        transport_load_module,
+        "build_odcloud_metadata_client",
+        lambda: metadata_client,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        transport_load_module, "build_odcloud_client", lambda _: dataset_client
+    )
+    monkeypatch.setenv("WESTBUSAN_ENABLE_LIVE_TRANSPORT", "true")
+    monkeypatch.setenv("ODCLOUD_API_KEY", "odcloud-secret")
+
+    result = load_transport(
+        db,
+        registry,
+        RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == 1
+    assert [authorization for host, authorization in outgoing if host == "api.odcloud.kr"] == [
+        "odcloud-secret"
+    ]
+    assert all(
+        authorization is None
+        for host, authorization in outgoing
+        if host in {"infuser.odcloud.kr", "www.data.go.kr"}
+    )
 
 
 @pytest.mark.integration

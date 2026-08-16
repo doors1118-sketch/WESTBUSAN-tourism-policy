@@ -24,6 +24,7 @@ from westbusan.sources.datagokr import DataGoKrPager
 from westbusan.sources.files import FileSource, read_tabular_rows
 from westbusan.sources.odcloud import (
     build_odcloud_client,
+    build_odcloud_metadata_client,
     discover_latest_dataset,
     iter_revision_pages,
 )
@@ -228,8 +229,11 @@ def _load_live(
         return 0, 0, False
     try:
         if spec.source_id in _METRO_SOURCES:
-            metro_client = client or build_odcloud_client(os.environ["ODCLOUD_API_KEY"])
-            return _load_odcloud(db, raw_store, spec, run, metro_client)
+            metadata_client = client or build_odcloud_metadata_client()
+            dataset_client = client or build_odcloud_client(os.environ["ODCLOUD_API_KEY"])
+            return _load_odcloud(
+                db, raw_store, spec, run, metadata_client, dataset_client
+            )
         if spec.source_id in _OD_SOURCES:
             return _load_od(
                 db,
@@ -259,10 +263,11 @@ def _load_odcloud(
     raw_store: RawStore,
     spec: SourceSpec,
     run: RunContext,
-    client: SafeHttpClient,
+    metadata_client: SafeHttpClient,
+    dataset_client: SafeHttpClient,
 ) -> tuple[int, int, bool]:
     revision = discover_latest_dataset(
-        _namespace(spec.url), client, portal_detail_url=spec.portal_detail_url
+        _namespace(spec.url), metadata_client, portal_detail_url=spec.portal_detail_url
     )
     source_revision = f"odcloud:{revision.uddi}:{revision.schema_fingerprint}"
     loaded = artifacts = 0
@@ -294,7 +299,9 @@ def _load_odcloud(
         )
         db.record_artifact(metadata_artifact)
         artifacts += 1
-    for page in iter_revision_pages(_namespace(spec.url), revision, client, page_size=spec.page_size):
+    for page in iter_revision_pages(
+        _namespace(spec.url), revision, dataset_client, page_size=spec.page_size
+    ):
         if revision.row_count is None:
             revision = replace(revision, row_count=page.total_count)
         artifact = raw_store.write(

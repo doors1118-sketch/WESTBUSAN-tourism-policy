@@ -12,15 +12,26 @@ from westbusan.sources.odcloud import (
 )
 
 
-def test_odcloud_client_sends_the_key_in_authorization_header_not_a_query_string() -> None:
+def test_odcloud_client_scopes_the_key_to_the_dataset_host_not_a_query_string() -> None:
+    hosts: list[tuple[str, str | None]] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
-        assert request.headers["Authorization"] == "test-key"
+        hosts.append((request.url.host, request.headers.get("Authorization")))
         assert "test-key" not in str(request.url)
         return httpx.Response(200, json={"data": [], "totalCount": 0})
 
     client = build_odcloud_client("test-key", transport=httpx.MockTransport(handler))
 
+    assert client.get("https://infuser.odcloud.kr/oas/docs", {"namespace": "3057229/v1"}).status_code == 200
+    assert client.get("https://www.data.go.kr/data/3057229/fileData.do", {}).status_code == 200
     assert client.get("https://api.odcloud.kr/api/example", {"page": 1}).status_code == 200
+    assert client.get("http://api.odcloud.kr/api/example", {"page": 1}).status_code == 200
+    assert hosts == [
+        ("infuser.odcloud.kr", None),
+        ("www.data.go.kr", None),
+        ("api.odcloud.kr", "test-key"),
+        ("api.odcloud.kr", None),
+    ]
 
 
 def test_select_latest_revision_uses_data_cutoff_then_identifier_when_publication_is_unknown() -> None:
