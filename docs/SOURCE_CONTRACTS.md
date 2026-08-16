@@ -8,6 +8,11 @@
 수집감사 수치는 보존하되 해당 page를 staging에 적재하지 않고
 `SCHEMA_CHANGED`로 차단한다.
 
+행이 있는 응답은 공급자가 실제 반환한 `totalCount`, `pageNo`, `numOfRows`가 모두
+필수다. 요청 page와 반환 page, page 간 `totalCount`를 검증하고, 공급자 page-size
+cap이 요청보다 작아도 누적 반환 행 수를 기준으로 다음 page를 계속 수집한다.
+표준 no-data envelope만 paging metadata 없는 명시적 empty로 허용한다.
+
 | source_id | 공식 API operation | 역할 |
 |---|---|---|
 | `lodgings` | [일반숙박업 info](https://apis.data.go.kr/1741000/lodgings/info) | 공중위생법 계열 숙박 인허가 |
@@ -32,7 +37,10 @@ operation 계약을 원천별로 검토하고 bounded backfill 및 품질 게이
   `04` 취소·말소·정지 계열로 고정한다. 상세 상태의 코드·명칭은
   `DTL_SALS_STTS_CD`, `DTL_SALS_STTS_NM`에 별도 보존한다.
 - `LAST_MDFCN_YMD`, `DATA_UPDT_YMD`, `DAT_UPDT_PNT`는 수정·갱신 증거로
-  각각 보존한다.
+  각각 보존하며 날짜는 실제 date와 `parsed`/`missing`/`invalid` 품질로 분리한다.
+  비어 있지 않은 잘못된 날짜는 게시를 차단한다.
+- 전체 상태 `03`과 보수적으로 `04`는 유효한 `CLSBIZ_YMD`가 없으면 상태 의미가
+  완결되지 않은 것으로 보고 게시를 차단한다.
 - `XCRD`, `YCRD`는 위·경도 각도가 아니라 `EPSG:5174` 투영좌표다. 변환·검증
   전에는 degree 거리 계산 입력으로 사용하지 않는다.
 
@@ -65,4 +73,7 @@ operation 계약을 원천별로 검토하고 bounded backfill 및 품질 게이
 ```
 
 일부 인자, 관측과 다른 값, 자동 추론은 승인되지 않는다. 승인 후 동일 업무일
-run을 재실행하고 품질 결과를 확인한다.
+run을 재실행하고 품질 결과를 확인한다. 승인은 `quality_schema_approval_event`에
+append-only로 남고 `quality_schema_baseline`은 최신 사건을 가리키는 projection이다.
+사건 참조가 없는 migration 이전 baseline은 품질 게이트에서 승인으로 인정하지
+않으므로 운영자가 위 명령으로 다시 확인해야 한다.

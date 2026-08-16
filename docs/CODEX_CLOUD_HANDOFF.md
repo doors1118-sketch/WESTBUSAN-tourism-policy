@@ -72,7 +72,9 @@ Linux 기반 환경이면 마지막 세 명령의 interpreter를 `.venv/bin/pyth
 
 5. 출력된 source/operation/partition/fingerprint와 raw·공식 operation을 사람이
    검토한 뒤 네 값을 정확히 확인하고 운영자·사유를 기록합니다. 아래 값은 실제
-   관측값으로 바꿉니다. 일부 입력 또는 불일치는 승인되지 않습니다.
+   관측값으로 바꿉니다. 일부 입력 또는 불일치는 승인되지 않습니다. 승인은
+   append-only 사건으로 보존되며, 사건 참조가 없는 기존 baseline은 운영자가
+   재확인하기 전까지 게시를 승인하지 못합니다.
 
 ```powershell
 .\.venv\Scripts\python.exe -m westbusan.cli schema-approve --source-id lodgings --operation info --partition 2026-08-16 --fingerprint <관측값> --approver <운영자> --rationale "공식 원문 검토"
@@ -113,8 +115,8 @@ git log -5 --oneline
 
 ## 로컬 검증 상태 (2026-08-16)
 
-- Task 12 focused (transport 포함): 40 passed, 1 skipped.
-- 전체 pytest: 185 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
+- source-contract focused: 157 passed, 1 skipped.
+- 전체 pytest: 240 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
 - Ruff: all checks passed.
 - CLI `--help`: schema 승인 명령을 포함한 운영 명령 표시, exit 0.
 - ignored 임시 DB `init-db`: exit 0.
