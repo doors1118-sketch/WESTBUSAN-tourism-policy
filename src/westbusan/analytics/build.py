@@ -402,6 +402,8 @@ def _monthly_native_sum(
     """Sum only repeated rows of one documented compatible source-native metric."""
     if len(period) != 7 or period[4] != "-":
         return None, "missing_period"
+    visible_runs = _visible_run_ids(db, run_id)
+    placeholders = ",".join("?" for _ in visible_runs)
     found = db.query(
         f"""with current_revision as (
                 select *, row_number() over (
@@ -409,10 +411,10 @@ def _monthly_native_sum(
                     order by loaded_at desc, source_revision desc
                 ) as revision_rank
                 from {table}
-                where loaded_run_id = ? and district = ? and period like ? and source_id = ?
+                where loaded_run_id in ({placeholders}) and district = ? and period like ? and source_id = ?
                   and metric_code = ? and unit = ?
             ) select metric_value from current_revision where revision_rank = 1""",
-        [run_id, district, f"{period}%", source_id, metric_code, unit],
+        [*visible_runs, district, f"{period}%", source_id, metric_code, unit],
     )
     if not found:
         return None, "missing"
@@ -533,16 +535,9 @@ def _growth_and_supply_bands(rows: list[dict[str, object]]) -> None:
                     row["growth_gap"] = visitor_growth - supply_growth
                     row["supply_growth"] = supply_growth
                     row["evidence"]["visitor_growth_minus_room_supply_growth"] = {
-                        "metric_name": "visitor_growth_minus_room_supply_growth",
-                        "value": row["growth_gap"], "numerator": visitor_growth,
-                        "denominator": 1.0,
-                        "coverage": min(float(row["values"]["coverage"] or 0), float(prior["values"]["coverage"] or 0)),
+                        **_growth_evidence(row["growth_gap"], float(visitor), float(old_visitor), float(supply), float(old_supply), min(float(row["values"]["coverage"] or 0), float(prior["values"]["coverage"] or 0))),
                         "source_period": str(row["period"]), "previous_period": str(prior["period"]),
                         "metric_source_identity": "tourism_data_lab.visitor_count|inventory.room_count",
-                        "current_visitors": visitor, "previous_visitors": old_visitor,
-                        "current_rooms": supply, "previous_rooms": old_supply,
-                        "visitor_growth": visitor_growth, "supply_growth": supply_growth,
-                        "quality_band": "good",
                     }
                     growth_rows.append(row)
             if "visitor_growth_minus_room_supply_growth" not in row["evidence"]:
@@ -598,7 +593,7 @@ def _replace_comparisons(
                     [float(item["values"]["coverage"]) for item in west + east if item["values"]["coverage"] is not None],
                     default=None,
                 )
-                quality = "good" if value is not None and coverage is not None else "insufficient"
+                quality = _comparison_quality([coverage] if coverage is not None and value is not None else [])
                 evidence = {"west": w, "east": e, "source_period": period,
                             "metric_source_identity": f"mart_region_month:{metric}",
                             "coverage": coverage, "quality_band": quality}
@@ -681,6 +676,61 @@ def _event_changes(db: Database, district: str, period: str) -> tuple[int, int]:
 def _group_band(rows: list[dict[str, object]], key: str) -> str:
     bands = {str(row[key]) for row in rows}
     return next(iter(bands)) if len(bands) == 1 else "unclassified"
+
+
+def _visible_run_ids(db: Database, target_run_id: UUID) -> tuple[UUID, ...]:
+    """Runs whose persisted evidence existed when the target run began."""
+    target = db.query("select started_at::varchar from pipeline_run where run_id = ?", [target_run_id])
+    if not target:
+        return (target_run_id,)
+    rows = db.query(
+        """select run_id from pipeline_run
+        where started_at <= ? order by started_at, run_id""", [target[0][0]]
+    )
+    return tuple(row[0] for row in rows)
+
+
+def _period_metric_set(
+    rooms: list[float | None], *, small_room_threshold: int
+) -> dict[str, object]:
+    """Minimal period-local room distribution used by snapshot reconstruction."""
+    known = [room for room in rooms if room is not None]
+    return {
+        "facilities": len(rooms), "known": len(known),
+        "room_sum": sum(known) if known else None,
+        "room_mean": mean(known) if known else None,
+        "room_median": median(known) if known else None,
+        "q1": _quantile(known, .25), "q3": _quantile(known, .75),
+        "coverage": len(known) / len(rooms) if rooms else None,
+        "small": sum(room <= small_room_threshold for room in known) if known else None,
+        "small_share": sum(room <= small_room_threshold for room in known) / len(known) if known else None,
+    }
+
+
+def _growth_evidence(
+    gap: float, current_visitors: float, previous_visitors: float,
+    current_rooms: float, previous_rooms: float, coverage: float,
+) -> dict[str, object]:
+    visitor_growth = current_visitors / previous_visitors - 1
+    supply_growth = current_rooms / previous_rooms - 1
+    return {"metric_name": "visitor_growth_minus_room_supply_growth", "value": gap,
+            "numerator": gap, "denominator": 1.0, "coverage": coverage,
+            "current_visitors": current_visitors, "previous_visitors": previous_visitors,
+            "current_rooms": current_rooms, "previous_rooms": previous_rooms,
+            "visitor_growth": visitor_growth, "supply_growth": supply_growth,
+            "quality_band": _comparison_quality([coverage])}
+
+
+def _group_pressure(values: list[tuple[float, float]]) -> float | None:
+    numerator, denominator = sum(item[0] for item in values), sum(item[1] for item in values)
+    return numerator * 100 / denominator if denominator > 0 else None
+
+
+def _comparison_quality(coverages: list[float]) -> QualityBand:
+    if not coverages:
+        return "insufficient"
+    minimum = min(coverages)
+    return "good" if minimum >= .8 else "warning" if minimum > 0 else "insufficient"
 
 
 def _next_month(period: str) -> str | None:

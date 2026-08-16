@@ -44,3 +44,17 @@ Validation after rereview fixes: focused analytics tests: 5 passed; full suite: 
 - Policy evaluation accepts a fully covered period-compatible group rather than a current-only dead path, while continuing to use the configured small-room threshold.
 
 Validation after round 3: focused analytics tests: 5 passed; full suite: 158 passed, 3 skipped; Ruff: passed; `git diff --check`: passed.
+
+## Rereview fix round 4 — adversarial regressions
+
+Added five named adversarial unit regressions before implementation changes:
+
+- `test_visible_runs_exclude_later_backfill_and_include_prior_history`
+- `test_period_metric_set_keeps_historical_unknown_rooms_in_coverage`
+- `test_growth_evidence_value_matches_the_stored_growth_gap`
+- `test_group_pressure_uses_combined_raw_numerators_and_denominators`
+- `test_division_quality_warns_for_partial_coverage`
+
+The reusable visible-run rule now admits evidence from the target run and earlier runs only. Native monthly aggregation applies that rule and chooses one latest revision per period/dimension observation. Period-local metric construction preserves unknown-room coverage; growth evidence stores the actual gap as numerator/value; group pressure combines raw visitors and rooms; and partial comparison coverage is warning rather than good.
+
+Validation after round 4: `tests/unit/test_analytics.py tests/integration/test_marts.py`: 10 passed; full suite: 163 passed, 3 skipped; Ruff: passed; `git diff --check`: passed.

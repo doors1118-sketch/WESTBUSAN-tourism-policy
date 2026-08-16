@@ -1,7 +1,16 @@
 from pathlib import Path
 from uuid import uuid4
 
-from westbusan.analytics.build import RegionMetrics, _monthly_native_sum, policy_signals
+from westbusan.analytics.build import (
+    RegionMetrics,
+    _comparison_quality,
+    _group_pressure,
+    _growth_evidence,
+    _monthly_native_sum,
+    _period_metric_set,
+    _visible_run_ids,
+    policy_signals,
+)
 from westbusan.db import Database
 
 
@@ -81,3 +90,43 @@ def test_monthly_native_metrics_sum_daily_visitors_but_never_select_other_consum
         db, run_id, "fact_tourism_demand", "사하구", "2026-01", "area_tourism_consumption",
         "area_tar_svc_dem_list.1107", "KRW",
     )[0] == 250
+
+
+def test_visible_runs_exclude_later_backfill_and_include_prior_history(tmp_path: Path) -> None:
+    """Catches an older first build seeing a later run's backfilled observation."""
+    db = Database(tmp_path / "visibility.duckdb", Path("sql"))
+    db.migrate()
+    first, second = uuid4(), uuid4()
+    db.connection.execute("insert into pipeline_run values (?, 'test', '2026-01-10', 'DONE')", [first])
+    db.connection.execute("insert into pipeline_run values (?, 'test', '2026-02-10', 'DONE')", [second])
+
+    assert _visible_run_ids(db, first) == (first,)
+    assert _visible_run_ids(db, second) == (first, second)
+
+
+def test_period_metric_set_keeps_historical_unknown_rooms_in_coverage() -> None:
+    """Catches substituting current inventory for a month with one known of two facilities."""
+    metrics = _period_metric_set([10.0, None], small_room_threshold=20)
+
+    assert metrics["room_sum"] == 10.0
+    assert metrics["facilities"] == 2
+    assert metrics["coverage"] == 0.5
+
+
+def test_growth_evidence_value_matches_the_stored_growth_gap() -> None:
+    """Catches evidence whose numerator describes visitor growth instead of the gap."""
+    evidence = _growth_evidence(0.25, 100.0, 80.0, 100.0, 100.0, 0.8)
+
+    assert evidence["value"] == 0.25
+    assert evidence["numerator"] == 0.25
+    assert evidence["denominator"] == 1.0
+
+
+def test_group_pressure_uses_combined_raw_numerators_and_denominators() -> None:
+    """Catches summing district rates into a fictitious group pressure of 200."""
+    assert _group_pressure([(100.0, 100.0), (100.0, 100.0)]) == 100.0
+
+
+def test_division_quality_warns_for_partial_coverage() -> None:
+    """Catches reporting a 0.5-covered West/East division as good evidence."""
+    assert _comparison_quality([1.0, 0.5]) == "warning"
