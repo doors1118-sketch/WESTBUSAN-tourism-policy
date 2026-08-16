@@ -31,6 +31,10 @@ class SchemaError(ApiError):
 class HttpStatusError(ApiError):
     """An HTTP response could not be completed successfully."""
 
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
 
 @dataclass(frozen=True, slots=True)
 class HttpResult:
@@ -81,7 +85,7 @@ class SafeHttpClient:
                 self.sleeper(_WAITS[attempt])
                 continue
             if response.status_code >= 400:
-                raise HttpStatusError(f"HTTP {response.status_code}")
+                raise HttpStatusError(f"HTTP {response.status_code}", response.status_code)
             return result
         raise HttpStatusError("request failed after retries") from last_error
 

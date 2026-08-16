@@ -37,7 +37,7 @@ class SourceSpec:
     cadence: str = "daily"
     additive_facility: bool = True
     source_type: str = "api"
-    required_parameters: tuple[str, ...] = ()
+    required_parameters: Mapping[str, object] = field(default_factory=dict)
     response_row_path: str | None = None
     portal_detail_url: str | None = None
     inspection_required: bool = False
@@ -58,6 +58,7 @@ SourceStatusCode = Literal[
     "EMPTY",
     "QUOTA_EXCEEDED",
     "SCHEMA_CHANGED",
+    "HTTP_FAILED",
 ]
 
 

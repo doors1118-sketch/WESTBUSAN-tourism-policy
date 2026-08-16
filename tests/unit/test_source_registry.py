@@ -136,6 +136,36 @@ def test_probe_classifies_portal_and_schema_errors(
     assert status.status == expected_status
 
 
+@pytest.mark.parametrize(
+    ("http_status", "expected_status"),
+    [
+        (401, "AUTH_FAILED"),
+        (403, "AUTH_FAILED"),
+        (429, "QUOTA_EXCEEDED"),
+        (503, "HTTP_FAILED"),
+    ],
+)
+def test_probe_classifies_conventional_http_statuses(
+    tmp_path: Path, monkeypatch, http_status: int, expected_status: str
+) -> None:
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-service-key")
+    registry = SourceRegistry.load(Path("tests/fixtures/sources.yaml"))
+    db = Database(tmp_path / "status.duckdb", Path("sql"))
+    db.migrate()
+    client = SafeHttpClient(
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(http_status, content=b"upstream failure")
+            )
+        ),
+        sleeper=lambda _: None,
+    )
+
+    status = probe_source(registry.get("ready_source"), client, db)
+
+    assert status.status == expected_status
+
+
 def test_inspection_records_operation_details_before_probe(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-service-key")
     registry = SourceRegistry.load(Path("tests/fixtures/sources.yaml"))
@@ -145,7 +175,52 @@ def test_inspection_records_operation_details_before_probe(tmp_path: Path, monke
         registry.get("unresolved_source"),
         db,
         operation="selectedOperation",
-        required_parameters=("baseYm",),
+        required_parameters={"baseYm": "202608"},
+        response_row_path="response.body.items.item",
+        portal_detail_url="https://data.go.kr/detail/example",
+    )
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.url.params)
+        return httpx.Response(
+            200,
+            json={
+                "response": {
+                    "body": {"items": {"item": [{"id": "one"}]}, "totalCount": 1}
+                }
+            },
+        )
+
+    client = SafeHttpClient(
+        httpx.Client(transport=httpx.MockTransport(handler)),
+        sleeper=lambda _: None,
+    )
+
+    status = probe_source(registry.get("unresolved_source"), client, db)
+
+    assert status.status == "READY"
+    assert inspected.operation == "selectedOperation"
+    assert captured["baseYm"] == "202608"
+    detail = db.query(
+        "select detail_json from source_status where source_id = ? order by checked_at",
+        ["unresolved_source"],
+    )[0][0]
+    assert "https://data.go.kr/detail/example" in detail
+
+
+def test_probe_rejects_inspection_response_with_mismatched_row_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-service-key")
+    registry = SourceRegistry.load(Path("tests/fixtures/sources.yaml"))
+    db = Database(tmp_path / "status.duckdb", Path("sql"))
+    db.migrate()
+    record_inspection(
+        registry.get("unresolved_source"),
+        db,
+        operation="selectedOperation",
+        required_parameters={"baseYm": "202608"},
         response_row_path="response.body.items.item",
         portal_detail_url="https://data.go.kr/detail/example",
     )
@@ -162,13 +237,7 @@ def test_inspection_records_operation_details_before_probe(tmp_path: Path, monke
 
     status = probe_source(registry.get("unresolved_source"), client, db)
 
-    assert status.status == "READY"
-    assert inspected.operation == "selectedOperation"
-    detail = db.query(
-        "select detail_json from source_status where source_id = ? order by checked_at",
-        ["unresolved_source"],
-    )[0][0]
-    assert "https://data.go.kr/detail/example" in detail
+    assert status.status == "SCHEMA_CHANGED"
 
 
 def test_inspection_command_records_reviewed_portal_metadata(
@@ -189,7 +258,7 @@ def test_inspection_command_records_reviewed_portal_metadata(
             "--operation",
             "selectedOperation",
             "--required-parameter",
-            "baseYm",
+            "baseYm=202608",
             "--response-row-path",
             "response.body.items.item",
             "--portal-detail-url",

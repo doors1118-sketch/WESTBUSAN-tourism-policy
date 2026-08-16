@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
+import xmltodict
 import yaml
 
 from westbusan.db import Database
@@ -66,7 +67,7 @@ def record_inspection(
     db: Database,
     *,
     operation: str,
-    required_parameters: tuple[str, ...],
+    required_parameters: Mapping[str, object],
     response_row_path: str,
     portal_detail_url: str,
 ) -> SourceSpec:
@@ -80,10 +81,12 @@ def record_inspection(
         (operation.strip(), response_row_path.strip(), portal_detail_url.strip())
     ):
         raise ValueError("inspection requires operation, row path, and portal detail URL")
+    if not _valid_parameters(required_parameters):
+        raise ValueError("inspection required parameters must be non-empty string keys")
     inspected = replace(
         spec,
         operation=operation.strip(),
-        required_parameters=tuple(required_parameters),
+        required_parameters=dict(required_parameters),
         response_row_path=response_row_path.strip(),
         portal_detail_url=portal_detail_url.strip(),
         inspection_required=True,
@@ -95,7 +98,7 @@ def record_inspection(
             "inspection": {
                 "operation": inspected.operation,
                 "portal_detail_url": inspected.portal_detail_url,
-                "required_parameters": list(inspected.required_parameters),
+                "required_parameters": dict(inspected.required_parameters),
                 "response_row_path": inspected.response_row_path,
             }
         },
@@ -112,7 +115,9 @@ def inspection_command(arguments: list[str] | None = None) -> int:
     parser.add_argument("--db-path", type=Path, required=True)
     parser.add_argument("--migrations-dir", type=Path, required=True)
     parser.add_argument("--operation", required=True)
-    parser.add_argument("--required-parameter", action="append", default=[])
+    parser.add_argument(
+        "--required-parameter", action="append", default=[], type=_parameter_assignment
+    )
     parser.add_argument("--response-row-path", required=True)
     parser.add_argument("--portal-detail-url", required=True)
     args = parser.parse_args(arguments)
@@ -123,7 +128,7 @@ def inspection_command(arguments: list[str] | None = None) -> int:
         SourceRegistry.load(args.sources).get(args.source_id),
         db,
         operation=args.operation,
-        required_parameters=tuple(args.required_parameter),
+        required_parameters=dict(args.required_parameter),
         response_row_path=args.response_row_path,
         portal_detail_url=args.portal_detail_url,
     )
@@ -184,6 +189,7 @@ def probe_source(spec: SourceSpec, client: SafeHttpClient, db: Database) -> Sour
         )
 
     params: dict[str, object] = {
+        **spec.required_parameters,
         "serviceKey": service_key,
         "pageNo": 1,
         "numOfRows": 1,
@@ -191,13 +197,22 @@ def probe_source(spec: SourceSpec, client: SafeHttpClient, db: Database) -> Sour
     }
     try:
         result = client.get(spec.endpoint_url, params)
+        if spec.inspection_required and not _response_path_exists(
+            result.body, result.content_type, spec.response_row_path
+        ):
+            raise SchemaError("response does not contain the inspected row path")
         page = parse_data_page(result.body, result.content_type)
     except AuthenticationError as error:
         return _persist(db, _status(spec.source_id, "AUTH_FAILED", _error_detail(error)))
     except QuotaError as error:
         return _persist(db, _status(spec.source_id, "QUOTA_EXCEEDED", _error_detail(error)))
-    except (SchemaError, HttpStatusError) as error:
+    except SchemaError as error:
         return _persist(db, _status(spec.source_id, "SCHEMA_CHANGED", _error_detail(error)))
+    except HttpStatusError as error:
+        return _persist(
+            db,
+            _status(spec.source_id, _http_status(error), _error_detail(error)),
+        )
 
     status: SourceStatusCode = "READY" if page.rows else "EMPTY"
     return _persist(
@@ -220,11 +235,9 @@ def _source_spec(entry: object) -> SourceSpec:
         raise TypeError("each source configuration entry must be a mapping")
     source_id = _required_string(entry, "source_id")
     url = _required_string(entry, "url")
-    required_parameters = entry.get("required_parameters", [])
-    if not isinstance(required_parameters, list) or not all(
-        isinstance(value, str) for value in required_parameters
-    ):
-        raise ValueError(f"{source_id}: required_parameters must be a list of strings")
+    required_parameters = entry.get("required_parameters", {})
+    if not _valid_parameters(required_parameters):
+        raise ValueError(f"{source_id}: required_parameters must be a mapping")
     return SourceSpec(
         source_id=source_id,
         url=url,
@@ -236,7 +249,7 @@ def _source_spec(entry: object) -> SourceSpec:
         cadence=_string(entry, "cadence", "daily"),
         additive_facility=_boolean(entry, "additive_facility", True),
         source_type=_string(entry, "source_type", "api"),
-        required_parameters=tuple(required_parameters),
+        required_parameters=dict(required_parameters),
         response_row_path=_optional_string(entry, "response_row_path"),
         portal_detail_url=_optional_string(entry, "portal_detail_url"),
         inspection_required=_boolean(entry, "inspection_required", False),
@@ -249,6 +262,13 @@ def _required_string(entry: Mapping[str, object], key: str) -> str:
     if value is None:
         raise ValueError(f"source configuration is missing {key}")
     return value
+
+
+def _parameter_assignment(value: str) -> tuple[str, str]:
+    key, separator, parameter_value = value.partition("=")
+    if not separator or not key.strip():
+        raise argparse.ArgumentTypeError("required parameters use name=value")
+    return key.strip(), parameter_value
 
 
 def _optional_string(entry: Mapping[str, object], key: str) -> str | None:
@@ -291,7 +311,7 @@ def _apply_recorded_inspection(spec: SourceSpec, db: Database) -> SourceSpec:
     return replace(
         spec,
         operation=inspection["operation"],
-        required_parameters=tuple(inspection["required_parameters"]),
+        required_parameters=inspection["required_parameters"],
         response_row_path=inspection["response_row_path"],
         portal_detail_url=inspection["portal_detail_url"],
     )
@@ -321,8 +341,7 @@ def _valid_inspection(value: object) -> bool:
         isinstance(value.get("operation"), str)
         and isinstance(value.get("portal_detail_url"), str)
         and isinstance(value.get("response_row_path"), str)
-        and isinstance(value.get("required_parameters"), list)
-        and all(isinstance(parameter, str) for parameter in value["required_parameters"])
+        and _valid_parameters(value.get("required_parameters"))
     )
 
 
@@ -330,13 +349,46 @@ def _inspection_values(spec: SourceSpec) -> dict[str, object]:
     return {
         "operation": spec.operation,
         "portal_detail_url": spec.portal_detail_url,
-        "required_parameters": list(spec.required_parameters),
+        "required_parameters": dict(spec.required_parameters),
         "response_row_path": spec.response_row_path,
     }
 
 
 def _error_detail(error: Exception) -> dict[str, object]:
     return {"error": str(error)}
+
+
+def _valid_parameters(value: object) -> bool:
+    return isinstance(value, Mapping) and all(
+        isinstance(key, str) and key.strip() for key in value
+    )
+
+
+def _response_path_exists(body: bytes, content_type: str, row_path: str | None) -> bool:
+    if row_path is None:
+        return False
+    try:
+        decoded = (
+            xmltodict.parse(body)
+            if "xml" in content_type.lower() or body.lstrip().startswith(b"<")
+            else json.loads(body)
+        )
+    except (TypeError, ValueError):
+        return False
+    value: object = decoded
+    for segment in row_path.split("."):
+        if not isinstance(value, Mapping) or segment not in value:
+            return False
+        value = value[segment]
+    return isinstance(value, (Mapping, list))
+
+
+def _http_status(error: HttpStatusError) -> SourceStatusCode:
+    if error.status_code in {401, 403}:
+        return "AUTH_FAILED"
+    if error.status_code == 429:
+        return "QUOTA_EXCEEDED"
+    return "HTTP_FAILED"
 
 
 def _status(
