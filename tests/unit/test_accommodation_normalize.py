@@ -34,6 +34,18 @@ def test_normalizers_canonicalize_values_without_fabricating_missing_data() -> N
     assert address.district == "사하구"
 
 
+def test_non_busan_street_name_containing_busan_is_not_a_busan_address() -> None:
+    address = normalize_address("경상남도 양산시 물금읍 부산대학로 49")
+    assert address.is_busan is False
+    assert address.district is None
+
+
+def test_busan_locality_without_a_district_is_still_recognized_as_busan() -> None:
+    address = normalize_address("부산광역시 알 수 없는 곳 1")
+    assert address.is_busan is True
+    assert address.district is None
+
+
 def test_aliases_are_case_insensitive_and_preserve_unmapped_payload() -> None:
     row = {
         "mng_no": "BUSAN-2",

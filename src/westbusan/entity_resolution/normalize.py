@@ -40,7 +40,9 @@ def normalize_address(value: str | None) -> NormalizedAddress:
     normalized = " ".join(unicodedata.normalize("NFKC", value).split())
     if not normalized:
         return NormalizedAddress(value=None, district=None, is_busan=False)
-    is_busan = "부산" in normalized
+    is_busan = bool(
+        re.search(r"(?:^|\s)부산(?:광역시|시)?(?=\s|$)", normalized)
+    )
     match = re.search(r"([가-힣]+(?:구|군))", normalized)
     district = match.group(1) if is_busan and match else None
     return NormalizedAddress(value=normalized, district=district, is_busan=is_busan)
