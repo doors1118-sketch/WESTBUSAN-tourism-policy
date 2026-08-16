@@ -43,7 +43,9 @@ class MartBuildResult:
     policy_signal_rows: int
 
 
-def policy_signals(metrics: RegionMetrics) -> list[PolicySignal]:
+def policy_signals(
+    metrics: RegionMetrics, *, small_room_threshold: int = 20
+) -> list[PolicySignal]:
     """Return only signals supported by the evidence matrix.
 
     Building age is deliberately described as an age proxy, not a claim about
@@ -61,7 +63,7 @@ def policy_signals(metrics: RegionMetrics) -> list[PolicySignal]:
         )
     ) and metrics.demand_pressure_band == "high"
     signals: list[PolicySignal] = []
-    if complete_renovation and metrics.median_rooms <= 20 and metrics.small_facility_share >= 0.5 and metrics.building_30y_share >= 0.5:
+    if complete_renovation and metrics.median_rooms <= small_room_threshold and metrics.small_facility_share >= 0.5 and metrics.building_30y_share >= 0.5:
         signals.append(
             PolicySignal(
                 "RENOVATION_SUPPORT",
@@ -93,19 +95,35 @@ def build_marts(db: Database, run_id: UUID, policy: PolicyConfig) -> MartBuildRe
             int(db.query("select count(*) from mart_metric_evidence where run_id = ?", [run_id])[0][0]),
             int(db.query("select count(*) from mart_policy_signal where run_id = ?", [run_id])[0][0]),
         )
-    facilities = _facility_rows(db, run_id)
+    as_of = _as_of_date(db, run_id)
+    facilities = _facility_rows(db, run_id, as_of)
     _replace_facilities(db, run_id, facilities)
     district_metrics = _district_metrics(facilities, policy)
-    periods = _periods(db, district_metrics)
-    records = _region_rows(db, run_id, district_metrics, periods, policy)
+    district_metrics.update(_event_only_districts(db, run_id, as_of, district_metrics))
+    periods = _periods(db, run_id, as_of, district_metrics)
+    records = _region_rows(db, run_id, as_of, district_metrics, periods, policy)
     _replace_regions(db, run_id, records)
     _replace_comparisons(db, run_id, records, facilities)
-    signal_count = _replace_signals(db, run_id, records, facilities)
+    signal_count = _replace_signals(db, run_id, records, facilities, policy)
     evidence_rows = sum(len(row["evidence"]) for row in records)
     return MartBuildResult(len(facilities), len(records), evidence_rows, signal_count)
 
 
-def _facility_rows(db: Database, run_id: UUID) -> list[dict[str, object]]:
+def _as_of_date(db: Database, run_id: UUID) -> date | None:
+    """Use the producing run's cutoff, not whatever state happens to be latest."""
+    rows = db.query("select started_at::date from pipeline_run where run_id = ?", [run_id])
+    if rows:
+        return rows[0][0]
+    rows = db.query(
+        "select max(observed_on) from staging_license_snapshot where last_loaded_run_id = ?",
+        [run_id],
+    )
+    return rows[0][0] if rows and rows[0][0] is not None else None
+
+
+def _facility_rows(
+    db: Database, run_id: UUID, as_of: date | None
+) -> list[dict[str, object]]:
     snapshots = db.query(
         """
         with latest as (
@@ -113,6 +131,7 @@ def _facility_rows(db: Database, run_id: UUID) -> list[dict[str, object]]:
                 partition by source_id, source_record_id order by observed_on desc
             ) as row_num
             from staging_license_snapshot
+            where (? is null and last_loaded_run_id = ?) or observed_on <= ?
         )
         select link.facility_id, facility.district, facility.region_group,
                snap.source_id, snap.room_count, snap.license_date, snap.closure_date,
@@ -124,12 +143,13 @@ def _facility_rows(db: Database, run_id: UUID) -> list[dict[str, object]]:
                          and snap.row_num = 1
         where facility.district is not null and facility.region_group is not null
           and (snap.closure_date is null or snap.closure_date > snap.observed_on)
-        """
+        """,
+        [as_of, run_id, as_of],
     )
     by_facility: dict[object, list[tuple[object, ...]]] = defaultdict(list)
     for row in snapshots:
         by_facility[row[0]].append(row)
-    building_ages = _building_ages(db, by_facility)
+    building_ages = _building_ages(db, by_facility, as_of, run_id)
     rows: list[dict[str, object]] = []
     for facility_id, all_items in by_facility.items():
         # A tourist pension is an overlay designation only.  It is retained in
@@ -168,7 +188,7 @@ def _facility_rows(db: Database, run_id: UUID) -> list[dict[str, object]]:
 
 
 def _building_ages(
-    db: Database, facilities: dict[object, list[tuple[object, ...]]]
+    db: Database, facilities: dict[object, list[tuple[object, ...]],], as_of: date | None, run_id: UUID
 ) -> dict[object, tuple[float | None, str, bool | None]]:
     if not facilities:
         return {}
@@ -177,12 +197,14 @@ def _building_ages(
         with latest as (
             select *, row_number() over (partition by building_id order by observed_on desc) as row_num
             from staging_building_snapshot
+            where (? is null and first_loaded_run_id = ?) or observed_on <= ?
         )
         select link.facility_id, snap.approval_date, snap.permit_date, snap.observed_on
         from bridge_facility_building as link
         join dim_building as building on building.building_id = link.building_id
         join latest as snap on snap.building_id = building.building_key and snap.row_num = 1
-        """
+        """,
+        [as_of, run_id, as_of],
     )
     grouped: dict[object, list[tuple[object, ...]]] = defaultdict(list)
     for value in values:
@@ -226,7 +248,15 @@ def _district_metrics(rows: list[dict[str, object]], policy: PolicyConfig) -> di
         coverage = len(known) / len(items) if items else None
         small = sum(room <= policy.small_room_threshold for room in known)
         tourism_rooms = sum(float(item["room_count"]) for item in items if item["tourism"] and item["room_count"] is not None)
-        weighted_age = (sum(float(item["building_age"]) * float(item["room_count"]) for item in items if item["building_age"] is not None and item["room_count"] is not None) / sum(float(item["room_count"]) for item in items if item["building_age"] is not None and item["room_count"] is not None)) if any(item["building_age"] is not None and item["room_count"] is not None for item in items) else None
+        age_weight_rows = [
+            item for item in items if item["building_age"] is not None
+            and item["room_count"] is not None and float(item["room_count"]) > 0
+        ]
+        age_weight_denominator = sum(float(item["room_count"]) for item in age_weight_rows)
+        weighted_age = (
+            sum(float(item["building_age"]) * float(item["room_count"]) for item in age_weight_rows)
+            / age_weight_denominator if age_weight_denominator > 0 else None
+        )
         result[district] = {
             "district": district, "group": str(items[0]["region_group"]), "facilities": len(items),
             "registrations": sum(int(item["legal_registration_count"]) for item in items), "known": len(known),
@@ -246,7 +276,7 @@ def _district_metrics(rows: list[dict[str, object]], policy: PolicyConfig) -> di
             "age30": sum(age >= 30 for age in ages) / len(ages) if ages else None,
             "age20_count": sum(age >= 20 for age in ages), "age30_count": sum(age >= 30 for age in ages),
             "age_known": len(ages),
-            "permit_share": sum(item["recent_permit"] is True for item in items) / len(items) if any(item["recent_permit"] is not None for item in items) else None,
+            "permit_share": sum(item["recent_permit"] is True for item in items) / sum(item["recent_permit"] is not None for item in items) if any(item["recent_permit"] is not None for item in items) else None,
             "permit_known": sum(item["recent_permit"] is not None for item in items),
             "permit_count": sum(item["recent_permit"] is True for item in items),
             "license_dates": [value for item in items for value in item["license_dates"]],
@@ -255,18 +285,62 @@ def _district_metrics(rows: list[dict[str, object]], policy: PolicyConfig) -> di
     return result
 
 
-def _periods(db: Database, metrics: dict[str, dict[str, object]]) -> dict[str, set[str]]:
+def _event_only_districts(
+    db: Database,
+    run_id: UUID,
+    as_of: date | None,
+    existing: dict[str, dict[str, object]],
+) -> dict[str, dict[str, object]]:
+    """Keep closure-only districts in the mart with null supply metrics."""
+    rows = db.query(
+        """select distinct district, region_group from staging_license_snapshot
+        where district is not null and region_group is not null
+          and ((? is null and last_loaded_run_id = ?) or observed_on <= ?)""",
+        [as_of, run_id, as_of],
+    )
+    output: dict[str, dict[str, object]] = {}
+    for district, group in rows:
+        district = str(district)
+        if district not in existing:
+            output[district] = _empty_metrics(district, str(group))
+    return output
+
+
+def _empty_metrics(district: str, group: str) -> dict[str, object]:
+    return {
+        "district": district, "group": group, "facilities": 0, "registrations": 0,
+        "known": 0, "room_sum": None, "room_mean": None, "room_median": None,
+        "q1": None, "q3": None, "coverage": None, "small": None,
+        "small_share": None, "tourism_share": None, "tourism_room_share": None,
+        "tourism_facilities": 0, "tourism_rooms": None, "foreigner_share": None,
+        "foreign_capable_share": None, "foreigner_registrations": 0,
+        "foreign_capable_registrations": 0, "age_mean": None, "age_median": None,
+        "weighted_age": None, "age20": None, "age30": None, "age20_count": 0,
+        "age30_count": 0, "age_known": 0, "permit_share": None, "permit_known": 0,
+        "permit_count": 0, "license_dates": [], "closure_dates": [],
+    }
+
+
+def _periods(
+    db: Database, run_id: UUID, as_of: date | None, metrics: dict[str, dict[str, object]]
+) -> dict[str, set[str]]:
     output = {district: {"current"} for district in metrics}
-    for district, period in db.query("select distinct district, period from fact_tourism_demand"):
+    for district, period in db.query(
+        "select distinct district, period from fact_tourism_demand where loaded_run_id = ?", [run_id]
+    ):
         if str(district) in output:
-            output[str(district)].add(str(period))
-    for district, period in db.query("select distinct district, period from fact_transport_flow"):
+            output[str(district)].add(_month(str(period)))
+    for district, period in db.query(
+        "select distinct district, period from fact_transport_flow where loaded_run_id = ?", [run_id]
+    ):
         if str(district) in output:
-            output[str(district)].add(str(period))
+            output[str(district)].add(_month(str(period)))
     # Supply observations and legal events are periods in their own right;
     # event-only months remain visible even if no demand source has a row.
     for district, observed_on, license_date, closure_date in db.query(
-        "select district, observed_on, license_date, closure_date from staging_license_snapshot"
+        """select district, observed_on, license_date, closure_date from staging_license_snapshot
+        where ((? is null and last_loaded_run_id = ?) or observed_on <= ?)""",
+        [as_of, run_id, as_of],
     ):
         if str(district) not in output:
             continue
@@ -276,14 +350,16 @@ def _periods(db: Database, metrics: dict[str, dict[str, object]]) -> dict[str, s
     return output
 
 
-def _region_rows(db: Database, run_id: UUID, metrics: dict[str, dict[str, object]], periods: dict[str, set[str]], policy: PolicyConfig) -> list[dict[str, object]]:
+def _region_rows(
+    db: Database, run_id: UUID, as_of: date | None, metrics: dict[str, dict[str, object]], periods: dict[str, set[str]], policy: PolicyConfig
+) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for district, values in metrics.items():
         for period in sorted(periods[district]):
-            visitor = _monthly_native_sum(db, "fact_tourism_demand", district, period, "tourism_data_lab", "locgo_regn_visitr_dd_list.visitor_count", "count")
-            consumption = _monthly_native_sum(db, "fact_tourism_demand", district, period, "area_tourism_consumption", "area_tar_svc_dem_list.1107", "KRW")
-            transport = _monthly_native_sum(db, "fact_transport_flow", district, period, "public_transport_od_usage", "public_transport_od_volume", "passengers")
-            denom = values["room_sum"] if period == "current" else _same_period_supply(db, district, period)
+            visitor = _monthly_native_sum(db, run_id, "fact_tourism_demand", district, period, "tourism_data_lab", "locgo_regn_visitr_dd_list.visitor_count", "count")
+            consumption = _monthly_native_sum(db, run_id, "fact_tourism_demand", district, period, "area_tourism_consumption", "area_tar_svc_dem_list.1107", "KRW")
+            transport = _monthly_native_sum(db, run_id, "fact_transport_flow", district, period, "public_transport_od_usage", "public_transport_od_volume", "passengers")
+            denom = values["room_sum"] if period == "current" else _same_period_supply(db, run_id, as_of, district, period)
             ratios = {
                 "room_coverage": (float(values["known"]), float(values["facilities"]), values["coverage"], "inventory.room_count"),
                 "small_facility_share": (float(values["small"]) if values["small"] is not None else None, float(values["known"]), values["coverage"], "inventory.room_count"),
@@ -299,6 +375,10 @@ def _region_rows(db: Database, run_id: UUID, metrics: dict[str, dict[str, object
                 "recent_five_year_permit_event_share": (float(values["permit_count"]), float(values["permit_known"]), values["permit_known"] / values["facilities"], "building_register.permit_date"),
             }
             evidence = {name: _evidence(name, numerator, denominator, coverage, period, source, factor=100 if name == "visitors_per_100_rooms" else 1) for name, (numerator, denominator, coverage, source) in ratios.items()}
+            evidence["visitor_growth_minus_room_supply_growth"] = _evidence(
+                "visitor_growth_minus_room_supply_growth", None, None, None, period,
+                "missing_consecutive_comparable_period",
+            )
             openings, closures = _event_changes(db, district, period)
             rows.append({"district": district, "group": values["group"], "period": period, "values": values, "visitor": visitor[0], "consumption": consumption[0], "transport": transport[0], "supply_total": denom, "openings": openings, "closures": closures, "evidence": evidence})
     _classify_pressure(rows)
@@ -308,6 +388,7 @@ def _region_rows(db: Database, run_id: UUID, metrics: dict[str, dict[str, object
 
 def _monthly_native_sum(
     db: Database,
+    run_id: UUID,
     table: str,
     district: str,
     period: str,
@@ -319,17 +400,25 @@ def _monthly_native_sum(
     if len(period) != 7 or period[4] != "-":
         return None, "missing_period"
     found = db.query(
-        f"""select metric_value from {table}
-            where district = ? and period like ? and source_id = ?
-              and metric_code = ? and unit = ?""",
-        [district, f"{period}%", source_id, metric_code, unit],
+        f"""with current_revision as (
+                select *, row_number() over (
+                    partition by period, dimension_json_hash
+                    order by loaded_at desc, source_revision desc
+                ) as revision_rank
+                from {table}
+                where loaded_run_id = ? and district = ? and period like ? and source_id = ?
+                  and metric_code = ? and unit = ?
+            ) select metric_value from current_revision where revision_rank = 1""",
+        [run_id, district, f"{period}%", source_id, metric_code, unit],
     )
     if not found:
         return None, "missing"
     return sum(float(item[0]) for item in found), f"{source_id}:{metric_code}:{unit}"
 
 
-def _same_period_supply(db: Database, district: str, period: str) -> float | None:
+def _same_period_supply(
+    db: Database, run_id: UUID, as_of: date | None, district: str, period: str
+) -> float | None:
     """Return a monthly room denominator only from a snapshot in that month."""
     if len(period) != 7 or period[4] != "-":
         return None
@@ -341,8 +430,9 @@ def _same_period_supply(db: Database, district: str, period: str) -> float | Non
           on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
         where facility.district = ? and snapshot.observed_on::varchar like ?
           and snapshot.source_id <> 'tourist_pensions'
+          and ((? is null and snapshot.last_loaded_run_id = ?) or snapshot.observed_on <= ?)
           and (snapshot.closure_date is null or snapshot.closure_date > snapshot.observed_on)""",
-        [district, f"{period}%"],
+        [district, f"{period}%", as_of, run_id, as_of],
     )
     per_facility: dict[object, set[float]] = defaultdict(set)
     for facility_id, rooms in rows:
@@ -350,6 +440,11 @@ def _same_period_supply(db: Database, district: str, period: str) -> float | Non
             per_facility[facility_id].add(float(rooms))
     known = [next(iter(values)) for values in per_facility.values() if len(values) == 1]
     return sum(known) if known else None
+
+
+def _month(period: str) -> str:
+    """Normalise daily native series to their district-month mart grain."""
+    return period[:7] if len(period) >= 7 and period[4:5] == "-" else period
 
 
 def _single_native_prefix(db: Database, table: str, district: str, period: str, prefix: str, unit: str | None) -> tuple[float | None, str]:
@@ -393,14 +488,30 @@ def _growth_and_supply_bands(rows: list[dict[str, object]]) -> None:
             visitor, supply = row["visitor"], row["supply_total"]
             row["growth_gap"] = None
             row["supply_growth"] = None
-            if prior is not None:
+            if prior is not None and _next_month(str(prior["period"])) == str(row["period"]):
                 old_visitor, old_supply = prior["visitor"], prior["supply_total"]
                 if all(value is not None and float(value) > 0 for value in (visitor, supply, old_visitor, old_supply)):
                     visitor_growth = float(visitor) / float(old_visitor) - 1
                     supply_growth = float(supply) / float(old_supply) - 1
                     row["growth_gap"] = visitor_growth - supply_growth
                     row["supply_growth"] = supply_growth
+                    row["evidence"]["visitor_growth_minus_room_supply_growth"] = _evidence(
+                        "visitor_growth_minus_room_supply_growth",
+                        visitor_growth,
+                        1.0,
+                        min(
+                            float(row["values"]["coverage"] or 0),
+                            float(prior["values"]["coverage"] or 0),
+                        ),
+                        str(row["period"]),
+                        "tourism_data_lab.visitor_count|inventory.room_count",
+                    )
                     growth_rows.append(row)
+            if "visitor_growth_minus_room_supply_growth" not in row["evidence"]:
+                row["evidence"]["visitor_growth_minus_room_supply_growth"] = _evidence(
+                    "visitor_growth_minus_room_supply_growth", None, None, None,
+                    str(row["period"]), "missing_consecutive_comparable_period",
+                )
             prior = row
     by_period: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in growth_rows:
@@ -435,7 +546,9 @@ def _replace_comparisons(
         west, east = by_period_group.get((period, "west"), []), by_period_group.get((period, "east"), [])
         for metric in ("physical_facility_count", "room_sum", "room_mean", "room_median"):
             key = "facilities" if metric == "physical_facility_count" else "room_sum" if metric == "room_sum" else metric
-            if metric in {"room_mean", "room_median"}:
+            if period != "current":
+                w = e = None
+            elif metric in {"room_mean", "room_median"}:
                 west_rooms = [float(item["room_count"]) for item in facilities if item["region_group"] == "west" and item["room_count"] is not None]
                 east_rooms = [float(item["room_count"]) for item in facilities if item["region_group"] == "east" and item["room_count"] is not None]
                 w = mean(west_rooms) if metric == "room_mean" and west_rooms else median(west_rooms) if west_rooms else None
@@ -447,12 +560,20 @@ def _replace_comparisons(
         all_rows = [item for item in rows if item["period"] == period]
         for item in all_rows:
             value = item["values"]["room_median"]
-            percentile = sum(other["values"]["room_median"] <= value for other in all_rows if value is not None and other["values"]["room_median"] is not None) / 16 if value is not None and len(all_rows) == 16 else None
+            comparable_values = [
+                other["values"]["room_median"] for other in all_rows
+                if other["values"]["room_median"] is not None
+            ]
+            percentile = (
+                sum(other <= value for other in comparable_values) / 16
+                if period == "current" and value is not None and len(all_rows) == 16
+                and len(comparable_values) == 16 else None
+            )
             db.connection.execute("insert into mart_region_comparison values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [run_id, period, "room_median", f"{item['district']}_percentile_among_16", percentile, value, 16.0, None, "good" if percentile is not None else "insufficient", _json({"district": item["district"], "available_districts": len(all_rows), "universe": 16})])
 
 
 def _replace_signals(
-    db: Database, run_id: UUID, rows: list[dict[str, object]], facilities: list[dict[str, object]]
+    db: Database, run_id: UUID, rows: list[dict[str, object]], facilities: list[dict[str, object]], policy: PolicyConfig
 ) -> int:
     db.connection.execute("delete from mart_policy_signal where run_id = ?", [run_id])
     count = 0
@@ -460,12 +581,17 @@ def _replace_signals(
     for row in rows:
         by_group_period[(str(row["group"]), str(row["period"]))].append(row)
     for (group, period), group_rows in by_group_period.items():
+        if period != "current" or not group_rows or any(
+            row["values"]["coverage"] is None or float(row["values"]["coverage"]) < 0.8
+            for row in group_rows
+        ):
+            continue
         group_facilities = [item for item in facilities if item["region_group"] == group]
         rooms = [float(item["room_count"]) for item in group_facilities if item["room_count"] is not None]
         ages = [float(item["building_age"]) for item in group_facilities if item["building_age"] is not None]
         visitor_values = [item["evidence"]["visitors_per_100_rooms"]["value"] for item in group_rows]
-        metrics = RegionMetrics(group, median(rooms) if rooms else None, sum(room <= 20 for room in rooms) / len(rooms) if rooms else None, sum(age >= 30 for age in ages) / len(ages) if ages else None, _aggregate(visitor_values), _group_band(group_rows, "pressure"), _group_band(group_rows, "supply"))
-        for signal in policy_signals(metrics):
+        metrics = RegionMetrics(group, median(rooms) if rooms else None, sum(room <= policy.small_room_threshold for room in rooms) / len(rooms) if rooms else None, sum(age >= 30 for age in ages) / len(ages) if ages else None, _aggregate(visitor_values), _group_band(group_rows, "pressure"), _group_band(group_rows, "supply"))
+        for signal in policy_signals(metrics, small_room_threshold=policy.small_room_threshold):
             db.connection.execute("insert into mart_policy_signal values (?, ?, ?, ?, ?)", [run_id, group, period, signal.code, signal.evidence_json]); count += 1
     return count
 
@@ -509,6 +635,13 @@ def _event_changes(db: Database, district: str, period: str) -> tuple[int, int]:
 def _group_band(rows: list[dict[str, object]], key: str) -> str:
     bands = {str(row[key]) for row in rows}
     return next(iter(bands)) if len(bands) == 1 else "unclassified"
+
+
+def _next_month(period: str) -> str | None:
+    if len(period) != 7 or period[4] != "-":
+        return None
+    year, month = int(period[:4]), int(period[5:])
+    return f"{year + (month == 12):04d}-{1 if month == 12 else month + 1:02d}"
 
 
 def _json(value: object) -> str:

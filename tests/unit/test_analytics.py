@@ -74,10 +74,10 @@ def test_monthly_native_metrics_sum_daily_visitors_but_never_select_other_consum
         )
 
     assert _monthly_native_sum(
-        db, "fact_tourism_demand", "사하구", "2026-01", "tourism_data_lab",
+        db, run_id, "fact_tourism_demand", "사하구", "2026-01", "tourism_data_lab",
         "locgo_regn_visitr_dd_list.visitor_count", "count",
     )[0] == 220
     assert _monthly_native_sum(
-        db, "fact_tourism_demand", "사하구", "2026-01", "area_tourism_consumption",
+        db, run_id, "fact_tourism_demand", "사하구", "2026-01", "area_tourism_consumption",
         "area_tar_svc_dem_list.1107", "KRW",
     )[0] == 250

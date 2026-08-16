@@ -25,3 +25,13 @@
 - Added reviewer regression coverage for daily visitor aggregation, exact lodging consumption code selection, high-pressure/high-supply signal abstention, and a linked tourist-pension overlay excluded from legal supply counts.
 
 Validation after review fixes: focused analytics tests: 5 passed; full suite: 158 passed, 3 skipped; Ruff: passed.
+
+## Rereview fix round 2
+
+- First builds are now scoped to the requested run's `pipeline_run` as-of date (with a run-scoped snapshot fallback), and demand/transport facts are restricted to that producing run. A later run can no longer enter an older run's first mart build.
+- District-month periods normalize all daily native rows to `YYYY-MM`, are sourced from run-scoped demand, transport, inventory, and legal events, and retain closure-only districts with null supply rather than dropping their event month.
+- Native facts retain only the latest revision per period and dimensions before aggregation. DataLab daily visitor counts then aggregate to month; lodging consumption and OD transport remain exact compatible metrics.
+- Historical ratios require a same-month inventory snapshot. Growth requires calendar-consecutive comparable months and persists a null/insufficient evidence record otherwise. Historical West/East comparisons are null rather than borrowing current facility distributions.
+- Zero-room building-age weights no longer divide by zero; permit-share values and evidence share the same known-permit denominator. Percentiles require all 16 districts and 16 known values. Group policy signals use the configured small-room threshold, full covered current-group data, and one deterministic group-period row.
+
+Validation after rereview fixes: focused analytics tests: 5 passed; full suite: 158 passed, 3 skipped; Ruff: passed; `git diff --check`: passed.
