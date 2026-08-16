@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,7 @@ from westbusan.http import SafeHttpClient
 from westbusan.models import RunContext
 from westbusan.sources.datagokr import DataGoKrPager
 from westbusan.sources.registry import SourceRegistry
+from westbusan.storage import RawStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,7 +110,11 @@ def parcel_query(address: NormalizedAddress, db: Database) -> ParcelQuery | None
 
 
 def collect_buildings_for_licenses(
-    db: Database, registry: SourceRegistry, run: RunContext
+    db: Database,
+    registry: SourceRegistry,
+    run: RunContext,
+    *,
+    raw_store: RawStore | None = None,
 ) -> BuildingCollectionResult:
     """Enrich only licensed accommodation parcels; duplicate parcels share API calls."""
     service_key = os.getenv("DATA_GO_KR_SERVICE_KEY")
@@ -133,22 +139,29 @@ def collect_buildings_for_licenses(
         licenses_by_parcel[query.request_hash].append((str(source_id), str(source_record_id)))
 
     pager = DataGoKrPager(client=SafeHttpClient(), service_key=service_key)
+    raw_store = raw_store or RawStore(Path("data"))
     building_rows = 0
     bridge_rows = 0
     for parcel_hash, query in queries.items():
-        responses = _parcel_responses(pager, registry, query)
-        titles = [normalize_building_title(row) for row in responses["building_register_title"]]
+        responses = _parcel_responses(
+            pager, registry, query, db, run, raw_store, service_key
+        )
+        titles = [
+            normalize_building_title(row)
+            for row in responses["building_register_title"]
+        ]
         enrichments = [
             normalize_building_title(row)
             for source_id, rows in responses.items()
             if source_id != "building_register_title"
             for row in rows
         ]
-        by_key = {record.building_id: record for record in enrichments if record.building_id}
         for title in titles:
             if title.building_id is None:
                 continue
-            record = _merge(title, by_key.get(title.building_id))
+            record = title
+            for extra in _parcel_enrichments(title, titles, enrichments):
+                record = _merge(record, extra)
             _store_building(db, record, parcel_hash, run, responses)
             building_rows += 1
             for source_id, source_record_id in licenses_by_parcel[parcel_hash]:
@@ -158,7 +171,13 @@ def collect_buildings_for_licenses(
 
 
 def _parcel_responses(
-    pager: DataGoKrPager, registry: SourceRegistry, query: ParcelQuery
+    pager: DataGoKrPager,
+    registry: SourceRegistry,
+    query: ParcelQuery,
+    db: Database,
+    run: RunContext,
+    raw_store: RawStore,
+    service_key: str,
 ) -> dict[str, list[dict[str, object]]]:
     source_ids = (
         "building_register_title",
@@ -170,17 +189,30 @@ def _parcel_responses(
     responses: dict[str, list[dict[str, object]]] = {}
     for source_id in source_ids:
         spec = registry.get(source_id)
-        responses[source_id] = [
-            row
-            for page in pager.iter_url(
-                spec.endpoint_url,
-                query.parameters,
-                page_size=spec.page_size,
-                format_parameter=spec.format_parameter,
-                format_value=spec.format_value,
-            )
-            for row in page.rows
-        ]
+        rows: list[dict[str, object]] = []
+        for page in pager.iter_url(
+            spec.endpoint_url,
+            query.parameters,
+            page_size=spec.page_size,
+            format_parameter=spec.format_parameter,
+            format_value=spec.format_value,
+        ):
+            request = {
+                **query.parameters,
+                "endpoint": spec.endpoint_url,
+                "operation": spec.operation or "",
+                "pageNo": page.page_no,
+                "numOfRows": spec.page_size,
+                "schema_fingerprint": page.schema_fingerprint,
+                spec.format_parameter: spec.format_value,
+                "serviceKey": service_key,
+            }
+            artifact = raw_store.write(run, source_id, request, page.raw_body, ".json")
+            db.record_artifact(artifact)
+            if page.rows:
+                raw_store.write_rows(artifact, page.rows)
+            rows.extend(page.rows)
+        responses[source_id] = rows
     return responses
 
 
@@ -281,19 +313,66 @@ def _merge(primary: BuildingRecord, extra: BuildingRecord | None) -> BuildingRec
     return BuildingRecord(**values)
 
 
+def _parcel_enrichments(
+    title: BuildingRecord,
+    titles: list[BuildingRecord],
+    enrichments: list[BuildingRecord],
+) -> list[BuildingRecord]:
+    """Associate permit/closed rows by parcel, never by unrelated management keys."""
+    if len(titles) == 1:
+        return enrichments
+    title_parcel = _parcel_identity(title)
+    if title_parcel is None:
+        return []
+    return [
+        record
+        for record in enrichments
+        if _parcel_identity(record) == title_parcel
+    ]
+
+
+def _parcel_identity(record: BuildingRecord) -> tuple[str, str, str, str, str] | None:
+    values = (
+        record.sigungu_cd,
+        record.bjdong_cd,
+        record.plat_gb_cd,
+        record.bun,
+        record.ji,
+    )
+    if any(value is None for value in values):
+        return None
+    return tuple(str(value) for value in values)
+
+
 def _csv_value(row: dict[str, str], *keys: str) -> str | None:
     normalized = {_csv_key(key): value.strip() for key, value in row.items() if value is not None}
     return next((normalized[_csv_key(key)] for key in keys if normalized.get(_csv_key(key))), None)
 
 
 def _csv_rows(path: Path) -> list[dict[str, str]]:
+    body = _legal_dong_bytes(path)
     for encoding in ("utf-8-sig", "cp949"):
         try:
-            with path.open(encoding=encoding, newline="") as stream:
-                return [dict(row) for row in csv.DictReader(stream)]
+            text = body.decode(encoding)
         except UnicodeDecodeError:
             continue
+        delimiter = "\t" if "\t" in text.partition("\n")[0] else ","
+        return [dict(row) for row in csv.DictReader(text.splitlines(), delimiter=delimiter)]
     raise UnicodeDecodeError("legal-dong CSV", b"", 0, 0, "unsupported encoding")
+
+
+def _legal_dong_bytes(path: Path) -> bytes:
+    if not zipfile.is_zipfile(path):
+        return path.read_bytes()
+    with zipfile.ZipFile(path) as archive:
+        candidates = [
+            name
+            for name in archive.namelist()
+            if not name.endswith("/") and Path(name).suffix.casefold() in {".txt", ".csv"}
+        ]
+        if not candidates:
+            raise ValueError("official legal-dong ZIP contains no CSV or TXT file")
+        return archive.read(candidates[0])
 
 
 def _csv_key(value: str) -> str:

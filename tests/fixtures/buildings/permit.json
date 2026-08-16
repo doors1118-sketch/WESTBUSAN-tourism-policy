@@ -1,8 +1,7 @@
 [
   {
-    "mgmBldrgstPk": "26140-1001",
-    "pmsDay": "19970101",
-    "useAprDay": "19980820",
+    "mgmPmsrgstPk": "PERMIT-1001",
+    "archPmsDay": "19970101",
     "mainPurpsCdNm": "숙박시설"
   }
 ]

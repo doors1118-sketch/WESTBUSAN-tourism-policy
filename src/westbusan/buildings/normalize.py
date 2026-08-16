@@ -35,10 +35,20 @@ def normalize_building_title(row: dict[str, object]) -> BuildingRecord:
     """Normalize documented title-register and permit aliases without inferring dates."""
     values = {_key(key): value for key, value in row.items()}
     closed_indicator = _text(
-        _first(values, "regstrgbcdnm", "closedyn", "closureyn", "closed", "delgbn")
+        _first(
+            values,
+            "shtergbcdnm",
+            "regstrgbcdnm",
+            "closedyn",
+            "closureyn",
+            "closed",
+            "delgbn",
+        )
     )
     return BuildingRecord(
-        building_id=_text(_first(values, "mgmbldrgstpk", "mgmbldrgstpk")),
+        building_id=_text(
+            _first(values, "mgmbldrgstpk", "mgmpmsrgstpk", "mgmshtregpk")
+        ),
         sigungu_cd=_digits(_first(values, "sigungucd"), 5),
         bjdong_cd=_digits(_first(values, "bjdongcd"), 5),
         plat_gb_cd=_digits(_first(values, "platgbcd"), 1),
@@ -48,7 +58,7 @@ def normalize_building_title(row: dict[str, object]) -> BuildingRecord:
         lot_address=_text(_first(values, "platplc", "jibunaddr")),
         approval_date=_date(_first(values, "useaprday", "apvday")),
         use_approval_date=_date(_first(values, "useaprday")),
-        permit_date=_date(_first(values, "pmsday", "permitday")),
+        permit_date=_date(_first(values, "archpmsday", "pmsday", "permitday")),
         main_use=_text(_first(values, "mainpurpscdnm", "mainpurpscd")),
         total_area=_number(_first(values, "totarea", "archarea")),
         ground_floor_count=_integer(_first(values, "grndflrcnt")),
