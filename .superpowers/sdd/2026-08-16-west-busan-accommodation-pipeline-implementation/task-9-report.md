@@ -17,10 +17,17 @@
 - Added CP949 CSV fallback and `openpyxl` read-only/data-only XLSX parsing. Unknown source dates remain null with explicit `unknown` provenance; no filesystem timestamp is substituted. Invalid rows mark the source `SCHEMA_CHANGED`, never `READY`.
 - KORAIL workplace/residence surveys remain static contextual evidence with their native measures; SRT boarding and alighting remain separate measures. Korean official filename patterns are supported.
 
+## Provenance and Official-File Fix Round
+
+- ODCloud operation-title dates are preserved solely as `data_as_of`; they are never fabricated as `published_at`. Publication dates now require file-detail/portal metadata and otherwise remain explicitly unknown. The first received provider data page supplies `totalCount`, which is persisted in the raw request, source status, and selected revision metadata. HTTP 401/403 responses are recorded as `AUTH_FAILED`.
+- File-date provenance preserves natural precision: a year-only filename records a `year` value rather than inventing January 1. KORAIL survey records use the documented 2022-04..2022-06 contextual period when row fields do not provide one.
+- Added both official SRT CSV shapes: the Korean `(주)에스알_월별역별 승하차 인원수_YYYYMMDD.csv` monthly boarding/alighting form and the `SRT월별역별승차인원` wide boarding-only form, whose `YYYY년M월` columns are unpivoted without inventing alighting values.
+- Replaced generic KORAIL numeric-column inference with source-specific, reviewed measure mappings. Customer, ticket, train, sales, residence/workplace, vehicle, and numeric geography-code fields remain source dimensions rather than becoming measures.
+
 ## Verification
 
-- `python -m pytest tests/unit/test_odcloud.py tests/unit/test_file_source.py tests/integration/test_transport_load.py -v` — 18 passed
-- `python -m pytest tests/unit -v` — 103 passed
+- `python -m pytest tests/unit/test_odcloud.py tests/unit/test_file_source.py tests/integration/test_transport_load.py -v` — 22 passed
+- `python -m pytest tests/unit -v` — 105 passed
 - `python -m ruff check .` — passed
 - `git diff --check` — passed
 
@@ -29,3 +36,5 @@
 `feat: load public transport and versioned railway data`
 
 Provider-schema fix commit: `19905b0d4b53b1431a7ba3f75a48678040a0a2f5`
+
+Provenance and official-file fix commit: `94ca71a4037c50153cad6be7f26dd9788a6c15ce`
