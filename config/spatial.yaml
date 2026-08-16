@@ -1,0 +1,7 @@
+grid_size_m: 500
+coordinate_coverage_min: 0.80
+grid_min_facilities: 3
+room_scale_breaks: [10, 20]
+age_year_breaks: [20, 30]
+crs_projected: EPSG:5174
+crs_public: EPSG:4326

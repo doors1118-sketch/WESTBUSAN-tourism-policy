@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, SecretStr, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 BUSAN_DISTRICTS = frozenset(
     {
@@ -86,6 +86,41 @@ class PolicyConfig(BaseModel):
         return self
 
 
+class SpatialConfig(BaseModel):
+    """Immutable approved parameters for the 500 m spatial analysis."""
+
+    model_config = ConfigDict(frozen=True)
+
+    grid_size_m: int
+    coordinate_coverage_min: float
+    grid_min_facilities: int
+    room_scale_breaks: tuple[int, int]
+    age_year_breaks: tuple[int, int]
+    crs_projected: Literal["EPSG:5174"]
+    crs_public: Literal["EPSG:4326"]
+
+    @model_validator(mode="after")
+    def validate_spatial_policy(self) -> SpatialConfig:
+        if self.grid_size_m != 500:
+            raise ValueError("spatial grid size must be exactly 500 m")
+        if self.grid_min_facilities <= 0:
+            raise ValueError("spatial grid minimum facilities must be positive")
+        if not 0 <= self.coordinate_coverage_min <= 1:
+            raise ValueError("spatial coordinate coverage must be within [0, 1]")
+        if (
+            self.room_scale_breaks[0] >= self.room_scale_breaks[1]
+            or self.age_year_breaks[0] >= self.age_year_breaks[1]
+        ):
+            raise ValueError("spatial room and age breaks must be increasing")
+        return self
+
+    @classmethod
+    def default(cls) -> SpatialConfig:
+        path = Path(__file__).resolve().parents[2] / "config" / "spatial.yaml"
+        with path.open(encoding="utf-8") as stream:
+            return cls.model_validate(yaml.safe_load(stream))
+
+
 class Settings(BaseModel):
     service_key: SecretStr = Field(repr=False)
     data_dir: Path
@@ -93,6 +128,7 @@ class Settings(BaseModel):
     log_dir: Path
     regions: RegionConfig
     policy: PolicyConfig
+    spatial: SpatialConfig = Field(default_factory=SpatialConfig.default)
 
     @classmethod
     def load(cls, root: Path) -> Settings:
@@ -101,6 +137,8 @@ class Settings(BaseModel):
             regions = RegionConfig.model_validate(yaml.safe_load(stream))
         with (root / "config" / "policy.yaml").open(encoding="utf-8") as stream:
             policy = PolicyConfig.model_validate(yaml.safe_load(stream))
+        with (root / "config" / "spatial.yaml").open(encoding="utf-8") as stream:
+            spatial = SpatialConfig.model_validate(yaml.safe_load(stream))
 
         def path_from_env(name: str, default: str) -> Path:
             value = Path(os.getenv(name, default))
@@ -113,6 +151,7 @@ class Settings(BaseModel):
             log_dir=path_from_env("WESTBUSAN_LOG_DIR", "logs"),
             regions=regions,
             policy=policy,
+            spatial=spatial,
         )
 
     def region_for_district(self, district: str) -> Literal["west", "east", "other"]:

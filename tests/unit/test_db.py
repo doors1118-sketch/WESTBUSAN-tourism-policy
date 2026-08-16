@@ -11,6 +11,38 @@ from westbusan.models import RunContext
 from westbusan.storage import RawStore
 
 
+def test_empty_database_migration_creates_spatial_schema_tables(tmp_path: Path) -> None:
+    """Catches a fresh spatial database missing a table required by later stages."""
+    db = Database(tmp_path / "spatial.duckdb", Path("sql"))
+    db.migrate()
+
+    required_tables = {
+        "spatial_boundary_version",
+        "dim_spatial_grid_500m",
+        "spatial_run",
+        "spatial_writer_lease",
+        "spatial_mart_completion_manifest",
+        "mart_facility_priority_current",
+        "mart_grid_month",
+        "mart_spatial_evidence",
+        "mart_spatial_exception",
+        "spatial_publication_current",
+        "spatial_publication_audit",
+    }
+    actual_tables = {
+        row[0]
+        for row in db.query(
+            "select table_name from information_schema.tables where table_schema = 'main'"
+        )
+    }
+
+    assert required_tables <= actual_tables
+    assert db.query(
+        """select lease_key, spatial_run_id, owner, lease_expires_at, fence_epoch
+           from spatial_writer_lease"""
+    ) == [("writer", None, None, None, 0)]
+
+
 def test_migrations_are_idempotent(tmp_path: Path) -> None:
     db = Database(tmp_path / "test.duckdb", Path("sql"))
     db.migrate()
