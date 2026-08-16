@@ -115,7 +115,7 @@ git log -5 --oneline
 
 ## 로컬 검증 상태 (2026-08-17)
 
-- 전체 pytest: 373 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
+- 전체 pytest: 380 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
 - 교통 파일 CSV/XLSX는 원본 해시와 네이티브 스키마를 검증하고 요청 기간의
   정확한 fact identity/value까지 대조합니다. ODCloud portal metadata는
   provenance·해시·revision lineage에는 포함하지만 data page 수에는 포함하지
