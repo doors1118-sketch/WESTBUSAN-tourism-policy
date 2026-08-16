@@ -25,6 +25,7 @@ def test_marts_deduplicate_physical_facilities_but_preserve_registrations(
         _license("lodgings", "east-l", "동부호텔", "부산광역시 해운대구 해변로 1", 30),
         _license("lodgings", "other-l", "기타게스트", "부산광역시 중구 항구로 1", None),
         _license("lodgings", "same-address", "별도사업장", "부산광역시 사하구 바다로 1", None),
+        _license("tourist_pensions", "west-t", "서부 호텔", "부산광역시 사하구 바다로 1", 12),
         _license("tourist_pensions", "pension", "미연결 관광펜션", "부산광역시 사하구 산길 9", 4),
     ]
     load_license_snapshot(db, records, run_id)
