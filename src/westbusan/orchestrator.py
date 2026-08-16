@@ -723,7 +723,9 @@ class Pipeline:
             source_id,
             {
                 "operation": "info",
-                "parameters": {"as_of": as_of.isoformat()},
+                "parameters": {},
+                "partition": as_of.isoformat(),
+                "temporal_semantics": "current_snapshot_only",
                 "pageNo": 1,
                 "numOfRows": 1000,
                 "total_count": page.total_count,

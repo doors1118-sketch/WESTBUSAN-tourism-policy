@@ -14,6 +14,12 @@ Cloud 작업 공간이 폐기되면 함께 사라질 수 있습니다. 지속 �
 `config/regions.yaml`에서 옵니다. 품질 게이트는 필수 증거가 없거나 바뀌면
 반드시 닫혀야 합니다.
 
+1741000 숙박 `info` 여섯 원천은 전국 현행 snapshot이며 모든 page에 부산
+관할필터 `cond[OPN_ATMY_GRP_CD::EQ]=6260000`이 필요합니다. 반환 행 관할도
+재검증합니다. 원천별 history operation은 아직 inspection·승인되지 않았으므로
+현재 snapshot에서 2022년 재고를 추론하면 안 됩니다. 세부 계약과 공식 endpoint는
+`docs/SOURCE_CONTRACTS.md`에 있습니다.
+
 ## 사전 조건
 
 1. GitHub에 이 커밋을 포함한 branch가 push되어 있어야 합니다. 저장소 URL과
@@ -55,16 +61,34 @@ Linux 기반 환경이면 마지막 세 명령의 interpreter를 `.venv/bin/pyth
 .\.venv\Scripts\python.exe -m westbusan.cli probe --source-id lodgings
 ```
 
-4. 승인된 schema fingerprint와 source status를 검토한 뒤 2022년부터의 초기
-   backfill을 실행합니다. 날짜는 실제 실행일로 바꿉니다.
+4. 현재일 첫 수집을 실행합니다. raw가 저장되고 미승인 schema 때문에 게시가
+   차단되는 것이 정상입니다. 현행 숙박 원천에 2022년 backfill을 요청해도 과거
+   재고가 생기지 않습니다.
 
 ```powershell
-.\.venv\Scripts\python.exe -m westbusan.cli backfill --start 2022-01-01 --end 2026-08-16
+.\.venv\Scripts\python.exe -m westbusan.cli daily --as-of 2026-08-16
+.\.venv\Scripts\python.exe -m westbusan.cli schema-approve
+```
+
+5. 출력된 source/operation/partition/fingerprint와 raw·공식 operation을 사람이
+   검토한 뒤 네 값을 정확히 확인하고 운영자·사유를 기록합니다. 아래 값은 실제
+   관측값으로 바꿉니다. 일부 입력 또는 불일치는 승인되지 않습니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m westbusan.cli schema-approve --source-id lodgings --operation info --partition 2026-08-16 --fingerprint <관측값> --approver <운영자> --rationale "공식 원문 검토"
+```
+
+6. 승인한 현재일 run을 재실행한 뒤 품질과 export를 확인합니다. history
+   operation 계약이 별도로 승인되기 전에는 2022년부터의 숙박 재고 backfill을
+   실행하거나 현재 snapshot을 과거 stock으로 해석하지 않습니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m westbusan.cli daily --as-of 2026-08-16
 .\.venv\Scripts\python.exe -m westbusan.cli quality
 .\.venv\Scripts\python.exe -m westbusan.cli export --date 2026-08-16
 ```
 
-5. `fact_data_quality` 필수 실패, `duplicate_review` pending 후보, 지역/객실/건물
+7. `fact_data_quality` 필수 실패, `duplicate_review` pending 후보, 지역/객실/건물
    coverage와 월별 기간을 검토합니다. 실패 run은 이전 게시 포인터를 바꾸지
    않습니다. 통과 후에만 일일 실행을 이어갑니다.
 
@@ -92,7 +116,7 @@ git log -5 --oneline
 - Task 12 focused (transport 포함): 40 passed, 1 skipped.
 - 전체 pytest: 185 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
 - Ruff: all checks passed.
-- CLI `--help`: 여섯 명령 표시, exit 0.
+- CLI `--help`: schema 승인 명령을 포함한 운영 명령 표시, exit 0.
 - ignored 임시 DB `init-db`: exit 0.
 - 데이터 없는 임시 DB `quality`: fail-closed JSON, exit 1.
 - PowerShell parser: 두 스크립트 모두 오류 0.

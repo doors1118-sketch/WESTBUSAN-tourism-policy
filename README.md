@@ -40,8 +40,8 @@ PowerShell 프로세스에 안전하게 주입해야 합니다.
 .\.venv\Scripts\python.exe scripts\import_legal_dong_codes.py --help
 .\.venv\Scripts\python.exe -m westbusan.sources.registry --help
 .\.venv\Scripts\python.exe -m westbusan.cli probe --source-id lodgings
-.\.venv\Scripts\python.exe -m westbusan.cli backfill --start 2022-01-01 --end 2026-08-16
 .\.venv\Scripts\python.exe -m westbusan.cli daily --as-of 2026-08-16
+.\.venv\Scripts\python.exe -m westbusan.cli schema-approve
 ```
 
 법정동 코드는 행정표준코드관리시스템의 공식 전체자료를 내려받은 뒤
@@ -50,6 +50,14 @@ PowerShell 프로세스에 안전하게 주입해야 합니다.
 `python -m westbusan.sources.registry --help`의 inspection 옵션으로 공식 상세
 페이지, operation, 필수 파라미터, row path를 기록합니다. 수집이 처음 관측한
 스키마를 자동 승인하지 않으므로 검토되지 않은 fingerprint는 게시를 차단합니다.
+여섯 숙박 원천의 공식 endpoint·부산 관할·필드·시간 한계는
+[`docs/SOURCE_CONTRACTS.md`](docs/SOURCE_CONTRACTS.md)에 고정되어 있습니다.
+
+숙박 원천은 전국 서비스이므로 모든 page에
+`cond[OPN_ATMY_GRP_CD::EQ]=6260000`을 전송하고 반환 관할코드도 다시 검증합니다.
+현행 `info` snapshot만으로 2022년 당시 시설 재고를 추정하거나 공식 역사
+시계열이라고 표현하지 않습니다. 원천별 history operation은 별도 계약 검토와
+승인 전까지 사용할 수 없습니다.
 
 backfill 날짜는 양 끝을 포함합니다. 월 원천은 월별 partition, 현행 상태만
 제공하는 인허가·건축 원천은 종료일 기준 full snapshot 한 번으로 처리합니다.
@@ -60,6 +68,18 @@ empty 증거가 있을 때만 기록합니다. 관광 원천은 관광 loader가
 넣지 않고 실제 record 또는 공급자의 명시적 empty가 확인된 source-month만
 checkpoint로 반환합니다. 일일 관광·교통 수집 대상은 실행일이 속한 달이 아니라
 직전의 완결된 달입니다.
+
+최초 수집은 검토되지 않은 schema 때문에 차단되는 것이 정상입니다. raw 원문과
+공식 계약을 검토한 뒤 다음 첫 명령으로 관측값만 표시하고, 출력된 source,
+operation, partition, fingerprint를 두 번째 명령에 정확히 다시 입력해야 합니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m westbusan.cli schema-approve
+.\.venv\Scripts\python.exe -m westbusan.cli schema-approve --source-id lodgings --operation info --partition 2026-08-16 --fingerprint <관측값> --approver <운영자> --rationale "공식 원문 검토"
+```
+
+부분 입력이나 관측 불일치는 승인되지 않으며 승인방법·운영자·사유가 DuckDB에
+감사기록으로 남습니다. 인증키 값은 어느 인자에도 넣지 않습니다.
 
 ## 품질, 중복 검토, export
 

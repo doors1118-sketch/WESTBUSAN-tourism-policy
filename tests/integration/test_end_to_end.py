@@ -24,6 +24,15 @@ def test_fixture_pipeline_is_idempotent_and_publishes_marts(tmp_path: Path) -> N
         )
         == 1
     )
+    request_metadata = [
+        json.loads(value)
+        for (value,) in pipeline.db.query(
+            "select request_json from raw_artifact where run_id = ?",
+            [first.run_id],
+        )
+    ]
+    assert all(metadata["parameters"] == {} for metadata in request_metadata)
+    assert all(metadata["partition"] == "2026-08-16" for metadata in request_metadata)
 
 
 def test_published_rerun_is_a_noop_even_if_the_source_would_now_fail(
