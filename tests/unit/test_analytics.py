@@ -140,3 +140,10 @@ def test_group_distribution_flattens_facility_values_not_district_medians() -> N
     )
 
     assert (median_rooms, small_share, age30_share) == (9.0, 0.1, 0.1)
+
+
+def test_period_metric_set_retains_known_room_total_for_tourism_denominator() -> None:
+    """A period-local tourism share must divide by that period's known rooms."""
+    metrics = _period_metric_set([10.0, None], small_room_threshold=20)
+
+    assert metrics["room_sum"] == 10.0

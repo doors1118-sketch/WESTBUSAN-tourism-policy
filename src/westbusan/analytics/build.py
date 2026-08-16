@@ -496,18 +496,53 @@ def _same_period_inventory(
     registrations = sum(len(sources) for sources in facility_sources.values())
     # Age and permit facts are intentionally null for a historical period unless
     # a period-compatible building snapshot is implemented for that period.
-    return {**_empty_metrics(district, str(fallback["group"])), **metrics,
+    tourism_rooms = sum(next(iter(facility_rooms[facility])) for facility, sources in facility_sources.items() if "tourist_accommodations" in sources and len(facility_rooms[facility]) == 1)
+    room_sum = metrics["room_sum"]
+    output = {**_empty_metrics(district, str(fallback["group"])), **metrics,
             "registrations": registrations, "tourism_facilities": tourism,
             "tourism_share": tourism / total if total else None,
             "foreigner_registrations": foreigner,
             "foreigner_share": foreigner / registrations if registrations else None,
             "foreign_capable_registrations": foreigner + tourism,
             "foreign_capable_share": (foreigner + tourism) / registrations if registrations else None,
-            "tourism_rooms": sum(next(iter(facility_rooms[facility])) for facility, sources in facility_sources.items() if "tourist_accommodations" in sources and len(facility_rooms[facility]) == 1),
-            "tourism_room_share": None, "age_mean": None, "age_median": None,
+            "tourism_rooms": tourism_rooms,
+            "tourism_room_share": tourism_rooms / room_sum if room_sum else None, "age_mean": None, "age_median": None,
             "weighted_age": None, "age20": None, "age30": None, "age_known": 0,
             "age20_count": 0, "age30_count": 0, "permit_share": None,
             "permit_known": 0, "permit_count": 0}
+    output.update(_period_building_metrics(db, run_id, as_of, period, facilities, facility_rooms))
+    return output
+
+
+def _period_building_metrics(
+    db: Database, run_id: UUID, as_of: date | None, period: str,
+    facilities: set[object], rooms: dict[object, set[float]],
+) -> dict[str, object]:
+    if not facilities:
+        return {}
+    visible = _visible_run_ids(db, run_id); placeholders = ",".join("?" for _ in visible)
+    rows = db.query(
+        f"""select link.facility_id, snapshot.approval_date, snapshot.permit_date, snapshot.observed_on
+        from bridge_facility_building as link join dim_building as building on building.building_id = link.building_id
+        join staging_building_snapshot as snapshot on snapshot.building_id = building.building_key
+        where snapshot.observed_on::varchar like ? and snapshot.first_loaded_run_id in ({placeholders})
+          and (? is null or snapshot.observed_on <= ?)""", [f"{period}%", *visible, as_of, as_of])
+    age_by_facility: dict[object, float] = {}
+    permit_by_facility: dict[object, bool] = {}
+    for facility, approval, permit, observed in rows:
+        if facility not in facilities or approval is None or observed is None or facility in age_by_facility:
+            continue
+        age_by_facility[facility] = max(0.0, (observed - approval).days / 365.2425)
+        permit_by_facility[facility] = permit is not None and 0 <= (observed - permit).days <= 5 * 365
+    ages = list(age_by_facility.values()); weighted = [(age_by_facility[key], next(iter(rooms[key]))) for key in age_by_facility if len(rooms[key]) == 1 and next(iter(rooms[key])) > 0]
+    permit_known = len(permit_by_facility); permit_count = sum(permit_by_facility.values())
+    return {"age_values": ages, "age_mean": mean(ages) if ages else None, "age_median": median(ages) if ages else None,
+            "weighted_age": sum(age * room for age, room in weighted) / sum(room for _, room in weighted) if weighted else None,
+            "age20_count": sum(age >= 20 for age in ages), "age30_count": sum(age >= 30 for age in ages),
+            "age_known": len(ages), "age20": sum(age >= 20 for age in ages) / len(ages) if ages else None,
+            "age30": sum(age >= 30 for age in ages) / len(ages) if ages else None,
+            "permit_known": permit_known, "permit_count": permit_count,
+            "permit_share": permit_count / permit_known if permit_known else None}
 
 
 def _month(period: str) -> str:
