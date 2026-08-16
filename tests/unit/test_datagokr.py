@@ -85,6 +85,40 @@ def test_http_client_retries_retryable_statuses() -> None:
     assert waits == [1, 2]
 
 
+def test_http_client_classifies_authentication_error_before_retrying_http_500() -> None:
+    calls = 0
+    body = b"""<OpenAPI_ServiceResponse><cmmMsgHeader><returnReasonCode>30</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500, content=body, headers={"content-type": "application/xml"})
+
+    client = SafeHttpClient(
+        httpx.Client(transport=httpx.MockTransport(handler)), sleeper=lambda _: None
+    )
+    with pytest.raises(AuthenticationError):
+        client.get("https://example.test/info", {})
+    assert calls == 1
+
+
+def test_http_client_classifies_quota_error_before_retrying_http_429() -> None:
+    calls = 0
+    body = b"""<OpenAPI_ServiceResponse><cmmMsgHeader><returnReasonCode>22</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(429, content=body, headers={"content-type": "application/xml"})
+
+    client = SafeHttpClient(
+        httpx.Client(transport=httpx.MockTransport(handler)), sleeper=lambda _: None
+    )
+    with pytest.raises(QuotaError):
+        client.get("https://example.test/info", {})
+    assert calls == 1
+
+
 def test_pager_stops_after_total_count() -> None:
     calls: list[int] = []
 

@@ -71,18 +71,17 @@ class SafeHttpClient:
                 self.sleeper(_WAITS[attempt])
                 continue
 
-            if response.status_code in _RETRYABLE_STATUSES and attempt < len(_WAITS):
-                self.sleeper(_WAITS[attempt])
-                continue
-            if response.status_code >= 400:
-                raise HttpStatusError(f"HTTP {response.status_code}")
-
             result = HttpResult(
                 status_code=response.status_code,
                 body=response.content,
                 content_type=response.headers.get("content-type", ""),
             )
             raise_for_portal_error(result.body, result.content_type)
+            if response.status_code in _RETRYABLE_STATUSES and attempt < len(_WAITS):
+                self.sleeper(_WAITS[attempt])
+                continue
+            if response.status_code >= 400:
+                raise HttpStatusError(f"HTTP {response.status_code}")
             return result
         raise HttpStatusError("request failed after retries") from last_error
 
