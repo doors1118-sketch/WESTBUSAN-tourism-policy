@@ -48,3 +48,5 @@ Provider-schema fix commit: `19905b0d4b53b1431a7ba3f75a48678040a0a2f5`
 Provenance and official-file fix commit: `94ca71a4037c50153cad6be7f26dd9788a6c15ce`
 
 Final official-contract fix commit: `2f5e9bd3382c7160069cb2d90599cf50ef98549f`
+
+Final provenance-persistence fix commit: `0e743a4736fbb2caf19751ff7b00efffe4a96268`
