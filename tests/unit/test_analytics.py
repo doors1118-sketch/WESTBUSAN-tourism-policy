@@ -98,8 +98,14 @@ def test_visible_runs_exclude_later_backfill_and_include_prior_history(tmp_path:
     db = Database(tmp_path / "visibility.duckdb", Path("sql"))
     db.migrate()
     first, second = uuid4(), uuid4()
-    db.connection.execute("insert into pipeline_run values (?, 'test', '2026-01-10', 'DONE')", [first])
-    db.connection.execute("insert into pipeline_run values (?, 'test', '2026-02-10', 'DONE')", [second])
+    db.connection.execute(
+        "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', '2026-01-10', 'DONE')",
+        [first],
+    )
+    db.connection.execute(
+        "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', '2026-02-10', 'DONE')",
+        [second],
+    )
 
     assert _visible_run_ids(db, first) == (first,)
     assert _visible_run_ids(db, second) == (first, second)
