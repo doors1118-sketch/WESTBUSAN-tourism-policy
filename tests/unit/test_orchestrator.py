@@ -15,6 +15,7 @@ from westbusan.orchestrator import (
     redact_for_log,
 )
 from westbusan.sources.registry import SourceRegistry
+from westbusan.transport.load import SourceMonthEvidence
 
 
 def test_monthly_partitions_include_both_boundary_months() -> None:
@@ -211,7 +212,9 @@ def test_family_ready_result_does_not_fabricate_monthly_checkpoints(
         pipeline = Pipeline.for_fixtures(tmp_path / str(index), Path("tests/fixtures"))
         pipeline.fixture_dir = None
         pipeline.registry = SourceRegistry((spec,))
-        outcome = SimpleNamespace(records_loaded=0, sources_ready=(spec.source_id,))
+        outcome = SimpleNamespace(
+            records_loaded=0, sources_ready=(spec.source_id,), source_months=()
+        )
         monkeypatch.setattr(
             orchestrator_module,
             loader_name,
@@ -253,6 +256,111 @@ def test_daily_tourism_requests_the_previous_complete_month(
 
     assert summary.published is False
     assert observed == {"start": date(2026, 7, 1), "end": date(2026, 7, 31)}
+
+
+def test_daily_transport_requests_and_checkpoints_previous_complete_month(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches daily transport using as_of or a snapshot checkpoint instead of July."""
+    spec = SourceSpec(
+        "srt_station_boarding_file",
+        "file://example/srt",
+        group="transport",
+        cadence="monthly",
+        source_type="file",
+    )
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.fixture_dir = None
+    pipeline.registry = SourceRegistry((spec,))
+    observed: dict[str, date] = {}
+
+    def fake_load(db, registry, start, end, run):
+        observed.update(start=start, end=end)
+        return SimpleNamespace(
+            records_loaded=1,
+            sources_ready=(spec.source_id,),
+            source_months=(SourceMonthEvidence(spec.source_id, "2026-07", 1),),
+        )
+
+    monkeypatch.setattr(orchestrator_module, "load_transport", fake_load)
+
+    summary = pipeline.daily(date(2026, 8, 16))
+
+    assert summary.published is False
+    assert observed == {"start": date(2026, 7, 1), "end": date(2026, 7, 31)}
+    checkpoint = json.loads(
+        pipeline.db.scalar(
+            """select checkpoint_json from collection_checkpoint
+               where source_id = ? and partition_key = '2026-07'""",
+            [spec.source_id],
+        )
+    )
+    assert checkpoint["status"] == "completed"
+    assert checkpoint["evidence"]["record_count"] == 1
+
+
+def test_transport_restart_skips_only_evidence_backed_months(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches requested months being blanket-completed or recollected on restart."""
+    spec = SourceSpec(
+        "srt_station_boarding_file",
+        "file://example/srt",
+        group="transport",
+        cadence="monthly",
+        source_type="file",
+    )
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.fixture_dir = None
+    pipeline.registry = SourceRegistry((spec,))
+    calls: list[tuple[date, date]] = []
+
+    def fake_load(db, registry, start, end, run):
+        calls.append((start, end))
+        evidence = (
+            (SourceMonthEvidence(spec.source_id, "2026-01", 1),)
+            if len(calls) == 1
+            else (
+                SourceMonthEvidence(spec.source_id, "2026-02", 1),
+                SourceMonthEvidence(spec.source_id, "2026-03", 1),
+            )
+        )
+        return SimpleNamespace(
+            records_loaded=len(evidence),
+            sources_ready=(spec.source_id,),
+            source_months=evidence,
+        )
+
+    persist_summary = pipeline._persist_summary
+    monkeypatch.setattr(orchestrator_module, "load_transport", fake_load)
+    monkeypatch.setattr(
+        pipeline,
+        "_persist_summary",
+        lambda summary: (_ for _ in ()).throw(RuntimeError("restart injection")),
+    )
+
+    with pytest.raises(RuntimeError, match="restart injection"):
+        pipeline.backfill(date(2026, 1, 15), date(2026, 3, 2))
+
+    assert pipeline.db.query(
+        """select partition_key from collection_checkpoint
+           where source_id = ? order by partition_key""",
+        [spec.source_id],
+    ) == [("2026-01",)]
+    monkeypatch.setattr(pipeline, "_persist_summary", persist_summary)
+
+    retried = pipeline.backfill(date(2026, 1, 15), date(2026, 3, 2))
+
+    assert retried.status == "BLOCKED"
+    assert calls == [
+        (date(2026, 1, 1), date(2026, 3, 31)),
+        (date(2026, 2, 1), date(2026, 3, 31)),
+    ]
+    assert pipeline.db.query(
+        """select partition_key from collection_checkpoint
+           where source_id = ? order by partition_key""",
+        [spec.source_id],
+    ) == [("2026-01",), ("2026-02",), ("2026-03",)]
 
 
 def test_duplicate_export_is_frozen_to_current_publication(

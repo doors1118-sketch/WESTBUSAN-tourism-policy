@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import httpx
@@ -148,7 +148,13 @@ def test_load_transport_registers_static_korail_file_at_native_grain(tmp_path: P
     db.migrate()
     run = RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC))
 
-    result = load_transport(db, SourceRegistry.load(Path("config/sources.yaml")), run)
+    result = load_transport(
+        db,
+        SourceRegistry.load(Path("config/sources.yaml")),
+        date(2022, 4, 1),
+        date(2022, 6, 30),
+        run,
+    )
 
     assert result.records_loaded == 1
     assert result.artifacts_written == 1
@@ -158,6 +164,94 @@ def test_load_transport_registers_static_korail_file_at_native_grain(tmp_path: P
         "select period, metric_code, metric_value, unit from fact_transport_flow where metric_code = 'korail_workplace_smart_ticket_count'"
     ) == [("2022-04..2022-06", "korail_workplace_smart_ticket_count", 100, "count")]
     assert db.query("select source_date from raw_artifact") == [(None,)]
+
+
+def test_load_transport_filters_file_records_to_inclusive_requested_months(
+    tmp_path: Path,
+) -> None:
+    """Catches a versioned snapshot persisting months outside the requested range."""
+    data_dir = tmp_path / "data"
+    inbox = data_dir / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "SRT_역별_승차_2026.csv").write_text(
+        "승차역,2026년1월,2026년2월,2026년3월\n부산역,10,20,30\n",
+        encoding="utf-8",
+    )
+    db = Database(data_dir / "test.duckdb", Path("sql"))
+    db.migrate()
+    full_registry = SourceRegistry.load(Path("config/sources.yaml"))
+    registry = SourceRegistry((full_registry.get("srt_station_boarding_file"),))
+
+    result = load_transport(
+        db,
+        registry,
+        date(2026, 1, 15),
+        date(2026, 2, 2),
+        RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == 2
+    assert db.query(
+        "select distinct period from fact_transport_flow order by period"
+    ) == [("2026-01",), ("2026-02",)]
+    assert [
+        (item.source_id, item.month, item.record_count, item.explicit_empty)
+        for item in result.source_months
+    ] == [
+        ("srt_station_boarding_file", "2026-01", 1, False),
+        ("srt_station_boarding_file", "2026-02", 1, False),
+    ]
+
+
+def test_public_transport_od_requests_every_inclusive_month(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches monthly OD scheduling reusing one inspected month for a backfill."""
+    data_dir = tmp_path / "data"
+    db = Database(data_dir / "test.duckdb", Path("sql"))
+    db.migrate()
+    full_registry = SourceRegistry.load(Path("config/sources.yaml"))
+    spec = full_registry.get("public_transport_od_usage")
+    registry = SourceRegistry((spec,))
+    record_inspection(
+        spec,
+        db,
+        operation="getODUsage",
+        required_parameters={"opr_ym": "reviewed-placeholder"},
+        response_row_path="data",
+        portal_detail_url="https://www.data.go.kr/data/example",
+    )
+    monkeypatch.setenv("WESTBUSAN_ENABLE_LIVE_TRANSPORT", "true")
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-only-key")
+    template = json.loads(
+        Path("tests/fixtures/transport/od_row.json").read_text(encoding="utf-8")
+    )
+    requested: list[str] = []
+
+    class FixtureClient:
+        def get(self, url: str, params: dict[str, object]) -> HttpResult:
+            month = str(params["opr_ym"])
+            requested.append(month)
+            row = {**template, "opr_ym": month}
+            return HttpResult(
+                200,
+                json.dumps(
+                    {"data": [row], "totalCount": 1, "pageNo": 1, "numOfRows": 1000}
+                ).encode(),
+                "application/json",
+            )
+
+    result = load_transport(
+        db,
+        registry,
+        date(2026, 1, 31),
+        date(2026, 2, 1),
+        RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
+        client=FixtureClient(),
+    )
+
+    assert requested == ["202601", "202602"]
+    assert [item.month for item in result.source_months] == ["2026-01", "2026-02"]
 
 
 def test_repeated_file_hash_is_auditable_without_duplicate_transport_facts(tmp_path: Path) -> None:
@@ -171,8 +265,20 @@ def test_repeated_file_hash_is_auditable_without_duplicate_transport_facts(tmp_p
     db.migrate()
     registry = SourceRegistry.load(Path("config/sources.yaml"))
 
-    load_transport(db, registry, RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)))
-    result = load_transport(db, registry, RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)))
+    load_transport(
+        db,
+        registry,
+        date(2022, 4, 1),
+        date(2022, 6, 30),
+        RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
+    )
+    result = load_transport(
+        db,
+        registry,
+        date(2022, 4, 1),
+        date(2022, 6, 30),
+        RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
+    )
 
     assert result.records_loaded == 0
     assert db.query("select count(*) from raw_artifact") == [(2,)]
@@ -192,6 +298,8 @@ def test_load_transport_preserves_official_residence_codes_without_measure_leaka
     result = load_transport(
         db,
         SourceRegistry.load(Path("config/sources.yaml")),
+        date(2022, 4, 1),
+        date(2022, 6, 30),
         RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
     )
 
@@ -217,6 +325,8 @@ def test_unparseable_railway_rows_are_not_marked_ready(tmp_path: Path) -> None:
     result = load_transport(
         db,
         SourceRegistry.load(Path("config/sources.yaml")),
+        date(2022, 1, 1),
+        date(2022, 12, 31),
         RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
     )
 
@@ -284,6 +394,8 @@ def test_live_collectors_store_odcloud_and_data_go_pages_before_transport_facts(
     result = load_transport(
         db,
         registry,
+        date(2024, 7, 1),
+        date(2024, 7, 31),
         RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
         client=FixtureClient(),
     )
@@ -373,6 +485,8 @@ def test_live_odcloud_collection_scopes_credential_to_dataset_host(
     result = load_transport(
         db,
         registry,
+        date(2024, 7, 1),
+        date(2024, 7, 31),
         RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
     )
 

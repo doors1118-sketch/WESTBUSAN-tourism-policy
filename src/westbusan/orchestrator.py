@@ -274,21 +274,64 @@ class Pipeline:
             else:
                 total_rows += result.records_loaded
         if any(self.registry.get(item).group == "transport" for item in selected):
-            before = datetime.now(UTC)
             try:
-                result = load_transport(self.db, selected_registry, run)
+                transport_start, transport_end = start, end
+                if mode == "daily":
+                    transport_end = date(end.year, end.month, 1) - timedelta(days=1)
+                    transport_start = date(
+                        transport_end.year, transport_end.month, 1
+                    )
+                for source_id in selected:
+                    spec = self.registry.get(source_id)
+                    if spec.group != "transport":
+                        continue
+                    partitions = iter_source_partitions(
+                        spec, transport_start, transport_end
+                    )
+                    pending = tuple(
+                        partition
+                        for partition in partitions
+                        if not self._transport_checkpoint_complete(
+                            source_id, partition, run.run_id
+                        )
+                    )
+                    source_registry = SourceRegistry((spec,))
+                    for range_start, range_end in _month_partition_ranges(pending):
+                        self._refresh_lease(run.run_id)
+                        result = load_transport(
+                            self.db,
+                            source_registry,
+                            range_start,
+                            range_end,
+                            run,
+                        )
+                        total_rows += result.records_loaded
+                        for evidence in result.source_months:
+                            if (
+                                evidence.source_id != source_id
+                                or evidence.month not in pending
+                                or not (
+                                    evidence.record_count > 0
+                                    or evidence.explicit_empty
+                                )
+                            ):
+                                continue
+                            self._checkpoint(
+                                source_id,
+                                evidence.month,
+                                "completed",
+                                2,
+                                run.run_id,
+                                evidence={
+                                    "record_count": evidence.record_count,
+                                    "explicit_empty": evidence.explicit_empty,
+                                },
+                            )
             except Exception as error:  # noqa: BLE001 - terminal family boundary
                 for source_id in selected:
                     if self.registry.get(source_id).group == "transport":
                         self._record_failure(run, source_id, error, logger)
                 self._record_orchestration_failure(run, "transport", error, logger)
-            else:
-                self.db.connection.execute(
-                    """update source_status set run_id = ?
-                       where run_id is null and checked_at >= ?""",
-                    [run.run_id, before],
-                )
-                total_rows += result.records_loaded
         return self._finish_run(run, total_rows, logger)
 
     def _finish_run(
@@ -809,12 +852,18 @@ class Pipeline:
         status: str,
         next_page: int,
         run_id: UUID,
+        *,
+        evidence: dict[str, object] | None = None,
     ) -> None:
         self._refresh_lease(run_id)
-        value = json.dumps(
-            {"status": status, "next_page": next_page, "run_id": str(run_id)},
-            sort_keys=True,
-        )
+        payload: dict[str, object] = {
+            "status": status,
+            "next_page": next_page,
+            "run_id": str(run_id),
+        }
+        if evidence is not None:
+            payload["evidence"] = evidence
+        value = json.dumps(payload, sort_keys=True)
         self.db.connection.execute(
             """
             insert into collection_checkpoint (
@@ -834,6 +883,21 @@ class Pipeline:
             [source_id, partition],
         )
         return json.loads(rows[0][0]) if rows else {}
+
+    def _transport_checkpoint_complete(
+        self, source_id: str, partition: str, run_id: UUID
+    ) -> bool:
+        checkpoint = self._checkpoint_value(source_id, partition)
+        if (
+            checkpoint.get("status") != "completed"
+            or checkpoint.get("run_id") != str(run_id)
+        ):
+            return False
+        evidence = checkpoint.get("evidence")
+        return isinstance(evidence, dict) and (
+            int(evidence.get("record_count", 0)) > 0
+            or evidence.get("explicit_empty") is True
+        )
 
     def _record_failure(
         self,
@@ -960,6 +1024,10 @@ def iter_source_partitions(
     """Plan inclusive source partitions without replaying current-only snapshots."""
     if start > end:
         raise ValueError("partition start must be on or before end")
+    if getattr(spec, "group", "") == "transport" and getattr(
+        spec, "cadence", ""
+    ) == "monthly":
+        return _monthly_partition_keys(start, end)
     if getattr(spec, "group", "") in {"accommodation", "building"} or getattr(
         spec, "cadence", ""
     ) in {"current", "snapshot"} or getattr(spec, "source_type", "api") in {
@@ -968,23 +1036,59 @@ def iter_source_partitions(
     }:
         return (f"snapshot:{end.isoformat()}",)
     if getattr(spec, "cadence", "") == "monthly":
-        current = date(start.year, start.month, 1)
-        last = date(end.year, end.month, 1)
-        partitions: list[str] = []
-        while current <= last:
-            partitions.append(current.strftime("%Y-%m"))
-            current = (
-                date(current.year + 1, 1, 1)
-                if current.month == 12
-                else date(current.year, current.month + 1, 1)
-            )
-        return tuple(partitions)
+        return _monthly_partition_keys(start, end)
     partitions = []
     current = start
     while current <= end:
         partitions.append(current.isoformat())
         current += timedelta(days=1)
     return tuple(partitions)
+
+
+def _monthly_partition_keys(start: date, end: date) -> tuple[str, ...]:
+    current = date(start.year, start.month, 1)
+    last = date(end.year, end.month, 1)
+    partitions: list[str] = []
+    while current <= last:
+        partitions.append(current.strftime("%Y-%m"))
+        current = (
+            date(current.year + 1, 1, 1)
+            if current.month == 12
+            else date(current.year, current.month + 1, 1)
+        )
+    return tuple(partitions)
+
+
+def _month_partition_ranges(
+    partitions: tuple[str, ...],
+) -> tuple[tuple[date, date], ...]:
+    if not partitions:
+        return ()
+    ranges: list[tuple[date, date]] = []
+    range_start = _partition_month_date(partitions[0])
+    previous = range_start
+    for partition in partitions[1:]:
+        current = _partition_month_date(partition)
+        expected = (
+            date(previous.year + 1, 1, 1)
+            if previous.month == 12
+            else date(previous.year, previous.month + 1, 1)
+        )
+        if current != expected:
+            ranges.append((range_start, expected - timedelta(days=1)))
+            range_start = current
+        previous = current
+    next_month = (
+        date(previous.year + 1, 1, 1)
+        if previous.month == 12
+        else date(previous.year, previous.month + 1, 1)
+    )
+    ranges.append((range_start, next_month - timedelta(days=1)))
+    return tuple(ranges)
+
+
+def _partition_month_date(partition: str) -> date:
+    return date(int(partition[:4]), int(partition[5:7]), 1)
 
 
 def export_current(db: Database, data_dir: Path, export_date: date) -> tuple[Path, ...]:

@@ -6,9 +6,10 @@ import hashlib
 import json
 import os
 import re
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 
 from westbusan.db import Database
@@ -132,6 +133,25 @@ class LoadResult:
     artifacts_written: int
     sources_ready: tuple[str, ...]
     sources_skipped: tuple[str, ...]
+    source_months: tuple[SourceMonthEvidence, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class SourceMonthEvidence:
+    """Observed facts or an explicit provider empty response for one source-month."""
+
+    source_id: str
+    month: str
+    record_count: int
+    explicit_empty: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceOutcome:
+    records_loaded: int
+    artifacts_written: int
+    ready: bool
+    source_months: tuple[SourceMonthEvidence, ...] = ()
 
 
 def normalize_transport_row(source_id: str, row: dict[str, object]) -> TransportRecord:
@@ -155,26 +175,38 @@ def normalize_transport_rows(
 def load_transport(
     db: Database,
     registry: SourceRegistry,
+    start: date,
+    end: date,
     run: RunContext,
     *,
     client: SafeHttpClient | None = None,
 ) -> LoadResult:
     """Load approved evidence; network collection is explicitly opt-in."""
+    if start > end:
+        raise ValueError("transport start must be on or before end")
     files = FileSource(db.path.parent)
     raw_store = RawStore(db.path.parent)
     loaded = artifacts = 0
     ready: list[str] = []
     skipped: list[str] = []
+    source_months: list[SourceMonthEvidence] = []
     for source_id in registry.ids(group="transport"):
         spec = registry.get(source_id)
         if spec.source_type == "file":
-            outcome = _load_files(db, files, raw_store, spec, run)
+            outcome = _load_files(db, files, raw_store, spec, start, end, run)
         else:
-            outcome = _load_live(db, raw_store, spec, run, client)
-        loaded += outcome[0]
-        artifacts += outcome[1]
-        (ready if outcome[2] else skipped).append(source_id)
-    return LoadResult(loaded, artifacts, tuple(ready), tuple(skipped))
+            outcome = _load_live(db, raw_store, spec, start, end, run, client)
+        loaded += outcome.records_loaded
+        artifacts += outcome.artifacts_written
+        source_months.extend(outcome.source_months)
+        (ready if outcome.ready else skipped).append(source_id)
+    return LoadResult(
+        loaded,
+        artifacts,
+        tuple(ready),
+        tuple(skipped),
+        tuple(sorted(source_months, key=lambda item: (item.source_id, item.month))),
+    )
 
 
 def _load_files(
@@ -182,13 +214,22 @@ def _load_files(
     files: FileSource,
     raw_store: RawStore,
     spec: SourceSpec,
+    start: date,
+    end: date,
     run: RunContext,
-) -> tuple[int, int, bool]:
+) -> _SourceOutcome:
     paths = files.discover(db.path.parent / "inbox", spec.source_id)
     if not paths:
-        _status(db, spec.source_id, "SPEC_UNRESOLVED", {"reason": "no approved inbox file"})
-        return 0, 0, False
+        _status(
+            db,
+            spec.source_id,
+            "SPEC_UNRESOLVED",
+            {"reason": "no approved inbox file"},
+            run,
+        )
+        return _SourceOutcome(0, 0, False)
     loaded = artifacts = 0
+    represented: Counter[str] = Counter()
     for path in paths:
         artifact = files.ingest(path, spec.source_id, run)
         db.record_artifact(artifact)
@@ -196,81 +237,109 @@ def _load_files(
         try:
             rows = read_tabular_rows(path)
         except (OSError, ValueError) as error:
-            _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)})
-            return loaded, artifacts, False
-        if _artifact_seen_before(db, artifact):
-            continue
+            _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)}, run)
+            return _SourceOutcome(loaded, artifacts, False)
         if rows:
             raw_store.write_rows(artifact, rows)
         try:
-            loaded += _persist_rows(db, spec.source_id, rows, artifact, run)
+            inserted, evidence = _persist_rows(
+                db, spec.source_id, rows, artifact, start, end, run
+            )
+            loaded += inserted
+            represented.update(evidence)
         except (KeyError, TypeError, ValueError) as error:
-            _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)})
-            return loaded, artifacts, False
+            _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)}, run)
+            return _SourceOutcome(loaded, artifacts, False)
+    if not represented:
+        _status(
+            db,
+            spec.source_id,
+            "SPEC_UNRESOLVED",
+            {"reason": "file has no records in the requested month range"},
+            run,
+        )
+        return _SourceOutcome(loaded, artifacts, False)
     _status(
         db,
         spec.source_id,
         "READY",
         {"evidence_role": _evidence_role(spec.source_id), "native_grain": "source row"},
+        run,
     )
-    return loaded, artifacts, True
+    return _SourceOutcome(
+        loaded,
+        artifacts,
+        True,
+        tuple(
+            SourceMonthEvidence(spec.source_id, month, count)
+            for month, count in sorted(represented.items())
+        ),
+    )
 
 
 def _load_live(
     db: Database,
     raw_store: RawStore,
     spec: SourceSpec,
+    start: date,
+    end: date,
     run: RunContext,
     client: SafeHttpClient | None,
-) -> tuple[int, int, bool]:
+) -> _SourceOutcome:
     reason = _live_skip_reason(spec, db)
     if reason is not None:
-        _status(db, spec.source_id, "SPEC_UNRESOLVED", {"reason": reason})
-        return 0, 0, False
+        _status(db, spec.source_id, "SPEC_UNRESOLVED", {"reason": reason}, run)
+        return _SourceOutcome(0, 0, False)
     try:
         if spec.source_id in _METRO_SOURCES:
             metadata_client = client or build_odcloud_metadata_client()
             dataset_client = client or build_odcloud_client(os.environ["ODCLOUD_API_KEY"])
             return _load_odcloud(
-                db, raw_store, spec, run, metadata_client, dataset_client
+                db, raw_store, spec, start, end, run, metadata_client, dataset_client
             )
         if spec.source_id in _OD_SOURCES:
             return _load_od(
                 db,
                 raw_store,
                 _reviewed_spec(spec, db),
+                start,
+                end,
                 run,
                 client or SafeHttpClient(),
             )
     except AuthenticationError as error:
-        _status(db, spec.source_id, "AUTH_FAILED", {"error": str(error)})
+        _status(db, spec.source_id, "AUTH_FAILED", {"error": str(error)}, run)
     except QuotaError as error:
-        _status(db, spec.source_id, "QUOTA_EXCEEDED", {"error": str(error)})
+        _status(db, spec.source_id, "QUOTA_EXCEEDED", {"error": str(error)}, run)
     except HttpStatusError as error:
         _status(
             db,
             spec.source_id,
             "AUTH_FAILED" if error.status_code in {401, 403} else "SCHEMA_CHANGED",
             {"error": str(error)},
+            run,
         )
     except (SchemaError, ValueError, KeyError, TypeError) as error:
-        _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)})
-    return 0, 0, False
+        _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)}, run)
+    return _SourceOutcome(0, 0, False)
 
 
 def _load_odcloud(
     db: Database,
     raw_store: RawStore,
     spec: SourceSpec,
+    start: date,
+    end: date,
     run: RunContext,
     metadata_client: SafeHttpClient,
     dataset_client: SafeHttpClient,
-) -> tuple[int, int, bool]:
+) -> _SourceOutcome:
     revision = discover_latest_dataset(
         _namespace(spec.url), metadata_client, portal_detail_url=spec.portal_detail_url
     )
     source_revision = f"odcloud:{revision.uddi}:{revision.schema_fingerprint}"
     loaded = artifacts = 0
+    represented: Counter[str] = Counter()
     if revision.portal_detail_raw_body is not None:
         metadata_artifact = raw_store.write(
             run,
@@ -337,9 +406,27 @@ def _load_odcloud(
         artifacts += 1
         if page.rows:
             raw_store.write_rows(artifact, page.rows)
-        loaded += _persist_rows(
-            db, spec.source_id, page.rows, artifact, run, source_revision=source_revision
+        inserted, evidence = _persist_rows(
+            db,
+            spec.source_id,
+            page.rows,
+            artifact,
+            start,
+            end,
+            run,
+            source_revision=source_revision,
         )
+        loaded += inserted
+        represented.update(evidence)
+    if not represented:
+        _status(
+            db,
+            spec.source_id,
+            "SPEC_UNRESOLVED",
+            {"reason": "snapshot has no records in the requested month range"},
+            run,
+        )
+        return _SourceOutcome(loaded, artifacts, False)
     _status(
         db,
         spec.source_id,
@@ -359,43 +446,75 @@ def _load_odcloud(
             "row_count": revision.row_count,
             "schema_fingerprint": revision.schema_fingerprint,
         },
+        run,
     )
-    return loaded, artifacts, True
+    return _SourceOutcome(
+        loaded,
+        artifacts,
+        True,
+        tuple(
+            SourceMonthEvidence(spec.source_id, month, count)
+            for month, count in sorted(represented.items())
+        ),
+    )
 
 
 def _load_od(
     db: Database,
     raw_store: RawStore,
     spec: SourceSpec | None,
+    start: date,
+    end: date,
     run: RunContext,
     client: SafeHttpClient,
-) -> tuple[int, int, bool]:
+) -> _SourceOutcome:
     if spec is None:
-        return 0, 0, False
+        return _SourceOutcome(0, 0, False)
     pager = DataGoKrPager(client, os.environ["DATA_GO_KR_SERVICE_KEY"])
     loaded = artifacts = 0
     pager_spec = replace(spec, url=spec.endpoint_url, operation=None)
-    for page in pager.iter_pages(pager_spec, dict(spec.required_parameters), include_empty=True):
-        artifact = raw_store.write(
-            run,
-            spec.source_id,
-            {
-                "operation": spec.operation,
-                "parameters": dict(spec.required_parameters),
-                "pageNo": page.page_no,
-                "numOfRows": page.page_size,
-                "schema_fingerprint": page.schema_fingerprint,
-            },
-            page.raw_body,
-            ".json",
-        )
-        db.record_artifact(artifact)
-        artifacts += 1
-        if page.rows:
-            raw_store.write_rows(artifact, page.rows)
-        loaded += _persist_rows(db, spec.source_id, page.rows, artifact, run)
-    _status(db, spec.source_id, "READY", {"operation": spec.operation})
-    return loaded, artifacts, True
+    evidence: list[SourceMonthEvidence] = []
+    for month in _iter_months(start, end):
+        parameters = {**dict(spec.required_parameters), "opr_ym": month.replace("-", "")}
+        represented = 0
+        explicit_empty = False
+        for page in pager.iter_pages(pager_spec, parameters, include_empty=True):
+            artifact = raw_store.write(
+                run,
+                spec.source_id,
+                {
+                    "operation": spec.operation,
+                    "partition": month,
+                    "parameters": parameters,
+                    "pageNo": page.page_no,
+                    "numOfRows": page.page_size,
+                    "schema_fingerprint": page.schema_fingerprint,
+                },
+                page.raw_body,
+                ".json",
+                _month_date(month),
+            )
+            db.record_artifact(artifact)
+            artifacts += 1
+            if page.rows:
+                raw_store.write_rows(artifact, page.rows)
+            inserted, months = _persist_rows(
+                db, spec.source_id, page.rows, artifact, start, end, run
+            )
+            loaded += inserted
+            represented += months.get(month, 0)
+            explicit_empty = explicit_empty or not page.rows
+        if represented or explicit_empty:
+            evidence.append(
+                SourceMonthEvidence(
+                    spec.source_id, month, represented, explicit_empty and not represented
+                )
+            )
+    if evidence and all(item.explicit_empty for item in evidence):
+        _status(db, spec.source_id, "EMPTY", {"operation": spec.operation}, run)
+    else:
+        _status(db, spec.source_id, "READY", {"operation": spec.operation}, run)
+    return _SourceOutcome(loaded, artifacts, True, tuple(evidence))
 
 
 def _persist_rows(
@@ -403,16 +522,29 @@ def _persist_rows(
     source_id: str,
     rows: list[dict[str, object]],
     artifact: RawArtifact,
+    start: date,
+    end: date,
     run: RunContext,
     *,
     source_revision: str | None = None,
-) -> int:
+) -> tuple[int, Counter[str]]:
     loaded = 0
+    represented: Counter[str] = Counter()
     for row in rows:
         for record in normalize_transport_rows(source_id, row):
-            _persist_record(db, record, artifact, run, source_revision=source_revision)
-            loaded += 1
-    return loaded
+            months = tuple(
+                month
+                for month in _record_months(record.period)
+                if _month_in_range(month, start, end)
+            )
+            if not months:
+                continue
+            inserted = _persist_record(
+                db, record, artifact, run, source_revision=source_revision
+            )
+            loaded += int(inserted)
+            represented.update(months)
+    return loaded, represented
 
 
 def _metro_record(source_id: str, row: Mapping[str, object]) -> TransportRecord:
@@ -598,7 +730,8 @@ def _persist_record(
     run: RunContext,
     *,
     source_revision: str | None = None,
-) -> None:
+) -> bool:
+    inserted = False
     for measure in record.measures:
         dimensions = {
             **record.dimensions,
@@ -607,7 +740,7 @@ def _persist_record(
         }
         dimension_json = json.dumps(dimensions, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         payload = json.dumps(record.source_payload_json, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
-        db.connection.execute(
+        rows = db.query(
             """
             insert into fact_transport_flow (
                 source_id, metric_code, period, district, region_group, dimension_json,
@@ -616,6 +749,7 @@ def _persist_record(
             ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (source_id, metric_code, period, district, dimension_json_hash, source_revision)
             do nothing
+            returning metric_code
             """,
             [
                 record.source_id,
@@ -633,6 +767,8 @@ def _persist_record(
                 run.run_id,
             ],
         )
+        inserted = inserted or bool(rows)
+    return inserted
 
 
 def _live_skip_reason(spec: SourceSpec, db: Database) -> str | None:
@@ -677,6 +813,39 @@ def _artifact_seen_before(db: Database, artifact: RawArtifact) -> bool:
             [artifact.source_id, artifact.content_hash, artifact.artifact_id],
         )
     )
+
+
+def _iter_months(start: date, end: date) -> tuple[str, ...]:
+    current = date(start.year, start.month, 1)
+    last = date(end.year, end.month, 1)
+    months: list[str] = []
+    while current <= last:
+        months.append(current.strftime("%Y-%m"))
+        current = (
+            date(current.year + 1, 1, 1)
+            if current.month == 12
+            else date(current.year, current.month + 1, 1)
+        )
+    return tuple(months)
+
+
+def _record_months(period: str) -> tuple[str, ...]:
+    if re.fullmatch(r"(?:19|20)\d{2}-\d{2}(?:-\d{2})?", period):
+        return (period[:7],)
+    matched = re.fullmatch(
+        r"((?:19|20)\d{2}-\d{2})\.\.((?:19|20)\d{2}-\d{2})", period
+    )
+    if matched is None:
+        raise ValueError(f"transport period has no month scope: {period!r}")
+    return _iter_months(_month_date(matched.group(1)), _month_date(matched.group(2)))
+
+
+def _month_in_range(month: str, start: date, end: date) -> bool:
+    return start.strftime("%Y-%m") <= month <= end.strftime("%Y-%m")
+
+
+def _month_date(month: str) -> date:
+    return date(int(month[:4]), int(month[5:7]), 1)
 
 
 def _period(row: Mapping[str, object]) -> str:
@@ -780,12 +949,21 @@ def _evidence_role(source_id: str) -> str:
     return "access_or_visitor_pressure_proxy_not_tourism_or_occupancy"
 
 
-def _status(db: Database, source_id: str, status: str, detail: Mapping[str, object]) -> None:
-    db.record_source_status(SourceStatus(source_id, datetime.now(UTC), status, detail))
+def _status(
+    db: Database,
+    source_id: str,
+    status: str,
+    detail: Mapping[str, object],
+    run: RunContext,
+) -> None:
+    db.record_source_status(
+        SourceStatus(source_id, datetime.now(UTC), status, detail, run.run_id)
+    )
 
 
 __all__ = [
     "LoadResult",
+    "SourceMonthEvidence",
     "TransportMeasure",
     "TransportRecord",
     "load_transport",
