@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import date
 from statistics import mean, median
@@ -14,6 +16,14 @@ from westbusan.config import PolicyConfig
 from westbusan.db import Database
 
 QualityBand = Literal["good", "warning", "insufficient", "incompatible"]
+
+_MART_TABLES = (
+    "mart_facility_current",
+    "mart_region_month",
+    "mart_metric_evidence",
+    "mart_region_comparison",
+    "mart_policy_signal",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,33 +90,98 @@ def policy_signals(
     return signals
 
 
-def build_marts(db: Database, run_id: UUID, policy: PolicyConfig) -> MartBuildResult:
+def build_marts(
+    db: Database,
+    run_id: UUID,
+    policy: PolicyConfig,
+    *,
+    stage_hook: Callable[[str], None] | None = None,
+    progress: Callable[[], None] | None = None,
+) -> MartBuildResult:
     """Rebuild run-scoped facility and district/month marts from durable facts."""
     db.migrate()
-    # A completed run is an immutable analytical snapshot.  Later snapshots
-    # must never rewrite it when an operator asks to reproduce its mart.
-    existing = db.query(
-        "select count(*) from mart_region_month where run_id = ?", [run_id]
-    )
-    if existing and existing[0][0]:
+    heartbeat = progress or (lambda: None)
+    after_stage = stage_hook or (lambda _: None)
+    heartbeat()
+    if mart_manifest_is_valid(db, run_id):
+        counts = _mart_counts(db, run_id)
         return MartBuildResult(
-            int(db.query("select count(*) from mart_facility_current where run_id = ?", [run_id])[0][0]),
-            int(existing[0][0]),
-            int(db.query("select count(*) from mart_metric_evidence where run_id = ?", [run_id])[0][0]),
-            int(db.query("select count(*) from mart_policy_signal where run_id = ?", [run_id])[0][0]),
+            counts["mart_facility_current"],
+            counts["mart_region_month"],
+            counts["mart_metric_evidence"],
+            counts["mart_policy_signal"],
         )
+    _purge_marts(db, run_id)
     as_of = _as_of_date(db, run_id)
     facilities = _facility_rows(db, run_id, as_of)
     _replace_facilities(db, run_id, facilities)
+    heartbeat()
+    after_stage("facility")
     district_metrics = _district_metrics(facilities, policy)
     district_metrics.update(_event_only_districts(db, run_id, as_of, district_metrics))
     periods = _periods(db, run_id, as_of, district_metrics)
     records = _region_rows(db, run_id, as_of, district_metrics, periods, policy)
     _replace_regions(db, run_id, records)
+    heartbeat()
+    after_stage("region")
     _replace_comparisons(db, run_id, records, facilities)
+    heartbeat()
+    after_stage("comparison")
     signal_count = _replace_signals(db, run_id, records, facilities, policy)
+    heartbeat()
+    after_stage("signal")
     evidence_rows = sum(len(row["evidence"]) for row in records)
+    write_mart_manifest(db, run_id)
+    heartbeat()
     return MartBuildResult(len(facilities), len(records), evidence_rows, signal_count)
+
+
+def _purge_marts(db: Database, run_id: UUID) -> None:
+    db.connection.execute("delete from mart_build_manifest where run_id = ?", [run_id])
+    for table in _MART_TABLES:
+        db.connection.execute(f"delete from {table} where run_id = ?", [run_id])
+
+
+def _mart_counts(db: Database, run_id: UUID) -> dict[str, int]:
+    return {
+        table: int(db.scalar(f"select count(*) from {table} where run_id = ?", [run_id]))
+        for table in _MART_TABLES
+    }
+
+
+def _mart_manifest_payload(db: Database, run_id: UUID) -> tuple[str, str]:
+    counts = _mart_counts(db, run_id)
+    digests: dict[str, str] = {}
+    for table in _MART_TABLES:
+        rows = db.query(f"select * from {table} where run_id = ? order by all", [run_id])
+        digests[table] = hashlib.sha256(_json(rows).encode("utf-8")).hexdigest()
+    counts_json = _json(counts)
+    manifest_hash = hashlib.sha256(
+        _json({"counts": counts, "digests": digests}).encode("utf-8")
+    ).hexdigest()
+    return manifest_hash, counts_json
+
+
+def write_mart_manifest(db: Database, run_id: UUID) -> None:
+    """Write the completion marker only after every run-scoped mart stage."""
+    manifest_hash, counts_json = _mart_manifest_payload(db, run_id)
+    db.connection.execute("delete from mart_build_manifest where run_id = ?", [run_id])
+    db.connection.execute(
+        "insert into mart_build_manifest (run_id, manifest_hash, table_counts_json) values (?, ?, ?)",
+        [run_id, manifest_hash, counts_json],
+    )
+
+
+def mart_manifest_is_valid(db: Database, run_id: UUID) -> bool:
+    """Rehash every mart table so a count-preserving partial mutation fails closed."""
+    rows = db.query(
+        "select manifest_hash, table_counts_json from mart_build_manifest where run_id = ?",
+        [run_id],
+    )
+    if len(rows) != 1:
+        return False
+    manifest_hash, counts_json = _mart_manifest_payload(db, run_id)
+    return rows[0] == (manifest_hash, counts_json)
 
 
 def _as_of_date(db: Database, run_id: UUID) -> date | None:

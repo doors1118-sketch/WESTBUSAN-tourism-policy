@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import duckdb
 
+from westbusan.analytics.build import mart_manifest_is_valid
 from westbusan.db import Database
 from westbusan.quality.checks import (
     QualityReport,
@@ -35,18 +36,25 @@ def publish_if_valid(
     report: QualityReport,
     *,
     finalize: Callable[[], None] | None = None,
+    rollback_reason: str | None = None,
 ) -> PublishResult:
     """Advance only for this exact, complete, untampered quality suite."""
     if not can_publish(report) or not persisted_report_is_valid(db, run_id, report):
         return PublishResult(False, run_id, current_published_run(db), "invalid_quality_suite")
     if persisted_required_failures(db, run_id):
         return PublishResult(False, run_id, current_published_run(db), "required_check_failed")
+    if _run_exists(db, run_id) and not mart_manifest_is_valid(db, run_id):
+        return PublishResult(False, run_id, current_published_run(db), "incomplete_marts")
     for attempt in range(3):
         began = False
         try:
             db.connection.execute("begin transaction")
             began = True
-            if not persisted_report_is_valid(db, run_id, report) or persisted_required_failures(db, run_id):
+            if (
+                not persisted_report_is_valid(db, run_id, report)
+                or persisted_required_failures(db, run_id)
+                or (_run_exists(db, run_id) and not mart_manifest_is_valid(db, run_id))
+            ):
                 db.connection.execute("rollback")
                 began = False
                 return PublishResult(False, run_id, current_published_run(db), "invalid_quality_suite")
@@ -57,6 +65,13 @@ def publish_if_valid(
                 db.connection.execute("commit")
                 began = False
                 return PublishResult(True, run_id, run_id)
+            if current is not None and _is_older_business_date(db, run_id, current):
+                reason = (rollback_reason or "").strip()
+                if not reason:
+                    db.connection.execute("rollback")
+                    began = False
+                    return PublishResult(False, run_id, current, "older_business_date")
+                _record_rollback(db, current, run_id, reason)
             _snapshot_duplicate_review(db, run_id)
             _write_current_pointer(db, run_id)
             if finalize is not None:
@@ -78,6 +93,33 @@ def publish_if_valid(
 def current_published_run(db: Database) -> UUID | None:
     rows = db.query("select published_run_id from publication_state where publication_key = 'current'")
     return rows[0][0] if rows else None
+
+
+def _run_exists(db: Database, run_id: UUID) -> bool:
+    return bool(db.query("select 1 from pipeline_run where run_id = ?", [run_id]))
+
+
+def _is_older_business_date(
+    db: Database, replacement_run_id: UUID, current_run_id: UUID
+) -> bool:
+    rows = db.query(
+        """select replacement.business_date, current.business_date
+           from pipeline_run as replacement, pipeline_run as current
+           where replacement.run_id = ? and current.run_id = ?""",
+        [replacement_run_id, current_run_id],
+    )
+    return bool(rows and rows[0][0] is not None and rows[0][1] is not None and rows[0][0] < rows[0][1])
+
+
+def _record_rollback(
+    db: Database, previous_run_id: UUID, replacement_run_id: UUID, reason: str
+) -> None:
+    db.connection.execute(
+        """insert into publication_rollback_audit (
+               audit_id, previous_run_id, replacement_run_id, reason
+           ) values (?, ?, ?, ?)""",
+        [uuid4(), previous_run_id, replacement_run_id, reason],
+    )
 
 
 def _write_current_pointer(db: Database, run_id: UUID) -> None:

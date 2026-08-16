@@ -827,6 +827,47 @@ def test_closed_or_cancelled_status_requires_a_valid_closure_date(
     assert _check(report, "accommodation_status_coverage", "lodgings").status == "failed"
 
 
+def test_older_backfill_cannot_replace_newer_pointer_without_audited_override(
+    tmp_path: Path,
+) -> None:
+    """Catches an old business-date replay silently becoming the current dataset."""
+    db = _db(tmp_path)
+    newer = uuid4()
+    older = uuid4()
+    newer_report = _valid_run(db, tmp_path, newer)
+    older_report = _valid_run(
+        db, tmp_path, older, checked_at=datetime(2026, 8, 17, tzinfo=UTC)
+    )
+    db.connection.execute(
+        "insert into pipeline_run (run_id, mode, started_at, status, business_date) values (?, 'daily', ?, 'RUNNING', ?)",
+        [newer, datetime(2026, 8, 16, tzinfo=UTC), date(2026, 8, 16)],
+    )
+    db.connection.execute(
+        "insert into pipeline_run (run_id, mode, started_at, status, business_date) values (?, 'backfill', ?, 'RUNNING', ?)",
+        [older, datetime(2026, 8, 17, tzinfo=UTC), date(2026, 7, 1)],
+    )
+    _empty_mart_manifest(db, newer)
+    _empty_mart_manifest(db, older)
+
+    assert publish_if_valid(db, newer, newer_report).published is True
+    rejected = publish_if_valid(db, older, older_report)
+    assert rejected.published is False
+    assert rejected.reason == "older_business_date"
+    assert current_published_run(db) == newer
+
+    rolled_back = publish_if_valid(
+        db,
+        older,
+        older_report,
+        rollback_reason="operator approved historical correction",
+    )
+    assert rolled_back.published is True
+    assert current_published_run(db) == older
+    assert db.query(
+        "select previous_run_id, replacement_run_id, reason from publication_rollback_audit"
+    ) == [(newer, older, "operator approved historical correction")]
+
+
 def _valid_run(
     db: Database,
     tmp_path: Path,
@@ -909,6 +950,12 @@ def _valid_run(
         [str(run_id), date(2026, 8, 16), run_id, run_id, str(run_id)],
     )
     return run_quality_suite(db, run_id)
+
+
+def _empty_mart_manifest(db: Database, run_id) -> None:
+    from westbusan.analytics.build import write_mart_manifest
+
+    write_mart_manifest(db, run_id)
 
 
 def _db(tmp_path: Path) -> Database:

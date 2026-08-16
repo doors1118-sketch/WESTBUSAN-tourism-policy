@@ -3,9 +3,11 @@ from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
-from westbusan.analytics.build import build_marts
+from westbusan.analytics.build import build_marts, mart_manifest_is_valid
 from westbusan.config import PolicyConfig
 from westbusan.db import Database
 from westbusan.entity_resolution.match import build_facilities
@@ -114,6 +116,44 @@ def test_build_marts_end_to_end_group_distribution_does_not_use_district_medians
     build_marts(db, run, PolicyConfig(small_room_threshold=1, old_building_years=[20, 30]))
     assert db.query("select room_median, small_facility_share from mart_region_month where district = '사하구' and period = 'current'") == [(9.0, 0.1)]
     assert db.query("select count(*) from mart_policy_signal where run_id = ?", [run]) == [(0,)]
+
+
+@pytest.mark.parametrize(
+    "crash_stage", ["facility", "region", "comparison", "signal"]
+)
+def test_incomplete_mart_retry_purges_partial_outputs_and_writes_manifest_last(
+    tmp_path: Path, crash_stage: str
+) -> None:
+    """Catches a stage crash being mistaken for a completed immutable mart."""
+    db, run_id = _built_db(
+        tmp_path,
+        [_license("lodgings", "L1", "호텔", "부산광역시 사하구 하단동 1", 10)],
+    )
+
+    def crash_after(stage: str) -> None:
+        if stage == crash_stage:
+            raise RuntimeError(f"crash after {stage}")
+
+    with pytest.raises(RuntimeError, match=f"crash after {crash_stage}"):
+        build_marts(
+            db,
+            run_id,
+            PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+            stage_hook=crash_after,
+        )
+
+    assert mart_manifest_is_valid(db, run_id) is False
+    result = build_marts(
+        db,
+        run_id,
+        PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+    )
+
+    assert result.facility_rows == 1
+    assert mart_manifest_is_valid(db, run_id) is True
+    assert db.query(
+        "select count(*) from mart_facility_current where run_id = ?", [run_id]
+    ) == [(1,)]
 
 
 def _built_db(tmp_path: Path, records: list[object]) -> tuple[Database, object]:
