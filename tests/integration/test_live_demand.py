@@ -24,11 +24,13 @@ def test_live_demand_load_requires_a_reviewed_operation(tmp_path: Path) -> None:
     """A manual opt-in verifies that the loader consumes reviewed status metadata."""
     if os.getenv("WESTBUSAN_RUN_LIVE_DEMAND") != "1":
         pytest.skip("set WESTBUSAN_RUN_LIVE_DEMAND=1 to enable live KTO demand checks")
-    registry = SourceRegistry.load(Path("config/sources.yaml"))
+    configured = SourceRegistry.load(Path("config/sources.yaml"))
+    source = configured.get("area_tourism_demand")
+    registry = SourceRegistry((source,))
     db = Database(tmp_path / "live-demand.duckdb", Path("sql"))
     db.migrate()
     record_inspection(
-        registry.get("area_tourism_demand"),
+        source,
         db,
         operation="areaTarSjrnDsList",
         required_parameters={
@@ -50,11 +52,16 @@ def test_live_demand_load_requires_a_reviewed_operation(tmp_path: Path) -> None:
         RunContext.start("live-demand-test", datetime.now(UTC)),
     )
 
-    assert "area_tourism_demand" in {*result.sources_ready, *result.sources_skipped}
+    assert result.artifacts_written >= 1
     statuses = db.query(
-        "select status, detail_json from source_status order by checked_at desc"
+        "select status, detail_json from source_status where source_id = ? order by checked_at desc",
+        ["area_tourism_demand"],
     )
-    assert statuses
+    assert statuses[0][0] in {"READY", "EMPTY"}
+    raw_request = db.query("select request_json from raw_artifact order by created_at desc")[
+        0
+    ][0]
+    assert '"operation": "areaTarSjrnDsList"' in raw_request
     assert os.environ["DATA_GO_KR_SERVICE_KEY"] not in "".join(
         detail for _, detail in statuses
     )

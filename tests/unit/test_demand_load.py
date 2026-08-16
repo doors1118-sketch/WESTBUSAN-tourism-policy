@@ -53,12 +53,12 @@ def test_demand_row_maps_saha_stay_intensity_to_west() -> None:
     assert record.period == "2026-01"
     assert record.district == "사하구"
     assert record.region_group == "west"
-    assert record.metric_code == "stay_intensity_index"
-    assert record.unit == "index"
-    assert record.metric_value == 1.25
+    assert record.metric_code == "area_tar_sjrn_ds_list.2102"
+    assert record.unit == "ratio"
+    assert record.metric_value == 0.31
 
 
-def test_consumption_row_keeps_lodging_spend_as_its_own_metric() -> None:
+def test_resource_demand_keeps_provider_submetric_identity() -> None:
     """Treating consumption as visitors would corrupt its source-native grain."""
     row = json.loads(
         (Path("tests/fixtures/demand/area_consumption.json")).read_text(
@@ -67,8 +67,8 @@ def test_consumption_row_keeps_lodging_spend_as_its_own_metric() -> None:
     )[0]
     record = normalize_demand_row("area_tourism_consumption", row)
 
-    assert record.metric_code == "tourism_service_demand_index"
-    assert record.unit == "index"
+    assert record.metric_code == "area_tar_svc_dem_list.1101"
+    assert record.unit == "SNS mentions"
     assert record.metric_value == 430000
 
 
@@ -143,14 +143,16 @@ def test_load_persists_raw_page_and_source_native_demand_record(
                     {
                         "baseYm": "202601",
                         "signguNm": "사하구",
-                        "sjrnDsValue": "1.25",
+                        "tarSjrnDsIxVal": "0.31",
+                        "tarSjrnDsIxCd": "2102",
+                        "tarSjrnDsIxNm": "숙박 비중",
                     }
                 ],
                 total_count=1,
                 page_no=1,
                 page_size=1,
                 raw_body=(
-                    '{"data":[{"baseYm":"202601","signguNm":"사하구","sjrnDsValue":"1.25"}]}'
+                    '{"data":[{"baseYm":"202601","signguNm":"사하구","tarSjrnDsIxVal":"0.31","tarSjrnDsIxCd":"2102","tarSjrnDsIxNm":"숙박 비중"}]}'
                 ).encode(),
                 schema_fingerprint="observed-fields",
             )
@@ -167,7 +169,9 @@ def test_load_persists_raw_page_and_source_native_demand_record(
     assert result.records_loaded == 1
     assert db.query(
         "select metric_code, period, district, region_group, metric_value from fact_tourism_demand"
-    ) == [("stay_intensity_index", "2026-01", "사하구", "west", 1.25)]
+    ) == [
+        ("area_tar_sjrn_ds_list.2102", "2026-01", "사하구", "west", 0.31)
+    ]
     request_json, content_hash, source_date = db.query(
         "select request_json, content_hash, source_date from raw_artifact"
     )[0]
@@ -233,13 +237,27 @@ def test_loader_uses_portal_reviewed_inspection_for_unresolved_source(
                     {
                         "baseYm": "202601",
                         "signguNm": "사하구",
-                        "sjrnDsValue": "1.25",
+                        "tarSjrnDsIxVal": "0.31",
+                        "tarSjrnDsIxCd": "2102",
+                        "tarSjrnDsIxNm": "숙박 비중",
                     }
                 ],
                 total_count=1,
                 page_no=1,
                 page_size=1,
-                raw_body=b'{"data":[{"baseYm":"202601","sjrnDsValue":"1.25"}]}',
+                raw_body=json.dumps(
+                    {
+                        "data": [
+                            {
+                                "baseYm": "202601",
+                                "tarSjrnDsIxVal": "0.31",
+                                "tarSjrnDsIxCd": "2102",
+                                "tarSjrnDsIxNm": "숙박 비중",
+                            }
+                        ]
+                    },
+                    ensure_ascii=False,
+                ).encode(),
                 schema_fingerprint="reviewed-fields",
             )
 
@@ -254,7 +272,7 @@ def test_loader_uses_portal_reviewed_inspection_for_unresolved_source(
 
     assert result.sources_ready == ("area_tourism_demand",)
     assert db.query("select metric_code, unit from fact_tourism_demand") == [
-        ("stay_intensity_index", "index")
+        ("area_tar_sjrn_ds_list.2102", "ratio")
     ]
 
 
@@ -433,3 +451,404 @@ def test_explicit_empty_page_is_retained_for_historical_backfill(
         ("EMPTY",)
     ]
     assert db.query("select source_date from raw_artifact") == [(date(2022, 1, 1),)]
+
+
+def test_loader_collects_each_reviewed_operation_for_one_source(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Keeping only the newest inspection would silently drop a required subseries."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    unresolved = SourceSpec(
+        source_id="area_tourism_demand",
+        url="https://example.test/AreaTarDemDsService",
+        group="tourism",
+        inspection_required=True,
+    )
+    registry = SourceRegistry((unresolved,))
+    for operation in ("areaTarSjrnDsList", "areaTarExpDsList"):
+        record_inspection(
+            unresolved,
+            db,
+            operation=operation,
+            required_parameters={"baseYm": "{baseYm}", "areaCd": "26"},
+            response_row_path="response.body.items.item",
+            portal_detail_url="https://www.data.go.kr/data/15151868/openapi.do",
+        )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            row = (
+                {
+                    "baseYm": "202601",
+                    "signguNm": "사하구",
+                    "tarSjrnDsIxVal": "0.31",
+                    "tarSjrnDsIxCd": "2102",
+                    "tarSjrnDsIxNm": "숙박 비중",
+                }
+                if spec.url.endswith("/areaTarSjrnDsList")
+                else {
+                    "baseYm": "202601",
+                    "signguNm": "사하구",
+                    "tarExpDsIxVal": "175000",
+                    "tarExpDsIxCd": "2203",
+                    "tarExpDsIxNm": "방문량 대비 방문 소비액",
+                }
+            )
+            yield ApiPage(
+                rows=[row],
+                total_count=1,
+                page_no=1,
+                page_size=1,
+                raw_body=json.dumps({"data": [row]}, ensure_ascii=False).encode(),
+                schema_fingerprint="reviewed-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    result = load_tourism_demand(
+        db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == 2
+    assert sorted(db.query("select metric_code from fact_tourism_demand")) == [
+        ("area_tar_exp_ds_list.2203",),
+        ("area_tar_sjrn_ds_list.2102",),
+    ]
+
+
+def test_concentration_uses_documented_base_ymd_request_and_returned_period(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Concentration has a current base date, not an invented forecast date."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="tourism_concentration_rate",
+                url="https://example.test/TatsCnctrRateService",
+                operation="tatsCnctrRatedList",
+                group="tourism",
+                required_parameters={
+                    "baseYmd": "{baseYmd}",
+                    "areaCd": "26",
+                    "signguCd": "26380",
+                },
+            ),
+        )
+    )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            assert spec.url.endswith("/tatsCnctrRatedList")
+            assert parameters == {
+                "baseYmd": "20260131",
+                "areaCd": "26",
+                "signguCd": "26380",
+            }
+            row = {
+                "baseYmd": "20260131",
+                "signguNm": "사하구",
+                "cnctrRate": "42.5",
+                "tAtsNm": "다대포해수욕장",
+            }
+            yield ApiPage(
+                rows=[row],
+                total_count=1,
+                page_no=1,
+                page_size=1,
+                raw_body=json.dumps({"data": [row]}, ensure_ascii=False).encode(),
+                schema_fingerprint="tats-cnctr-rate-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    load_tourism_demand(
+        db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert db.query("select metric_code, unit, period from fact_tourism_demand") == [
+        ("tats_cnctr_rated_list.visitor_concentration_rate", "percent", "2026-01-31")
+    ]
+
+
+def test_mixed_rows_from_a_different_reviewed_operation_are_schema_changed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A page may be READY only when every nonempty row fits its selected operation."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="area_tourism_demand",
+                url="https://example.test/AreaTarDemDsService",
+                operation="areaTarExpDsList",
+                group="tourism",
+                required_parameters={"baseYm": "{baseYm}", "areaCd": "26"},
+            ),
+        )
+    )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            rows = [
+                {
+                    "baseYm": "202601",
+                    "signguNm": "사하구",
+                    "tarExpDsIxVal": "175000",
+                    "tarExpDsIxCd": "2203",
+                    "tarExpDsIxNm": "방문량 대비 방문 소비액",
+                },
+                {
+                    "baseYm": "202601",
+                    "signguNm": "사하구",
+                    "tarSjrnDsIxVal": "0.31",
+                    "tarSjrnDsIxCd": "2102",
+                    "tarSjrnDsIxNm": "숙박 비중",
+                },
+            ]
+            yield ApiPage(
+                rows=rows,
+                total_count=2,
+                page_no=1,
+                page_size=2,
+                raw_body=json.dumps({"data": rows}, ensure_ascii=False).encode(),
+                schema_fingerprint="mixed-operation-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    result = load_tourism_demand(
+        db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == 1
+    assert db.query("select status from source_status") == [("SCHEMA_CHANGED",)]
+    assert db.query("select metric_code from fact_tourism_demand") == [
+        ("area_tar_exp_ds_list.2203",)
+    ]
+
+
+def test_backfill_starts_at_2022_and_persists_two_empty_year_stop_state(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Backfill state prevents silently skipping 2022 or probing empty history forever."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="area_tourism_demand",
+                url="https://example.test/AreaTarDemDsService",
+                operation="areaTarSjrnDsList",
+                group="tourism",
+                required_parameters={"baseYm": "{baseYm}", "areaCd": "26"},
+            ),
+        )
+    )
+    calls: list[str] = []
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            calls.append(str(parameters["baseYm"]))
+            yield ApiPage(
+                rows=[],
+                total_count=0,
+                page_no=1,
+                page_size=1,
+                raw_body=b'{"data":[]}',
+                schema_fingerprint="empty-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    run = RunContext(uuid4(), "backfill", datetime(2026, 2, 1, tzinfo=UTC))
+
+    load_tourism_demand(db, registry, date(2022, 12, 1), date(2022, 12, 31), run)
+
+    assert calls == [f"2022{month:02d}" for month in range(1, 13)]
+    checkpoint = json.loads(
+        db.query(
+            "select checkpoint_json from collection_checkpoint where source_id = ?",
+            ["area_tourism_demand"],
+        )[0][0]
+    )
+    assert checkpoint["phase"] == "older_yearly"
+    assert checkpoint["next_year"] == 2021
+    assert checkpoint["consecutive_explicitly_empty_years"] == 1
+
+    calls.clear()
+    load_tourism_demand(db, registry, date(2022, 12, 1), date(2022, 12, 31), run)
+    assert calls == [f"2021{month:02d}" for month in range(1, 13)]
+    checkpoint = json.loads(
+        db.query(
+            "select checkpoint_json from collection_checkpoint where source_id = ?",
+            ["area_tourism_demand"],
+        )[0][0]
+    )
+    assert checkpoint["phase"] == "stopped_after_two_empty_years"
+
+    calls.clear()
+    load_tourism_demand(db, registry, date(2022, 12, 1), date(2022, 12, 31), run)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "source_id,start,end,required_parameters",
+    [
+        (
+            "tourism_data_lab",
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            {"startYmd": "{startYmd}", "endYmd": "{endYmd}"},
+        ),
+        (
+            "area_tourism_demand",
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            {"baseYm": "{baseYm}"},
+        ),
+        (
+            "area_tourism_consumption",
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            {"baseYm": "{baseYm}"},
+        ),
+        (
+            "tourism_concentration_rate",
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            {"baseYmd": "{baseYmd}"},
+        ),
+        (
+            "area_tourism_destination_division",
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            {"baseYm": "{baseYm}"},
+        ),
+        (
+            "related_tourism_destinations",
+            date(2025, 3, 1),
+            date(2025, 3, 31),
+            {"baseYm": "{baseYm}"},
+        ),
+    ],
+)
+def test_loader_collects_every_documented_operation_from_reviewed_inspections(
+    tmp_path: Path,
+    monkeypatch,
+    source_id: str,
+    start: date,
+    end: date,
+    required_parameters: dict[str, str],
+) -> None:
+    """Every KTO operation must use its recorded contract and preserve its own rows."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    source = SourceSpec(
+        source_id=source_id,
+        url=f"https://example.test/{source_id}",
+        group="tourism",
+        inspection_required=True,
+    )
+    registry = SourceRegistry((source,))
+    official_rows = [
+        item
+        for item in json.loads(
+            Path("tests/fixtures/demand/official_rows.json").read_text(encoding="utf-8")
+        )
+        if item["source_id"] == source_id
+    ]
+    rows_by_operation: dict[str, list[dict[str, object]]] = {}
+    for item in official_rows:
+        operation = item["operation"]
+        rows_by_operation.setdefault(operation, []).append(item["row"])
+    for operation in rows_by_operation:
+        record_inspection(
+            source,
+            db,
+            operation=operation,
+            required_parameters=required_parameters,
+            response_row_path="response.body.items.item",
+            portal_detail_url="https://www.data.go.kr/",
+        )
+
+    called_operations: list[str] = []
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            expected_parameters = (
+                {"startYmd": "20260101", "endYmd": "20260131"}
+                if source_id == "tourism_data_lab"
+                else {"baseYmd": "20260131"}
+                if source_id == "tourism_concentration_rate"
+                else {"baseYm": f"{start.year:04d}{start.month:02d}"}
+            )
+            assert parameters == expected_parameters
+            operation = spec.url.rsplit("/", maxsplit=1)[-1]
+            called_operations.append(operation)
+            yield ApiPage(
+                rows=rows_by_operation[operation],
+                total_count=len(rows_by_operation[operation]),
+                page_no=1,
+                page_size=len(rows_by_operation[operation]),
+                raw_body=json.dumps(
+                    {"data": rows_by_operation[operation]}, ensure_ascii=False
+                ).encode(),
+                schema_fingerprint=f"{operation}-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    result = load_tourism_demand(
+        db,
+        registry,
+        start,
+        end,
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == len(official_rows)
+    assert set(called_operations) == set(rows_by_operation)
+    assert set(db.query("select metric_code, unit from fact_tourism_demand")) == {
+        (item["metric_code"], item["unit"]) for item in official_rows
+    }

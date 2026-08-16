@@ -19,32 +19,68 @@ from westbusan.sources.datagokr import DataGoKrPager
 from westbusan.sources.registry import SourceRegistry
 from westbusan.storage import RawStore
 
-_FIELD_ALIASES: dict[str, tuple[tuple[tuple[str, ...], str, str], ...]] = {
-    "tourism_data_lab": ((("visitorCnt",), "visitor_count", "person_day"),),
+_FIELD_ALIASES: dict[str, tuple[tuple[str, str | None, str, str], ...]] = {
+    "tourism_data_lab": (
+        ("touNum", None, "locgo_regn_visitr_dd_list.visitor_count", "count"),
+    ),
     "area_tourism_demand": (
-        (("sjrnDsValue",), "stay_intensity_index", "index"),
-        (("expDsValue",), "consumption_intensity_index", "index"),
+        ("tarSjrnDsIxVal", "tarSjrnDsIxCd", "area_tar_sjrn_ds_list", "source_native"),
+        ("tarExpDsIxVal", "tarExpDsIxCd", "area_tar_exp_ds_list", "source_native"),
     ),
     "area_tourism_consumption": (
-        (("svcDemValue",), "tourism_service_demand_index", "index"),
-        (("culResDemValue",), "cultural_resource_demand_index", "index"),
+        ("tarSvcDemIxVal", "tarSvcDemIxCd", "area_tar_svc_dem_list", "source_native"),
+        ("culResDemIxVal", "culResDemIxCd", "area_cul_res_dem_list", "source_native"),
     ),
     "tourism_concentration_rate": (
-        (("cnctrRate",), "visitor_concentration_rate", "relative_index_max_100"),
+        ("cnctrRate", None, "tats_cnctr_rated_list.visitor_concentration_rate", "percent"),
     ),
     "area_tourism_destination_division": (
-        (("touDivValue",), "visitor_diversity_index", "index"),
-        (("expDivValue",), "consumption_diversity_index", "index"),
-        (("intlDivValue",), "international_diversity_index", "index"),
+        ("touDivIxVal", "touDivIxCd", "area_tou_div_list", "source_native"),
+        ("expDivIxVal", "expDivIxCd", "area_exp_div_list", "source_native"),
+        ("intlDivIxVal", "intlDivIxCd", "area_intl_div_list", "source_native"),
     ),
     "related_tourism_destinations": (
-        (("rlteTatsRank",), "related_destination_rank", "rank"),
+        ("rlteRank", None, "area_based_list_1.related_destination_rank", "rank"),
     ),
+}
+_UNITS_BY_INDICATOR_CODE = {
+    "tarSjrnDsIxCd": {
+        "2101": "ratio",
+        "2102": "ratio",
+        "2103": "count",
+        "2104": "count",
+        "2105": "count",
+    },
+    "tarExpDsIxCd": {"2201": "KRW", "2202": "ratio", "2203": "KRW/person"},
+    "tarSvcDemIxCd": {
+        "1101": "SNS mentions",
+        "1102": "SNS mentions",
+        "1103": "SNS mentions",
+        "1104": "SNS mentions",
+        "1105": "KRW",
+        "1106": "KRW",
+        "1107": "KRW",
+        "1108": "KRW",
+        "1109": "KRW",
+        "1110": "navigation searches",
+        "1111": "navigation searches",
+        "1112": "navigation searches",
+    },
+    "culResDemIxCd": {
+        "1201": "navigation searches",
+        "1202": "navigation searches",
+        "1203": "navigation searches",
+        "1204": "navigation searches",
+        "1205": "navigation searches",
+    },
+    "touDivIxCd": {str(code): "count" for code in range(3101, 3108)},
+    "expDivIxCd": {str(code): "KRW" for code in range(3201, 3208)},
+    "intlDivIxCd": {"3301": "KRW", "3302": "count"},
 }
 _MONTH_FIELDS = ("baseYm", "base_ym")
 _DISTRICT_FIELDS = ("signguNm", "signgu_nm")
 _REVIEWED_OPERATIONS = {
-    "tourism_data_lab": {"metcoRegnVisitrDDList"},
+    "tourism_data_lab": {"locgoRegnVisitrDDList"},
     "area_tourism_demand": {"areaTarSjrnDsList", "areaTarExpDsList"},
     "area_tourism_consumption": {"areaTarSvcDemList", "areaCulResDemList"},
     "tourism_concentration_rate": {"tatsCnctrRatedList"},
@@ -55,6 +91,26 @@ _REVIEWED_OPERATIONS = {
     },
     "related_tourism_destinations": {"areaBasedList1"},
 }
+_OPERATION_METRIC_PREFIX = {
+    "locgoRegnVisitrDDList": "locgo_regn_visitr_dd_list",
+    "areaTarSjrnDsList": "area_tar_sjrn_ds_list",
+    "areaTarExpDsList": "area_tar_exp_ds_list",
+    "areaTarSvcDemList": "area_tar_svc_dem_list",
+    "areaCulResDemList": "area_cul_res_dem_list",
+    "tatsCnctrRatedList": "tats_cnctr_rated_list",
+    "areaTouDivList": "area_tou_div_list",
+    "areaExpDivList": "area_exp_div_list",
+    "areaIntlDivList": "area_intl_div_list",
+    "areaBasedList1": "area_based_list_1",
+}
+_HISTORICAL_SOURCE_IDS = frozenset(
+    {
+        "tourism_data_lab",
+        "area_tourism_demand",
+        "area_tourism_consumption",
+        "area_tourism_destination_division",
+    }
+)
 _REGION_BY_DISTRICT = {
     "강서구": "west",
     "북구": "west",
@@ -97,6 +153,9 @@ class YearMonth:
     @property
     def first_day(self) -> date:
         return date(self.year, self.month, 1)
+
+
+_INITIAL_BACKFILL_MONTH = YearMonth(2022, 1)
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,77 +253,93 @@ def load_tourism_demand(
     ready: list[str] = []
     skipped: list[str] = []
     for source_id in registry.ids(group="tourism"):
-        spec = _resolved_spec(registry.get(source_id), db)
-        if not service_key:
-            _record_status(
-                db,
-                spec,
-                "AUTH_FAILED",
-                {"reason": "DATA_GO_KR_SERVICE_KEY is not configured"},
-            )
-            skipped.append(source_id)
-            continue
-        if not _collectable(spec):
-            _record_status(
-                db, spec, "SPEC_UNRESOLVED", {"reason": _skip_reason(spec, service_key)}
-            )
-            skipped.append(source_id)
-            continue
         source_loaded = 0
-        for month in iter_collection_months(source_id, start, end):
-            parameters = _month_parameters(spec.required_parameters, month)
-            pager_spec = replace(spec, url=spec.endpoint_url, operation=None)
-            pager = DataGoKrPager(SafeHttpClient(), service_key)
-            for page in pager.iter_pages(pager_spec, parameters, include_empty=True):
-                source_revision = hashlib.sha256(page.raw_body).hexdigest()
-                artifact = raw_store.write(
-                    run,
-                    source_id,
-                    {
-                        "operation": spec.operation,
-                        "parameters": parameters,
-                        "pageNo": page.page_no,
-                        "numOfRows": page.page_size,
-                        "schema_fingerprint": page.schema_fingerprint,
-                        "source_revision": source_revision,
-                    },
-                    page.raw_body,
-                    ".json",
-                    source_date=month.first_day,
-                )
-                db.record_artifact(artifact)
-                raw_store.write_rows(artifact, page.rows)
-                artifacts += 1
-                page_loaded = 0
-                for row in page.rows:
-                    try:
-                        record = normalize_demand_row(source_id, row)
-                    except (KeyError, ValueError):
-                        continue
-                    _persist_record(
-                        db, record, artifact.content_hash, artifact.artifact_id, run
-                    )
-                    loaded += 1
-                    source_loaded += 1
-                    page_loaded += 1
+        specs = _resolved_specs(registry.get(source_id), db)
+        for spec in specs:
+            if not service_key:
                 _record_status(
                     db,
                     spec,
-                    "EMPTY"
-                    if not page.rows
-                    else "READY"
-                    if page_loaded
-                    else "SCHEMA_CHANGED",
-                    {
-                        "selected_operation": spec.operation,
-                        "required_parameters": parameters,
-                        "observed_field_names": sorted(
-                            {key for row in page.rows for key in row}
-                        ),
-                        "page_no": page.page_no,
-                        "schema_fingerprint": page.schema_fingerprint,
-                        "source_revision": artifact.content_hash,
-                    },
+                    "AUTH_FAILED",
+                    {"reason": "DATA_GO_KR_SERVICE_KEY is not configured"},
+                )
+                continue
+            if not _collectable(spec):
+                _record_status(
+                    db,
+                    spec,
+                    "SPEC_UNRESOLVED",
+                    {"reason": _skip_reason(spec, service_key)},
+                )
+                continue
+            months, backfill_phase = _planned_months(
+                source_id, spec, start, end, run, db
+            )
+            page_statuses: dict[int, list[str]] = {}
+            for month in months:
+                parameters = _month_parameters(spec.required_parameters, month)
+                pager_spec = replace(spec, url=spec.endpoint_url, operation=None)
+                pager = DataGoKrPager(SafeHttpClient(), service_key)
+                for page in pager.iter_pages(pager_spec, parameters, include_empty=True):
+                    source_revision = hashlib.sha256(page.raw_body).hexdigest()
+                    artifact = raw_store.write(
+                        run,
+                        source_id,
+                        {
+                            "operation": spec.operation,
+                            "parameters": parameters,
+                            "pageNo": page.page_no,
+                            "numOfRows": page.page_size,
+                            "schema_fingerprint": page.schema_fingerprint,
+                            "source_revision": source_revision,
+                        },
+                        page.raw_body,
+                        ".json",
+                        source_date=month.first_day,
+                    )
+                    db.record_artifact(artifact)
+                    raw_store.write_rows(artifact, page.rows)
+                    artifacts += 1
+                    page_loaded = 0
+                    for row in page.rows:
+                        try:
+                            record = normalize_demand_row(source_id, row)
+                        except (KeyError, ValueError):
+                            continue
+                        if not _matches_selected_operation(record, spec.operation):
+                            continue
+                        _persist_record(
+                            db, record, artifact.content_hash, artifact.artifact_id, run
+                        )
+                        loaded += 1
+                        source_loaded += 1
+                        page_loaded += 1
+                    page_status = (
+                        "EMPTY"
+                        if not page.rows
+                        else "READY"
+                        if page_loaded == len(page.rows)
+                        else "SCHEMA_CHANGED"
+                    )
+                    page_statuses.setdefault(month.year, []).append(page_status)
+                    _record_status(
+                        db,
+                        spec,
+                        page_status,
+                        {
+                            "selected_operation": spec.operation,
+                            "required_parameters": parameters,
+                            "observed_field_names": sorted(
+                                {key for row in page.rows for key in row}
+                            ),
+                            "page_no": page.page_no,
+                            "schema_fingerprint": page.schema_fingerprint,
+                            "source_revision": artifact.content_hash,
+                        },
+                    )
+            if backfill_phase is not None:
+                _record_backfill_checkpoint(
+                    db, source_id, spec.operation, backfill_phase, months, page_statuses
                 )
         if source_loaded:
             ready.append(source_id)
@@ -281,17 +356,24 @@ def _required_field(row: Mapping[str, object], names: tuple[str, ...]) -> object
 
 
 def _metric_field(source_id: str, row: Mapping[str, object]) -> tuple[str, str, str]:
-    for field_names, metric_code, unit in _FIELD_ALIASES.get(source_id, ()):
-        for field_name in field_names:
-            if field_name in row and row[field_name] not in (None, ""):
-                return field_name, metric_code, unit
+    for field_name, code_field, operation_code, unit in _FIELD_ALIASES.get(
+        source_id, ()
+    ):
+        if field_name not in row or row[field_name] in (None, ""):
+            continue
+        metric_code = operation_code
+        if code_field is not None:
+            indicator_code = _required_field(row, (code_field,))
+            metric_code = f"{operation_code}.{_slug(indicator_code)}"
+            unit = _UNITS_BY_INDICATOR_CODE.get(code_field, {}).get(
+                str(indicator_code), unit
+            )
+        return field_name, metric_code, unit
     raise ValueError(f"{source_id} has no reviewed metric field")
 
 
 def _period(source_id: str, row: Mapping[str, object]) -> tuple[str, tuple[str, ...]]:
-    if source_id == "tourism_concentration_rate" and "forecastYmd" in row:
-        return _date_period(row["forecastYmd"]), ("baseYmd", "forecastYmd")
-    if source_id == "tourism_data_lab":
+    if source_id in {"tourism_data_lab", "tourism_concentration_rate"}:
         return _date_period(_required_field(row, ("baseYmd",))), ("baseYmd",)
     return str(YearMonth.from_value(_required_field(row, _MONTH_FIELDS))), _MONTH_FIELDS
 
@@ -301,6 +383,12 @@ def _date_period(value: object) -> str:
     if len(digits) != 8 or not digits.isdigit():
         raise ValueError(f"expected YYYYMMDD date, got {value!r}")
     return f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
+
+
+def _slug(value: object) -> str:
+    return "".join(
+        character.lower() if character.isalnum() else "_" for character in str(value)
+    ).strip("_")
 
 
 def _number(value: object) -> int | float:
@@ -313,19 +401,22 @@ def _number(value: object) -> int | float:
 
 def _collectable(spec: SourceSpec) -> bool:
     return spec.operation in _REVIEWED_OPERATIONS.get(spec.source_id, set()) and any(
-        str(value) in {"{baseYm}", "{yearMonth}", "{startYmd}", "{endYmd}"}
+        str(value)
+        in {"{baseYm}", "{baseYmd}", "{yearMonth}", "{startYmd}", "{endYmd}"}
         for value in spec.required_parameters.values()
     )
 
 
-def _resolved_spec(spec: SourceSpec, db: Database) -> SourceSpec:
-    """Use only inspection metadata an operator stored in ``source_status``."""
+def _resolved_specs(spec: SourceSpec, db: Database) -> tuple[SourceSpec, ...]:
+    """Use every distinct operation an operator stored in ``source_status``."""
     if spec.operation is not None:
-        return spec
+        return (spec,)
     rows = db.query(
         "select detail_json from source_status where source_id = ? order by checked_at desc",
         [spec.source_id],
     )
+    resolved: list[SourceSpec] = []
+    seen: set[str] = set()
     for (detail_json,) in rows:
         try:
             inspection = json.loads(detail_json)["inspection"]
@@ -333,9 +424,14 @@ def _resolved_spec(spec: SourceSpec, db: Database) -> SourceSpec:
             parameters = inspection["required_parameters"]
         except (KeyError, TypeError, ValueError):
             continue
-        if isinstance(operation, str) and isinstance(parameters, dict):
-            return replace(spec, operation=operation, required_parameters=parameters)
-    return spec
+        if (
+            isinstance(operation, str)
+            and isinstance(parameters, dict)
+            and operation not in seen
+        ):
+            resolved.append(replace(spec, operation=operation, required_parameters=parameters))
+            seen.add(operation)
+    return tuple(resolved) or (spec,)
 
 
 def _month_parameters(
@@ -343,6 +439,7 @@ def _month_parameters(
 ) -> dict[str, object]:
     values = {
         "{baseYm}": f"{month.year:04d}{month.month:02d}",
+        "{baseYmd}": f"{month.year:04d}{month.month:02d}{monthrange(month.year, month.month)[1]:02d}",
         "{yearMonth}": str(month),
         "{startYmd}": f"{month.year:04d}{month.month:02d}01",
         "{endYmd}": (
@@ -350,6 +447,135 @@ def _month_parameters(
         ),
     }
     return {key: values.get(str(value), value) for key, value in parameters.items()}
+
+
+def _matches_selected_operation(record: DemandRecord, operation: str | None) -> bool:
+    return operation is not None and record.metric_code.startswith(
+        f"{_OPERATION_METRIC_PREFIX.get(operation, '')}."
+    )
+
+
+def _planned_months(
+    source_id: str,
+    spec: SourceSpec,
+    start: date,
+    end: date,
+    run: RunContext,
+    db: Database,
+) -> tuple[tuple[YearMonth, ...], str | None]:
+    """Return one persisted historical window without inventing bounded history."""
+    if run.mode != "backfill" or source_id not in _HISTORICAL_SOURCE_IDS:
+        return tuple(iter_collection_months(source_id, start, end)), None
+    checkpoint = _backfill_checkpoint(db, source_id, spec.operation)
+    if checkpoint is None:
+        return (
+            tuple(
+                iter_collection_months(
+                    source_id, _INITIAL_BACKFILL_MONTH.first_day, end
+                )
+            ),
+            "initial",
+        )
+    if checkpoint.get("phase") == "stopped_after_two_empty_years":
+        return (), None
+    next_year = checkpoint.get("next_year")
+    if not isinstance(next_year, int):
+        return (), None
+    return (
+        tuple(
+            iter_collection_months(
+                source_id, date(next_year, 1, 1), date(next_year, 12, 31)
+            )
+        ),
+        "older_yearly",
+    )
+
+
+def _backfill_checkpoint(
+    db: Database, source_id: str, operation: str | None
+) -> dict[str, object] | None:
+    if operation is None:
+        return None
+    rows = db.query(
+        "select checkpoint_json from collection_checkpoint where source_id = ? and partition_key = ?",
+        [source_id, f"tourism_backfill:{operation}"],
+    )
+    if not rows:
+        return None
+    try:
+        value = json.loads(rows[0][0])
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _record_backfill_checkpoint(
+    db: Database,
+    source_id: str,
+    operation: str | None,
+    phase: str,
+    months: tuple[YearMonth, ...],
+    page_statuses: Mapping[int, list[str]],
+) -> None:
+    if operation is None or not months:
+        return
+    previous = _backfill_checkpoint(db, source_id, operation) or {}
+    if phase == "initial":
+        initial_year_empty = _is_explicitly_empty_year(
+            page_statuses, _INITIAL_BACKFILL_MONTH.year
+        )
+        checkpoint: dict[str, object] = {
+            "phase": "older_yearly",
+            "initial_start": str(_INITIAL_BACKFILL_MONTH),
+            "initial_complete_through": str(months[-1]),
+            "next_year": _INITIAL_BACKFILL_MONTH.year - 1,
+            "consecutive_explicitly_empty_years": 1 if initial_year_empty else 0,
+        }
+    else:
+        explicitly_empty = _is_explicitly_empty_year(
+            page_statuses, months[0].year
+        )
+        empty_years = (
+            int(previous.get("consecutive_explicitly_empty_years", 0)) + 1
+            if explicitly_empty
+            else 0
+        )
+        checkpoint = {
+            "phase": (
+                "stopped_after_two_empty_years"
+                if empty_years >= 2
+                else "older_yearly"
+            ),
+            "initial_start": str(_INITIAL_BACKFILL_MONTH),
+            "initial_complete_through": previous.get("initial_complete_through"),
+            "last_probed_year": months[0].year,
+            "last_year_explicitly_empty": explicitly_empty,
+            "consecutive_explicitly_empty_years": empty_years,
+            "next_year": months[0].year - 1,
+        }
+    db.connection.execute(
+        """
+        insert into collection_checkpoint (
+            source_id, partition_key, checkpoint_json, updated_at
+        ) values (?, ?, ?, ?)
+        on conflict (source_id, partition_key) do update set
+            checkpoint_json = excluded.checkpoint_json,
+            updated_at = excluded.updated_at
+        """,
+        [
+            source_id,
+            f"tourism_backfill:{operation}",
+            json.dumps(checkpoint, ensure_ascii=False, sort_keys=True),
+            datetime.now(UTC),
+        ],
+    )
+
+
+def _is_explicitly_empty_year(
+    page_statuses: Mapping[int, list[str]], year: int
+) -> bool:
+    statuses = page_statuses.get(year, [])
+    return bool(statuses) and all(status == "EMPTY" for status in statuses)
 
 
 def _skip_reason(spec: SourceSpec, service_key: str) -> str:

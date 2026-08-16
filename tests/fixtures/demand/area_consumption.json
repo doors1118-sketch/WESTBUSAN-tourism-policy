@@ -1,8 +1,12 @@
 [
   {
+    "tarSvcDemIxVal": "430000",
     "baseYm": "202601",
+    "areaCd": "26",
+    "areaNm": "부산광역시",
+    "signguCd": "26380",
     "signguNm": "사하구",
-    "svcDemValue": "430000",
-    "resourceType": "tourism_service"
+    "tarSvcDemIxCd": "1101",
+    "tarSvcDemIxNm": "레포츠 SNS 언급량"
   }
 ]

@@ -1,8 +1,12 @@
 [
   {
+    "tarSjrnDsIxVal": "0.31",
     "baseYm": "202601",
+    "areaCd": "26",
+    "areaNm": "부산광역시",
+    "signguCd": "26380",
     "signguNm": "사하구",
-    "sjrnDsValue": "1.25",
-    "stayType": "overnight"
+    "tarSjrnDsIxCd": "2102",
+    "tarSjrnDsIxNm": "숙박 비중"
   }
 ]
