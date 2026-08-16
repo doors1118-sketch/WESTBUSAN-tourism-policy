@@ -70,7 +70,7 @@ def test_legacy_upgrade_marks_every_preexisting_run_non_rebuildable(
     old_migrations = tmp_path / "old-migrations"
     old_migrations.mkdir()
     for migration in Path("sql").glob("*.sql"):
-        if migration.name < "017_legacy_migration_audit.sql":
+        if migration.name < "022_legacy_migration_audit.sql":
             copy2(migration, old_migrations / migration.name)
     path = tmp_path / "legacy.duckdb"
     legacy = Database(path, old_migrations)
