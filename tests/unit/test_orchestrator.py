@@ -8,6 +8,9 @@ import pytest
 from pydantic import SecretStr
 
 import westbusan.orchestrator as orchestrator_module
+from westbusan.accommodation.load import load_license_snapshot
+from westbusan.accommodation.normalize import normalize_license
+from westbusan.entity_resolution.match import build_facilities
 from westbusan.models import SourceSpec, SourceStatus
 from westbusan.orchestrator import (
     Pipeline,
@@ -74,6 +77,110 @@ def test_second_pipeline_cannot_acquire_an_active_run_attempt_lease(
         second._prepare_run(
             "fixture", "daily", date(2026, 8, 16), "lease-contention"
         )
+
+
+def test_global_writer_lease_blocks_a_different_logical_run(
+    tmp_path: Path,
+) -> None:
+    """Catches simultaneous logical runs mutating shared entity/review tables."""
+    first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    first.db.migrate()
+    run, _ = first._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "logical-a"
+    )
+    assert run is not None
+    second = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    second.db.migrate()
+
+    with pytest.raises(RuntimeError, match="global writer lease"):
+        second._prepare_run(
+            "fixture", "daily", date(2026, 8, 17), "logical-b"
+        )
+
+
+def test_terminal_source_status_and_completed_checkpoint_commit_atomically(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches restart honoring completed after terminal status failed to persist."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    run, _ = pipeline._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "checkpoint-atomic"
+    )
+    assert run is not None
+
+    def fail_status(_status):
+        raise RuntimeError("status write failed")
+
+    monkeypatch.setattr(pipeline.db, "record_source_status", fail_status)
+    with pytest.raises(RuntimeError, match="status write failed"):
+        pipeline._complete_source_partition(
+            run,
+            "lodgings",
+            "snapshot:2026-08-16",
+            2,
+            "READY",
+            {"row_count": 1},
+        )
+
+    assert pipeline.db.query(
+        """select checkpoint_json from collection_checkpoint
+           where source_id = 'lodgings'"""
+    ) == []
+
+
+def test_stale_owner_cannot_delete_facilities_or_pending_reviews_after_takeover(
+    tmp_path: Path,
+) -> None:
+    """Catches a stale facility rebuild deleting current global/review state."""
+    first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    first.db.migrate()
+    run, _ = first._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "facility-fence"
+    )
+    assert run is not None
+    record = normalize_license(
+        "lodgings",
+        {
+            "MNG_NO": "L1",
+            "BPLC_NM": "호텔",
+            "ROAD_NM_ADDR": "부산광역시 사하구 하단동 1",
+        },
+        date(2026, 8, 16),
+    )
+    load_license_snapshot(first.db, [record], run.run_id)
+    build_facilities(first.db, run.run_id)
+    review_id = uuid4()
+    first.db.connection.execute(
+        "insert into duplicate_review (review_id, evidence_json) values (?, '{}')",
+        [review_id],
+    )
+    before = (
+        first.db.scalar("select count(*) from dim_facility"),
+        first.db.scalar("select count(*) from duplicate_review"),
+    )
+    first.db.connection.execute(
+        "update pipeline_run set lease_expires_at = now() - interval '1 second' where run_id = ?",
+        [run.run_id],
+    )
+    second = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    second.db.migrate()
+    taken, _ = second._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "facility-fence"
+    )
+    assert taken is not None
+
+    with pytest.raises(RuntimeError, match="writer fence"):
+        build_facilities(
+            first.db,
+            run.run_id,
+            fence_check=lambda: first._assert_fence(run.run_id),
+        )
+
+    assert (
+        first.db.scalar("select count(*) from dim_facility"),
+        first.db.scalar("select count(*) from duplicate_review"),
+    ) == before
 
 
 def test_prepare_run_separates_utc_execution_time_from_business_date(

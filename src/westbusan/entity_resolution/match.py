@@ -116,8 +116,17 @@ def evaluate_auto_merge_precision(labeled_pairs: Path, matcher: Callable) -> flo
     return true_positive / predicted_positive if predicted_positive else 0.0
 
 
-def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
+def build_facilities(
+    db: Database,
+    run_id: UUID,
+    *,
+    progress: Callable[[], None] | None = None,
+    fence_check: Callable[[], None] | None = None,
+) -> FacilityBuildResult:
     """Build physical facilities from latest snapshots, preserving every registration."""
+    heartbeat = progress or (lambda: None)
+    guard = fence_check or (lambda: None)
+    heartbeat()
     records = _latest_records(db, run_id)
     building_ids = _building_ids(db)
     for record in records:
@@ -125,6 +134,7 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
 
     decisions: list[tuple[dict[str, object], dict[str, object], MatchDecision]] = []
     for left, right in combinations(records, 2):
+        heartbeat()
         decision = classify_pair(left, right)
         if not decision.features.is_candidate:
             continue
@@ -223,11 +233,14 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
     desired_facilities: set[UUID] = set()
     desired_license_links: set[tuple[UUID, str, str]] = set()
     desired_building_links: set[tuple[UUID, UUID]] = set()
+    heartbeat()
+    guard()
     db.connection.execute("delete from run_duplicate_review where run_id = ?", [run_id])
     db.connection.execute("delete from run_facility_building where run_id = ?", [run_id])
     db.connection.execute("delete from run_facility_license where run_id = ?", [run_id])
     db.connection.execute("delete from run_facility where run_id = ?", [run_id])
     for component in {tuple(keys) for keys in components.values()}:
+        guard()
         facility_id = _facility_id(component)
         desired_facilities.add(facility_id)
         component_records = [records_by_key[key] for key in component]
@@ -258,6 +271,7 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
             [run_id, facility_id, canonical, district, region_group],
         )
         for record in component_records:
+            guard()
             key = _registration_key(record)
             source_id = str(record["source_id"])
             source_record_id = str(record["source_record_id"])
@@ -304,6 +318,7 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
         "select facility_id, source_id, source_record_id from bridge_facility_license"
     ):
         if (facility_id, str(source_id), str(source_record_id)) not in desired_license_links:
+            guard()
             db.connection.execute(
                 """
                 delete from bridge_facility_license
@@ -315,16 +330,20 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
         "select facility_id, building_id from bridge_facility_building"
     ):
         if (facility_id, building_id) not in desired_building_links:
+            guard()
             db.connection.execute(
                 "delete from bridge_facility_building where facility_id = ? and building_id = ?",
                 [facility_id, building_id],
             )
     for (facility_id,) in db.query("select facility_id from dim_facility"):
         if facility_id not in desired_facilities:
+            guard()
             db.connection.execute("delete from dim_facility where facility_id = ?", [facility_id])
 
+    guard()
     db.connection.execute("delete from duplicate_review where review_status = 'pending'")
     for review_id, (left_id, right_id, evidence) in review_rows.items():
+        guard()
         db.connection.execute(
             """
             insert into duplicate_review
@@ -345,6 +364,8 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
             [run_id, review_id, left_id, right_id, evidence],
         )
 
+    heartbeat()
+    guard()
     return FacilityBuildResult(
         facility_count=len({tuple(keys) for keys in components.values()}),
         license_links=len(components),

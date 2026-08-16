@@ -37,6 +37,7 @@ def publish_if_valid(
     *,
     finalize: Callable[[], None] | None = None,
     rollback_reason: str | None = None,
+    fence_check: Callable[[], None] | None = None,
 ) -> PublishResult:
     """Advance only for this exact, complete, untampered quality suite."""
     if not can_publish(report) or not persisted_report_is_valid(db, run_id, report):
@@ -50,6 +51,8 @@ def publish_if_valid(
         try:
             db.connection.execute("begin transaction")
             began = True
+            if fence_check is not None:
+                fence_check()
             if (
                 not persisted_report_is_valid(db, run_id, report)
                 or persisted_required_failures(db, run_id)
@@ -60,6 +63,8 @@ def publish_if_valid(
                 return PublishResult(False, run_id, current_published_run(db), "invalid_quality_suite")
             current = current_published_run(db)
             if current == run_id:
+                if fence_check is not None:
+                    fence_check()
                 if finalize is not None:
                     finalize()
                 db.connection.execute("commit")
@@ -74,6 +79,8 @@ def publish_if_valid(
                 _record_rollback(db, current, run_id, reason)
             _snapshot_duplicate_review(db, run_id)
             _write_current_pointer(db, run_id)
+            if fence_check is not None:
+                fence_check()
             if finalize is not None:
                 finalize()
             db.connection.execute("commit")

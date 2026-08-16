@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -92,12 +93,21 @@ class _ArtifactPage:
     content_hash_ok: bool
 
 
-def run_quality_suite(db: Database, run_id: UUID) -> QualityReport:
+def run_quality_suite(
+    db: Database,
+    run_id: UUID,
+    *,
+    progress: Callable[[], None] | None = None,
+    fence_check: Callable[[], None] | None = None,
+) -> QualityReport:
     """Run all gates applicable to *run_id*, atomically replacing prior evidence.
 
     Every read is scoped to this run. Missing producer evidence creates a failed gate;
     it never disappears from the report merely because a collector omitted metadata.
     """
+    heartbeat = progress or (lambda: None)
+    guard = fence_check or (lambda: None)
+    heartbeat()
     statuses = _run_statuses(db, run_id)
     artifacts = _run_artifacts(db, run_id)
     contracts = _source_contracts(db)
@@ -112,6 +122,7 @@ def run_quality_suite(db: Database, run_id: UUID) -> QualityReport:
 
     parsed: dict[str, list[_ArtifactPage]] = {}
     for source_id in source_ids:
+        heartbeat()
         source_statuses = statuses.get(source_id, [])
         source_artifacts = artifacts.get(source_id, [])
         required = _required_contract(
@@ -137,7 +148,10 @@ def run_quality_suite(db: Database, run_id: UUID) -> QualityReport:
     checks.extend(_monthly_freshness_checks(parsed, _run_cutoff(db, run_id)))
 
     report = QualityReport([_redacted_check(check) for check in checks], run_id=run_id)
-    return _persist_suite(db, report, _contract_check_ids(contracts))
+    heartbeat()
+    return _persist_suite(
+        db, report, _contract_check_ids(contracts), fence_check=guard
+    )
 
 
 def approve_schema_baseline(
@@ -846,7 +860,11 @@ def _contract_check_ids(contracts: dict[str, bool]) -> tuple[str, ...]:
 
 
 def _persist_suite(
-    db: Database, report: QualityReport, contract_ids: tuple[str, ...]
+    db: Database,
+    report: QualityReport,
+    contract_ids: tuple[str, ...],
+    *,
+    fence_check: Callable[[], None] | None = None,
 ) -> QualityReport:
     assert report.run_id is not None
     expected_ids = tuple(str(uuid5(NAMESPACE_URL, f"quality:{report.run_id}:{index}:{_canonical_json(_payload(check))}")) for index, check in enumerate(report.checks))
@@ -872,6 +890,8 @@ def _persist_suite(
     try:
         db.connection.execute("begin transaction")
         began = True
+        if fence_check is not None:
+            fence_check()
         db.connection.execute("delete from fact_data_quality where run_id = ?", [report.run_id])
         db.connection.execute("delete from quality_suite_manifest where run_id = ?", [report.run_id])
         for check_id, check in zip(expected_ids, report.checks, strict=True):
@@ -890,6 +910,8 @@ def _persist_suite(
                 len(expected_ids),
             ],
         )
+        if fence_check is not None:
+            fence_check()
         db.connection.execute("commit")
         began = False
     except Exception:

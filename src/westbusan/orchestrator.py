@@ -189,12 +189,22 @@ class Pipeline:
         for source_id in selected:
             partition = f"snapshot:{end.isoformat()}"
             try:
-                total_rows += self._collect_fixture_source(run, source_id, end, logger)
+                source_rows = self._collect_fixture_source(
+                    run, source_id, end, logger
+                )
+                total_rows += source_rows
             except (json.JSONDecodeError, OSError, TypeError, ValueError) as error:
                 self._record_failure(run, source_id, error, logger)
                 self._checkpoint(source_id, partition, "failed", 1, run.run_id)
                 continue
-            self._checkpoint(source_id, partition, "completed", 2, run.run_id)
+            self._complete_source_partition(
+                run,
+                source_id,
+                partition,
+                2,
+                "READY" if source_rows else "EMPTY",
+                {"row_count": source_rows, "fixture": True},
+            )
         return self._finish_run(run, total_rows, logger)
 
     def _execute_production(
@@ -353,15 +363,28 @@ class Pipeline:
         self, run: RunContext, total_rows: int, logger: _JsonlLogger
     ) -> RunSummary:
         self._refresh_lease(run.run_id)
-        build_facilities(self.db, run.run_id)
-        report = run_quality_suite(self.db, run.run_id)
+        build_facilities(
+            self.db,
+            run.run_id,
+            **self._supported_phase_kwargs(build_facilities, run.run_id),
+        )
+        report = run_quality_suite(
+            self.db,
+            run.run_id,
+            **self._supported_phase_kwargs(run_quality_suite, run.run_id),
+        )
         failed = sum(
             check.status == "failed" and check.severity == "required"
             for check in report.checks
         )
         warnings = sum(check.status == "warning" for check in report.checks)
         if not failed:
-            build_marts(self.db, run.run_id, self.settings.policy)
+            build_marts(
+                self.db,
+                run.run_id,
+                self.settings.policy,
+                **self._supported_phase_kwargs(build_marts, run.run_id),
+            )
         finished = datetime.now(UTC)
         raw_artifacts = int(
             self.db.scalar(
@@ -385,6 +408,7 @@ class Pipeline:
             run.run_id,
             report,
             finalize=lambda: self._write_terminal_summary(published_summary),
+            **self._supported_phase_kwargs(publish_if_valid, run.run_id),
         )
         if publication.published:
             summary = published_summary
@@ -417,6 +441,16 @@ class Pipeline:
         values: dict[str, object] = {
             "raw_store": self.raw_store,
             "inbox_dir": self.settings.data_dir / "inbox",
+        }
+        return {name: value for name, value in values.items() if name in parameters}
+
+    def _supported_phase_kwargs(
+        self, phase: object, run_id: UUID
+    ) -> dict[str, object]:
+        parameters = inspect.signature(phase).parameters
+        values: dict[str, object] = {
+            "progress": lambda: self._refresh_lease(run_id),
+            "fence_check": lambda: self._assert_fence(run_id),
         }
         return {name: value for name, value in values.items() if name in parameters}
 
@@ -496,6 +530,13 @@ class Pipeline:
                             raise RuntimeError(
                                 f"pipeline run {prior_run_id} has an active lease"
                             )
+                        writer_epoch = self._acquire_global_writer(
+                            prior_run_id, now, lease_expires, allow_takeover=True
+                        )
+                        self.db.connection.execute(
+                            "update pipeline_run set writer_fence_epoch = ? where run_id = ?",
+                            [writer_epoch, prior_run_id],
+                        )
                         self.db.connection.execute("commit")
                         began = False
                         return (
@@ -520,11 +561,15 @@ class Pipeline:
                     as_of,
                 )
                 inherited_run_id = current_published_run(self.db)
+                writer_epoch = self._acquire_global_writer(
+                    run.run_id, now, lease_expires
+                )
                 inserted = self.db.query(
                     """insert into pipeline_run (
                            run_id, mode, started_at, status, logical_run_key, attempt,
-                           lease_owner_token, lease_expires_at, heartbeat_at, business_date
-                       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           lease_owner_token, lease_expires_at, heartbeat_at, business_date,
+                           writer_fence_epoch
+                       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        on conflict (run_id) do nothing
                        returning run_id""",
                     [
@@ -538,6 +583,7 @@ class Pipeline:
                         lease_expires,
                         now,
                         as_of,
+                        writer_epoch,
                     ],
                 )
                 if not inserted:
@@ -603,7 +649,7 @@ class Pipeline:
         current_status = str(rows[0][0])
         if current_status == "RUNNING":
             if not recovery:
-                self._refresh_lease(summary.run_id)
+                self._assert_fence(summary.run_id)
             updated = self.db.query(
                 """update pipeline_run
                    set status = ?, finished_at = ?, lease_owner_token = null,
@@ -623,6 +669,22 @@ class Pipeline:
                 raise RuntimeError(
                     f"pipeline run {summary.run_id} lease ownership was lost"
                 )
+            self.db.connection.execute(
+                """update pipeline_writer_lease
+                   set owner_token = null, run_id = null,
+                       heartbeat_at = ?, lease_expires_at = ?
+                   where lease_key = 'writer' and run_id = ? and owner_token = ?
+                     and fence_epoch = (
+                       select writer_fence_epoch from pipeline_run where run_id = ?
+                     )""",
+                [
+                    summary.finished_at,
+                    summary.finished_at,
+                    summary.run_id,
+                    self._lease_owner_token,
+                    summary.run_id,
+                ],
+            )
         elif not recovery or current_status != summary.status:
             raise RuntimeError(
                 f"pipeline run {summary.run_id} cannot finalize from {current_status}"
@@ -705,16 +767,165 @@ class Pipeline:
 
     def _refresh_lease(self, run_id: UUID) -> None:
         now = datetime.now(UTC)
-        refreshed = self.db.query(
-            """update pipeline_run
-               set heartbeat_at = ?, lease_expires_at = ?
-               where run_id = ? and status = 'RUNNING'
-                 and lease_owner_token = ?
-               returning run_id""",
-            [now, now + _LEASE_DURATION, run_id, self._lease_owner_token],
+        began = False
+        try:
+            self.db.connection.execute("begin transaction")
+            began = True
+            epoch_rows = self.db.query(
+                """select writer_fence_epoch from pipeline_run
+                   where run_id = ? and status = 'RUNNING'
+                     and lease_owner_token = ?""",
+                [run_id, self._lease_owner_token],
+            )
+            if len(epoch_rows) != 1 or epoch_rows[0][0] is None:
+                raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
+            epoch = int(epoch_rows[0][0])
+            refreshed_writer = self.db.query(
+                """update pipeline_writer_lease
+                   set heartbeat_at = ?, lease_expires_at = ?
+                   where lease_key = 'writer' and run_id = ? and owner_token = ?
+                     and fence_epoch = ?
+                   returning fence_epoch""",
+                [
+                    now,
+                    now + _LEASE_DURATION,
+                    run_id,
+                    self._lease_owner_token,
+                    epoch,
+                ],
+            )
+            refreshed_run = self.db.query(
+                """update pipeline_run
+                   set heartbeat_at = ?, lease_expires_at = ?
+                   where run_id = ? and status = 'RUNNING'
+                     and lease_owner_token = ? and writer_fence_epoch = ?
+                   returning run_id""",
+                [
+                    now,
+                    now + _LEASE_DURATION,
+                    run_id,
+                    self._lease_owner_token,
+                    epoch,
+                ],
+            )
+            if not refreshed_writer or not refreshed_run:
+                raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
+            self.db.connection.execute("commit")
+            began = False
+        except Exception:
+            if began:
+                self.db.connection.execute("rollback")
+            raise
+
+    def _acquire_global_writer(
+        self,
+        run_id: UUID,
+        now: datetime,
+        lease_expires: datetime,
+        *,
+        allow_takeover: bool = False,
+    ) -> int:
+        rows = self.db.query(
+            """select owner_token, fence_epoch, lease_expires_at::varchar
+               from pipeline_writer_lease where lease_key = 'writer'"""
         )
-        if not refreshed:
-            raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
+        if not rows:
+            epoch = 1
+            self.db.connection.execute(
+                """insert into pipeline_writer_lease (
+                       lease_key, owner_token, run_id, fence_epoch,
+                       heartbeat_at, lease_expires_at
+                   ) values ('writer', ?, ?, ?, ?, ?)""",
+                [self._lease_owner_token, run_id, epoch, now, lease_expires],
+            )
+            return epoch
+        owner, prior_epoch, expires_text = rows[0]
+        expires = datetime.fromisoformat(str(expires_text))
+        if (
+            owner not in (None, self._lease_owner_token)
+            and expires > now
+            and not allow_takeover
+        ):
+            raise RuntimeError("database global writer lease is active")
+        epoch = int(prior_epoch) if owner == self._lease_owner_token else int(prior_epoch) + 1
+        self.db.connection.execute(
+            """update pipeline_writer_lease
+               set owner_token = ?, run_id = ?, fence_epoch = ?,
+                   heartbeat_at = ?, lease_expires_at = ?
+               where lease_key = 'writer'""",
+            [self._lease_owner_token, run_id, epoch, now, lease_expires],
+        )
+        return epoch
+
+    def _assert_fence(self, run_id: UUID) -> None:
+        now = datetime.now(UTC)
+        rows = self.db.query(
+            """select 1 from pipeline_run as run
+               join pipeline_writer_lease as writer
+                 on writer.lease_key = 'writer' and writer.run_id = run.run_id
+                and writer.fence_epoch = run.writer_fence_epoch
+               where run.run_id = ? and run.status = 'RUNNING'
+                 and run.lease_owner_token = ? and writer.owner_token = ?
+                 and run.lease_expires_at > ? and writer.lease_expires_at > ?""",
+            [run_id, self._lease_owner_token, self._lease_owner_token, now, now],
+        )
+        if len(rows) != 1:
+            raise RuntimeError(
+                f"pipeline run {run_id} lease ownership or writer fence was lost"
+            )
+
+    def _complete_source_partition(
+        self,
+        run: RunContext,
+        source_id: str,
+        partition: str,
+        next_page: int,
+        status: str,
+        detail: dict[str, object],
+    ) -> None:
+        self._refresh_lease(run.run_id)
+        began = False
+        try:
+            self.db.connection.execute("begin transaction")
+            began = True
+            self._assert_fence(run.run_id)
+            self.db.record_source_status(
+                SourceStatus(
+                    source_id,
+                    datetime.now(UTC),
+                    status,
+                    detail,
+                    run.run_id,
+                )
+            )
+            payload = json.dumps(
+                {
+                    "status": "completed",
+                    "next_page": next_page,
+                    "run_id": str(run.run_id),
+                    "evidence": {
+                        "terminal_source_status": status,
+                        **detail,
+                    },
+                },
+                sort_keys=True,
+            )
+            self.db.connection.execute(
+                """insert into collection_checkpoint (
+                       source_id, partition_key, checkpoint_json, updated_at
+                   ) values (?, ?, ?, ?)
+                   on conflict (source_id, partition_key) do update set
+                       checkpoint_json = excluded.checkpoint_json,
+                       updated_at = excluded.updated_at""",
+                [source_id, partition, payload, datetime.now(UTC)],
+            )
+            self._assert_fence(run.run_id)
+            self.db.connection.execute("commit")
+            began = False
+        except Exception:
+            if began:
+                self.db.connection.execute("rollback")
+            raise
 
     def _load_summary(self, run_id: UUID) -> RunSummary:
         rows = self.db.query(
@@ -841,6 +1052,26 @@ class Pipeline:
         same_attempt = checkpoint.get("run_id") == str(run.run_id)
         next_page = int(checkpoint.get("next_page", 1)) if same_attempt else 1
         if same_attempt and checkpoint.get("status") == "completed":
+            evidence = checkpoint.get("evidence")
+            has_status = bool(
+                self.db.query(
+                    """select 1 from source_status
+                       where source_id = ? and run_id = ? limit 1""",
+                    [source_id, run.run_id],
+                )
+            )
+            if not has_status and isinstance(evidence, dict):
+                terminal_status = evidence.get("terminal_source_status")
+                if terminal_status in {"READY", "EMPTY"}:
+                    self.db.record_source_status(
+                        SourceStatus(
+                            source_id,
+                            datetime.now(UTC),
+                            terminal_status,
+                            evidence,
+                            run.run_id,
+                        )
+                    )
             return 0
         checkpoint_evidence = checkpoint.get("evidence") if same_attempt else None
         if checkpoint_evidence is not None and not isinstance(
@@ -984,43 +1215,44 @@ class Pipeline:
             loaded += len(accepted)
             received_rows = next_received_rows
             completed = received_rows == expected_total
-            self._checkpoint(
-                source_id,
-                partition,
-                "completed" if completed else "running",
-                page_no + 1,
-                run.run_id,
-                evidence={
-                    "received_rows": received_rows,
-                    "total_count": expected_total,
-                },
-            )
+            if not completed:
+                self._checkpoint(
+                    source_id,
+                    partition,
+                    "running",
+                    page_no + 1,
+                    run.run_id,
+                    evidence={
+                        "received_rows": received_rows,
+                        "total_count": expected_total,
+                    },
+                )
             if completed:
                 break
             page_no += 1
         status = "READY" if received_rows else "EMPTY"
-        self._refresh_lease(run.run_id)
-        self.db.record_source_status(
-            SourceStatus(
-                source_id,
-                datetime.now(UTC),
-                status,
-                {
-                    "operation": spec.operation,
-                    "partition": as_of.isoformat(),
-                    "row_count": received_rows,
-                    "jurisdiction_filter": {
-                        "parameter": jurisdiction_parameter,
-                        "expected": jurisdiction_expected,
-                    },
-                    "counts": {
-                        "accepted": accepted_total,
-                        "out_of_scope": out_of_scope_total,
-                        "rejected": rejected_total,
-                    },
+        self._complete_source_partition(
+            run,
+            source_id,
+            partition,
+            page_no + 1,
+            status,
+            {
+                "operation": spec.operation,
+                "partition": as_of.isoformat(),
+                "row_count": received_rows,
+                "received_rows": received_rows,
+                "total_count": expected_total,
+                "jurisdiction_filter": {
+                    "parameter": jurisdiction_parameter,
+                    "expected": jurisdiction_expected,
                 },
-                run.run_id,
-            )
+                "counts": {
+                    "accepted": accepted_total,
+                    "out_of_scope": out_of_scope_total,
+                    "rejected": rejected_total,
+                },
+            },
         )
         self._refresh_lease(run.run_id)
         logger.write(
