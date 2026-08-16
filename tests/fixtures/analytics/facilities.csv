@@ -1,0 +1,6 @@
+source_id,source_record_id,district,region_group,room_count,registration_role
+lodgings,west-l,사하구,west,12,legal
+tourist_accommodations,west-t,사하구,west,12,legal
+lodgings,east-l,해운대구,east,30,legal
+lodgings,other-l,중구,other,,legal
+tourist_pensions,pension,사하구,west,4,designation_only
