@@ -296,6 +296,14 @@ def test_migrate_legacy_command_approves_only_backfilled_self_lineage(
         [building_id],
     )
     pipeline.db.connection.execute(
+        """insert into staging_building_snapshot_version (
+               version_run_id, building_id, observed_on, parcel_hash,
+               is_closed, source_payload_json
+           ) values (?, 'legacy-register-building', '2026-08-16',
+                     'legacy-parcel', false, '{}')""",
+        [run_id],
+    )
+    pipeline.db.connection.execute(
         "insert into run_facility_building values (?, ?, ?)",
         [run_id, facility_id, building_id],
     )
@@ -355,6 +363,10 @@ def test_migrate_legacy_command_approves_only_backfilled_self_lineage(
     ]
     assert pipeline.db.scalar(
         "select count(*) from run_license_building_observation where run_id = ?",
+        [run_id],
+    ) == 1
+    assert pipeline.db.scalar(
+        "select count(*) from staging_building_revision where version_run_id = ?",
         [run_id],
     ) == 1
     audit_evidence = json.loads(
