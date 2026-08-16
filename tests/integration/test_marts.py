@@ -156,6 +156,36 @@ def test_incomplete_mart_retry_purges_partial_outputs_and_writes_manifest_last(
     ) == [(1,)]
 
 
+def test_mart_stage_write_rolls_back_when_fence_is_lost_before_commit(
+    tmp_path: Path,
+) -> None:
+    """A stale writer cannot commit a stage after losing its fence mid-transaction."""
+    db, run_id = _built_db(
+        tmp_path,
+        [_license("lodgings", "L1", "호텔", "부산광역시 사하구 하단동 1", 10)],
+    )
+    checks = 0
+
+    def lose_fence_after_facility_write() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 4:
+            raise RuntimeError("writer fence lost")
+
+    with pytest.raises(RuntimeError, match="writer fence lost"):
+        build_marts(
+            db,
+            run_id,
+            PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+            fence_check=lose_fence_after_facility_write,
+        )
+
+    assert db.query(
+        "select count(*) from mart_facility_current where run_id = ?", [run_id]
+    ) == [(0,)]
+    assert mart_manifest_is_valid(db, run_id) is False
+
+
 def test_same_day_correction_and_later_blocked_facility_do_not_rewrite_earlier_mart(
     tmp_path: Path,
 ) -> None:

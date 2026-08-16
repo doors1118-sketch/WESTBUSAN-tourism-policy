@@ -104,6 +104,23 @@ def build_marts(
     heartbeat = progress or (lambda: None)
     guard = fence_check or (lambda: None)
     after_stage = stage_hook or (lambda _: None)
+
+    def commit_stage(action: Callable[[], object]) -> object:
+        began = False
+        try:
+            db.connection.execute("begin transaction")
+            began = True
+            guard()
+            result = action()
+            guard()
+            db.connection.execute("commit")
+            began = False
+            return result
+        except Exception:
+            if began:
+                db.connection.execute("rollback")
+            raise
+
     heartbeat()
     if mart_manifest_is_valid(db, run_id):
         counts = _mart_counts(db, run_id)
@@ -113,33 +130,29 @@ def build_marts(
             counts["mart_metric_evidence"],
             counts["mart_policy_signal"],
         )
-    guard()
-    _purge_marts(db, run_id)
+    commit_stage(lambda: _purge_marts(db, run_id))
     as_of = _as_of_date(db, run_id)
     facilities = _facility_rows(db, run_id, as_of)
-    guard()
-    _replace_facilities(db, run_id, facilities)
+    commit_stage(lambda: _replace_facilities(db, run_id, facilities))
     heartbeat()
     after_stage("facility")
     district_metrics = _district_metrics(facilities, policy)
     district_metrics.update(_event_only_districts(db, run_id, as_of, district_metrics))
     periods = _periods(db, run_id, as_of, district_metrics)
     records = _region_rows(db, run_id, as_of, district_metrics, periods, policy)
-    guard()
-    _replace_regions(db, run_id, records)
+    commit_stage(lambda: _replace_regions(db, run_id, records))
     heartbeat()
     after_stage("region")
-    guard()
-    _replace_comparisons(db, run_id, records, facilities)
+    commit_stage(lambda: _replace_comparisons(db, run_id, records, facilities))
     heartbeat()
     after_stage("comparison")
-    guard()
-    signal_count = _replace_signals(db, run_id, records, facilities, policy)
+    signal_count = int(
+        commit_stage(lambda: _replace_signals(db, run_id, records, facilities, policy))
+    )
     heartbeat()
     after_stage("signal")
     evidence_rows = sum(len(row["evidence"]) for row in records)
-    guard()
-    write_mart_manifest(db, run_id)
+    commit_stage(lambda: write_mart_manifest(db, run_id))
     heartbeat()
     return MartBuildResult(len(facilities), len(records), evidence_rows, signal_count)
 
