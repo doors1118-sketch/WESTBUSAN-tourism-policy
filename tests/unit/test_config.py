@@ -1,6 +1,9 @@
 from pathlib import Path
 
-from westbusan.config import Settings
+import pytest
+from pydantic import ValidationError
+
+from westbusan.config import RegionConfig, Settings, region_group_for_district
 
 
 def test_settings_loads_regions_and_keeps_key_out_of_repr(
@@ -10,7 +13,7 @@ def test_settings_loads_regions_and_keeps_key_out_of_repr(
     (tmp_path / "config" / "regions.yaml").write_text(
         "west: [강서구, 북구, 사상구, 사하구]\n"
         "east: [해운대구, 수영구, 기장군]\n"
-        "other: [중구]\n",
+        "other: [중구, 서구, 동구, 영도구, 부산진구, 동래구, 남구, 금정구, 연제구]\n",
         encoding="utf-8",
     )
     (tmp_path / "config" / "policy.yaml").write_text(
@@ -23,3 +26,22 @@ def test_settings_loads_regions_and_keeps_key_out_of_repr(
     assert settings.region_for_district("사하구") == "west"
     assert settings.policy.small_room_threshold == 20
     assert "secret-value" not in repr(settings)
+
+
+def test_region_config_rejects_overlap_missing_or_non_busan_districts() -> None:
+    """Catches publication with a region partition other than exact disjoint 4/3/9."""
+    with pytest.raises(ValidationError, match="exactly partition"):
+        RegionConfig(
+            west=["강서구", "북구", "사상구", "사하구"],
+            east=["해운대구", "수영구", "사하구"],
+            other=["중구", "서구", "동구", "영도구", "부산진구", "동래구", "남구", "금정구", "연제구"],
+        )
+
+
+def test_region_resolver_uses_validated_configuration() -> None:
+    """Catches a hard-coded loader mapping diverging from the validated config."""
+    regions = RegionConfig.default()
+
+    assert region_group_for_district("해운대구", regions) == "east"
+    with pytest.raises(ValueError, match="Unknown Busan district"):
+        region_group_for_district("제주시", regions)

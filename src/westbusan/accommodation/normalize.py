@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
+from westbusan.config import region_group_for_district
 from westbusan.entity_resolution.normalize import (
     normalize_address,
     normalize_name,
@@ -15,26 +16,6 @@ from westbusan.entity_resolution.normalize import (
 )
 
 RegionGroup = Literal["west", "east", "other"]
-
-_REGION_BY_DISTRICT: dict[str, RegionGroup] = {
-    **{district: "west" for district in ("강서구", "북구", "사상구", "사하구")},
-    **{district: "east" for district in ("해운대구", "수영구", "기장군")},
-    **{
-        district: "other"
-        for district in (
-            "중구",
-            "서구",
-            "동구",
-            "영도구",
-            "부산진구",
-            "동래구",
-            "남구",
-            "금정구",
-            "연제구",
-        )
-    },
-}
-
 
 def _alias_key(value: str) -> str:
     return "".join(character for character in value.casefold() if character.isalnum())
@@ -201,7 +182,10 @@ def normalize_license(
     if (not road_address.is_busan and lot_address.is_busan) or road_address.value is None:
         address = lot_address
     district = address.district
-    region_group = _REGION_BY_DISTRICT.get(district) if district else None
+    try:
+        region_group = region_group_for_district(district) if district else None
+    except ValueError:
+        region_group = None
     if not is_busan:
         region_quality = "not_busan"
     elif region_group is None:
