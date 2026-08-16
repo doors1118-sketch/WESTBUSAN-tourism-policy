@@ -73,13 +73,21 @@ def test_build_marts_end_to_end_marks_partial_division_coverage_as_warning(tmp_p
     assert db.query("select quality_band from mart_region_comparison where comparison_type = 'west_divided_by_east' limit 1") == [("insufficient",)]
 
 
+def test_build_marts_end_to_end_january_does_not_inherit_august_registrations(tmp_path: Path) -> None:
+    """Reviewer regression: January lodging-only metrics cannot borrow August overlays."""
+    db = Database(tmp_path / "history.duckdb", Path("sql")); db.migrate(); run = uuid4()
+    load_license_snapshot(db, [_license("lodgings", "L", "호텔", "부산광역시 사하구 길 1", 10, date(2026, 1, 15)), _license("tourist_accommodations", "T", "관광호텔", "부산광역시 사하구 길 2", 10, date(2026, 8, 15))], run)
+    build_facilities(db, run); build_marts(db, run, PolicyConfig(small_room_threshold=5, old_building_years=[20, 30]))
+    assert db.query("select legal_registration_count, tourism_registration_facility_share, small_facility_share from mart_region_month where district = '사하구' and period = '2026-01'") == [(1, 0.0, 0.0)]
+
+
 def _built_db(tmp_path: Path, records: list[object]) -> tuple[Database, object]:
     db = Database(tmp_path / "case.duckdb", Path("sql")); db.migrate(); run = uuid4()
     load_license_snapshot(db, records, run); build_facilities(db, run)
     return db, run
 
 
-def _license(source_id: str, record_id: str, name: str, address: str, rooms: int | None):
+def _license(source_id: str, record_id: str, name: str, address: str, rooms: int | None, observed_on: date = date(2026, 8, 16)):
     row: dict[str, object] = {
         "MNG_NO": record_id,
         "BPLC_NM": name,
@@ -88,4 +96,4 @@ def _license(source_id: str, record_id: str, name: str, address: str, rooms: int
     }
     if rooms is not None:
         row["WSRM_CNT"] = rooms
-    return normalize_license(source_id, row, date(2026, 8, 16))
+    return normalize_license(source_id, row, observed_on)

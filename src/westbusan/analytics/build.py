@@ -388,7 +388,7 @@ def _region_rows(
                 "visitor_growth_minus_room_supply_growth", None, None, None, period,
                 "missing_consecutive_comparable_period",
             )
-            openings, closures = _event_changes(db, district, period)
+            openings, closures = _event_changes(db, run_id, as_of, district, period)
             rows.append({"district": district, "group": values["group"], "period": period, "values": period_values, "visitor": visitor[0], "consumption": consumption[0], "transport": transport[0], "supply_total": denom, "openings": openings, "closures": closures, "evidence": evidence})
     _classify_pressure(rows)
     _growth_and_supply_bands(rows)
@@ -461,7 +461,7 @@ def _same_period_inventory(
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
     rows = db.query(
-        f"""select link.facility_id, snapshot.room_count
+        f"""select link.facility_id, snapshot.source_id, snapshot.room_count
         from bridge_facility_license as link
         join dim_facility as facility on facility.facility_id = link.facility_id
         join staging_license_snapshot as snapshot
@@ -473,8 +473,10 @@ def _same_period_inventory(
         [district, f"{period}%", *visible_runs, as_of, as_of],
     )
     facility_rooms: dict[object, set[float]] = defaultdict(set)
+    facility_sources: dict[object, set[str]] = defaultdict(set)
     facilities = {item[0] for item in rows}
-    for facility_id, rooms in rows:
+    for facility_id, source_id, rooms in rows:
+        facility_sources[facility_id].add(str(source_id))
         if rooms is not None and float(rooms) >= 0:
             facility_rooms[facility_id].add(float(rooms))
     known = [next(iter(values)) for values in facility_rooms.values() if len(values) == 1]
@@ -483,9 +485,23 @@ def _same_period_inventory(
         known + [None] * (total - len(known)),
         small_room_threshold=policy.small_room_threshold,
     )
-    if not total:
-        return {**fallback, **metrics}
-    return {**fallback, **metrics}
+    tourism = sum(bool(sources & {"tourist_accommodations"}) for sources in facility_sources.values())
+    foreigner = sum("foreigner_city_homestays" in sources for sources in facility_sources.values())
+    registrations = sum(len(sources) for sources in facility_sources.values())
+    # Age and permit facts are intentionally null for a historical period unless
+    # a period-compatible building snapshot is implemented for that period.
+    return {**_empty_metrics(district, str(fallback["group"])), **metrics,
+            "registrations": registrations, "tourism_facilities": tourism,
+            "tourism_share": tourism / total if total else None,
+            "foreigner_registrations": foreigner,
+            "foreigner_share": foreigner / registrations if registrations else None,
+            "foreign_capable_registrations": foreigner + tourism,
+            "foreign_capable_share": (foreigner + tourism) / registrations if registrations else None,
+            "tourism_rooms": sum(next(iter(facility_rooms[facility])) for facility, sources in facility_sources.items() if "tourist_accommodations" in sources and len(facility_rooms[facility]) == 1),
+            "tourism_room_share": None, "age_mean": None, "age_median": None,
+            "weighted_age": None, "age20": None, "age30": None, "age_known": 0,
+            "age20_count": 0, "age30_count": 0, "permit_share": None,
+            "permit_known": 0, "permit_count": 0}
 
 
 def _month(period: str) -> str:
@@ -667,18 +683,24 @@ def _aggregate(values: list[object]) -> float | None:
     return sum(numbers) if numbers else None
 
 
-def _event_changes(db: Database, district: str, period: str) -> tuple[int, int]:
+def _event_changes(
+    db: Database, run_id: UUID, as_of: date | None, district: str, period: str
+) -> tuple[int, int]:
     """Count legal events once per physical facility/date, before active filtering."""
     if len(period) != 7 or period[4] != "-":
         return 0, 0
+    visible_runs = _visible_run_ids(db, run_id)
+    placeholders = ",".join("?" for _ in visible_runs)
     rows = db.query(
-        """select distinct link.facility_id, snapshot.license_date, snapshot.closure_date
+        f"""select distinct link.facility_id, snapshot.license_date, snapshot.closure_date
         from bridge_facility_license as link
         join staging_license_snapshot as snapshot
           on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
         join dim_facility as facility on facility.facility_id = link.facility_id
-        where facility.district = ? and snapshot.source_id <> 'tourist_pensions'""",
-        [district],
+        where facility.district = ? and snapshot.source_id <> 'tourist_pensions'
+          and snapshot.first_loaded_run_id in ({placeholders})
+          and (? is null or snapshot.observed_on <= ?)""",
+        [district, *visible_runs, as_of, as_of],
     )
     openings = {(facility, value) for facility, value, _ in rows if isinstance(value, date) and value.isoformat().startswith(period)}
     closures = {(facility, value) for facility, _, value in rows if isinstance(value, date) and value.isoformat().startswith(period)}
