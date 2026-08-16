@@ -522,15 +522,25 @@ def _period_building_metrics(
         return {}
     visible = _visible_run_ids(db, run_id); placeholders = ",".join("?" for _ in visible)
     rows = db.query(
-        f"""select link.facility_id, snapshot.approval_date, snapshot.permit_date, snapshot.observed_on
+        f"""with latest as (
+            select *, row_number() over (partition by building_id order by observed_on desc, approval_date desc nulls last, permit_date desc nulls last) as row_num
+            from staging_building_snapshot
+            where observed_on::varchar like ? and first_loaded_run_id in ({placeholders})
+              and (? is null or observed_on <= ?)
+        ) select link.facility_id, snapshot.approval_date, snapshot.permit_date, snapshot.observed_on
         from bridge_facility_building as link join dim_building as building on building.building_id = link.building_id
-        join staging_building_snapshot as snapshot on snapshot.building_id = building.building_key
-        where snapshot.observed_on::varchar like ? and snapshot.first_loaded_run_id in ({placeholders})
-          and (? is null or snapshot.observed_on <= ?)""", [f"{period}%", *visible, as_of, as_of])
+        join latest as snapshot on snapshot.building_id = building.building_key and snapshot.row_num = 1
+        """, [f"{period}%", *visible, as_of, as_of])
+    by_facility: dict[object, list[tuple[object, object, object]]] = defaultdict(list)
+    for facility, approval, permit, observed in rows:
+        by_facility[facility].append((approval, permit, observed))
     age_by_facility: dict[object, float] = {}
     permit_by_facility: dict[object, bool] = {}
-    for facility, approval, permit, observed in rows:
-        if facility not in facilities or approval is None or observed is None or facility in age_by_facility:
+    for facility, evidence in by_facility.items():
+        if facility not in facilities or len(evidence) != 1:
+            continue
+        approval, permit, observed = evidence[0]
+        if approval is None or observed is None:
             continue
         age_by_facility[facility] = max(0.0, (observed - approval).days / 365.2425)
         permit_by_facility[facility] = permit is not None and 0 <= (observed - permit).days <= 5 * 365
