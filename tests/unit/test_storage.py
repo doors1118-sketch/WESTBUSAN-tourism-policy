@@ -2,6 +2,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from westbusan.db import Database
 from westbusan.models import RunContext
 from westbusan.storage import RawStore
@@ -51,3 +53,20 @@ def test_identical_same_day_reruns_keep_one_raw_file_but_two_run_artifacts(
     assert first.path == second.path
     assert first.artifact_id != second.artifact_id
     assert db.query("select count(*) from raw_artifact") == [(2,)]
+
+
+def test_raw_store_rehashes_existing_content_addressed_file_before_reuse(
+    tmp_path: Path,
+) -> None:
+    """Catches trusting a hash-shaped filename after the bytes were tampered."""
+    store = RawStore(tmp_path / "data")
+    run = RunContext.start("daily", datetime(2026, 8, 16, tzinfo=UTC))
+    body = b'{"data":[{"id":1}]}'
+    artifact = store.write(run, "lodgings", {"pageNo": 1}, body, ".json")
+    artifact.path.write_bytes(b'{"data":[{"id":2}]}')
+
+    with pytest.raises(ValueError, match="integrity mismatch"):
+        store.write(run, "lodgings", {"pageNo": 1}, body, ".json")
+
+    assert not artifact.path.exists()
+    assert list(artifact.path.parent.glob(f"{artifact.path.name}.corrupt-*"))

@@ -89,6 +89,7 @@ class _ArtifactPage:
     schema_fingerprint: str | None
     rows: list[dict[str, object]] | None
     error: str | None
+    content_hash_ok: bool
 
 
 def run_quality_suite(db: Database, run_id: UUID) -> QualityReport:
@@ -247,17 +248,25 @@ def _run_statuses(db: Database, run_id: UUID) -> dict[str, list[tuple[str, dict[
 
 def _run_artifacts(
     db: Database, run_id: UUID
-) -> dict[str, list[tuple[UUID, str, date | None, dict[str, object]]]]:
-    result: dict[str, list[tuple[UUID, str, date | None, dict[str, object]]]] = defaultdict(list)
-    for artifact_id, source_id, path, source_date, request_json in db.query(
+) -> dict[str, list[tuple[UUID, str, str, date | None, dict[str, object]]]]:
+    result: dict[
+        str, list[tuple[UUID, str, str, date | None, dict[str, object]]]
+    ] = defaultdict(list)
+    for artifact_id, source_id, path, content_hash, source_date, request_json in db.query(
         """
-        select artifact_id, source_id, path, source_date, request_json
+        select artifact_id, source_id, path, content_hash, source_date, request_json
         from raw_artifact where run_id = ? order by source_id, path, artifact_id
         """,
         [run_id],
     ):
         result[str(source_id)].append(
-            (artifact_id, str(path), source_date, _json_object(request_json))
+            (
+                artifact_id,
+                str(path),
+                str(content_hash),
+                source_date,
+                _json_object(request_json),
+            )
         )
     return result
 
@@ -300,10 +309,11 @@ def _readiness_check(source_id: str, statuses: list[tuple[str, dict[str, object]
 
 
 def _parse_artifacts(
-    source_id: str, artifacts: list[tuple[UUID, str, date | None, dict[str, object]]]
+    source_id: str,
+    artifacts: list[tuple[UUID, str, str, date | None, dict[str, object]]],
 ) -> list[_ArtifactPage]:
     pages: list[_ArtifactPage] = []
-    for artifact_id, path_text, source_date, metadata in artifacts:
+    for artifact_id, path_text, expected_hash, source_date, metadata in artifacts:
         operation = str(metadata.get("operation") or "unknown")
         partition = (
             _metadata_partition(metadata) or _partition(source_date)
@@ -311,15 +321,47 @@ def _parse_artifacts(
             else _partition(source_date) or _metadata_partition(metadata)
         )
         try:
+            body = Path(path_text).read_bytes()
+            content_hash_ok = hashlib.sha256(body).hexdigest() == expected_hash
             page = parse_data_page(
-                Path(path_text).read_bytes(),
+                body,
                 "application/json",
                 require_paging_metadata=source_id in _ACCOMMODATION_SOURCES,
             )
         except (OSError, SchemaError, TypeError, ValueError) as error:
-            pages.append(_ArtifactPage(artifact_id, source_id, operation, partition, source_date, None, None, None, None, None, str(error)))
+            pages.append(
+                _ArtifactPage(
+                    artifact_id,
+                    source_id,
+                    operation,
+                    partition,
+                    source_date,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    str(error),
+                    False,
+                )
+            )
         else:
-            pages.append(_ArtifactPage(artifact_id, source_id, operation, partition, source_date, page.page_no, page.page_size, page.total_count, page.schema_fingerprint, page.rows, None))
+            pages.append(
+                _ArtifactPage(
+                    artifact_id,
+                    source_id,
+                    operation,
+                    partition,
+                    source_date,
+                    page.page_no,
+                    page.page_size,
+                    page.total_count,
+                    page.schema_fingerprint,
+                    page.rows,
+                    None,
+                    content_hash_ok,
+                )
+            )
     return pages
 
 
@@ -327,14 +369,26 @@ def _raw_contract_checks(db: Database, run_id: UUID, source_id: str, pages: list
     severity: Severity = "required" if required else "informational"
     if not pages:
         return [
+            CheckResult("raw_content_hash", "failed" if required else "skipped", {"mismatched_artifacts": 0, "missing_artifacts": 1}, "all stored bytes match content_hash", severity, source_id, "raw_artifact", {}),
             CheckResult("required_record_structure", "failed" if required else "skipped", "MISSING_RAW_ARTIFACT", "parsed raw page with row container", severity, source_id, "raw_artifact", {"raw_artifact_count": 0}),
             CheckResult("schema_fingerprint_approved", "failed" if required else "skipped", "MISSING_RAW_ARTIFACT", "approved run-scoped schema fingerprint", severity, source_id, "raw_artifact", {}),
             CheckResult("raw_total_matches_staging", "failed" if required else "skipped", "MISSING_RAW_ARTIFACT", "reconciled raw page total", severity, source_id, _target_table(source_id), {}),
         ]
+    mismatched = [page for page in pages if not page.content_hash_ok]
+    integrity = CheckResult(
+        "raw_content_hash",
+        "passed" if not mismatched else "failed",
+        {"mismatched_artifacts": len(mismatched)},
+        {"mismatched_artifacts": 0},
+        severity,
+        source_id,
+        "raw_artifact",
+        {"artifact_ids": sorted(str(page.artifact_id) for page in mismatched)},
+    )
     malformed = [page for page in pages if page.error or page.rows is None]
     missing_ids = sum(1 for page in pages if page.rows is not None and source_id in _ACCOMMODATION_SOURCES for row in page.rows if not _has_identifier(row))
     structure = CheckResult("required_record_structure", "passed" if not malformed and not missing_ids else "failed", {"malformed_pages": len(malformed), "missing_identifier_rows": missing_ids}, {"malformed_pages": 0, "missing_identifier_rows": 0}, severity, source_id, "raw_artifact", {"malformed_page_errors": sorted(page.error for page in malformed if page.error)})
-    checks = [structure, _schema_check(db, source_id, pages, statuses, severity), _reconciliation_check(db, run_id, source_id, pages, severity)]
+    checks = [integrity, structure, _schema_check(db, source_id, pages, statuses, severity), _reconciliation_check(db, run_id, source_id, pages, severity)]
     if source_id in _TOURISM_SOURCES:
         checks.append(_date_parse_check(db, run_id, source_id, pages, severity))
     return checks
@@ -714,6 +768,7 @@ def _monthly_freshness_checks(parsed: dict[str, list[_ArtifactPage]]) -> list[Ch
 def _contract_check_ids(contracts: dict[str, bool]) -> tuple[str, ...]:
     names = (
         "source_readiness",
+        "raw_content_hash",
         "required_record_structure",
         "schema_fingerprint_approved",
         "raw_total_matches_staging",

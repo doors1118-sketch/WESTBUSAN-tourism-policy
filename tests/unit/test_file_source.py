@@ -46,6 +46,20 @@ def test_unknown_file_date_is_not_replaced_with_filesystem_mtime(tmp_path: Path)
     assert '"source_date_quality":"unknown"' in artifact.request_json
 
 
+def test_manual_ingestion_parses_the_immutable_copy_not_the_mutable_inbox(
+    tmp_path: Path,
+) -> None:
+    """Catches a TOCTOU change between hashing/copying and tabular parsing."""
+    inbox = tmp_path / "KORAIL_근무지_2022.csv"
+    inbox.write_text("station,count\n부산,10\n", encoding="utf-8")
+    run = RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC))
+    source = FileSource(tmp_path / "data")
+    artifact = source.ingest(inbox, "korail_workplace_ticketing_file", run)
+    inbox.write_text("station,count\n부산,999\n", encoding="utf-8")
+
+    assert read_tabular_rows(artifact.path) == [{"station": "부산", "count": "10"}]
+
+
 def test_tabular_reader_preserves_xlsx_cell_positions_and_cp949_csv(tmp_path: Path) -> None:
     cp949_path = tmp_path / "한국철도공사_근무지_2022.csv"
     cp949_path.write_bytes("역명,승차인원\n부산역,10\n".encode("cp949"))

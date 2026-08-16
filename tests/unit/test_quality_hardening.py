@@ -51,6 +51,32 @@ def test_publication_rejects_empty_foreign_unpersisted_and_tampered_reports(
     assert publish_if_valid(db, run_id, report).published is False
 
 
+def test_quality_fails_closed_when_raw_bytes_no_longer_match_content_hash(
+    tmp_path: Path,
+) -> None:
+    """Catches same-shape, same-row-count tampering hidden behind valid JSON."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    _valid_run(db, tmp_path, run_id)
+    raw_path = Path(
+        db.scalar(
+            "select path from raw_artifact where run_id = ? and source_id = 'lodgings'",
+            [run_id],
+        )
+    )
+    original = raw_path.read_bytes()
+    tampered = original.replace(b'"MNG_NO": "L1"', b'"MNG_NO": "L2"')
+    assert tampered != original
+    assert len(tampered) == len(original)
+    raw_path.write_bytes(tampered)
+
+    report = run_quality_suite(db, run_id)
+    integrity = _check(report, "raw_content_hash", "lodgings")
+
+    assert integrity.status == "failed"
+    assert integrity.actual == {"mismatched_artifacts": 1}
+
+
 def test_publication_rejects_a_manifest_that_omits_canonical_required_checks(
     tmp_path: Path,
 ) -> None:

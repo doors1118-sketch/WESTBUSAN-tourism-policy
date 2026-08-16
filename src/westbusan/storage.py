@@ -7,7 +7,7 @@ import json
 import os
 import tempfile
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
@@ -23,7 +23,8 @@ class RawStore:
     """Stores raw bytes and their parsed rows below a data directory."""
 
     def __init__(self, data_dir: Path) -> None:
-        self.raw_dir = Path(data_dir) / "raw"
+        self.data_dir = Path(data_dir)
+        self.raw_dir = self.data_dir / "raw"
 
     def write(
         self,
@@ -50,7 +51,17 @@ class RawStore:
         directory = self.raw_dir / source_id / f"ingest_date={ingest_date.isoformat()}"
         path = directory / f"{content_hash}{suffix}"
         directory.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
+        if path.exists():
+            actual_hash = _sha256(path.read_bytes())
+            if actual_hash != content_hash:
+                quarantine = path.with_name(
+                    f"{path.name}.corrupt-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
+                )
+                os.replace(str(path), str(quarantine))
+                raise ValueError(
+                    f"raw artifact integrity mismatch; quarantined {path.name}"
+                )
+        else:
             _atomic_write(path, body)
 
         return RawArtifact(
