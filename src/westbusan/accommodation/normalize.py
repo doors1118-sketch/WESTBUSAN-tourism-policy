@@ -42,19 +42,26 @@ def _alias_key(value: str) -> str:
 
 _ALIASES: dict[str, tuple[str, ...]] = {
     "source_record_id": ("MNG_NO", "MNGNO", "MANAGEMENT_NO", "MANAGE_NO", "관리번호"),
+    "jurisdiction_code": ("OPN_ATMY_GRP_CD", "개방자치단체코드"),
     "name": ("BPLC_NM", "BPLCNM", "BIZPLC_NM", "BUSINESS_NAME", "사업장명", "업소명", "업체명"),
     "road_address": ("ROAD_NM_ADDR", "ROADNMADDR", "ROAD_ADDRESS", "도로명주소"),
     "lot_address": ("LOTNO_ADDR", "LOTNOADDR", "JIBUN_ADDR", "JIBUN_ADDRESS", "지번주소"),
-    "license_date": ("LICENSG_DE", "LICENS_DE", "PERMIT_DATE", "LICENSE_DATE", "인허가일자", "인허가일"),
-    "closure_date": ("CLSBIZ_DE", "CLOSURE_DATE", "CLOSE_DATE", "폐업일자", "폐업일"),
-    "status_code": ("DTL_STATE_GBN", "STATE_CODE", "STATUS_CODE", "영업상태구분코드", "영업상태코드"),
-    "status_name": ("DTL_STATE_NM", "SALS_STTS_NM", "STATUS_NAME", "영업상태명", "상태명"),
+    "license_date": ("LCPMT_YMD", "LICENSG_DE", "LICENS_DE", "PERMIT_DATE", "LICENSE_DATE", "인허가일자", "인허가일"),
+    "closure_date": ("CLSBIZ_YMD", "CLSBIZ_DE", "CLOSURE_DATE", "CLOSE_DATE", "폐업일자", "폐업일"),
+    "status_code": ("SALS_STTS_CD", "TRD_STATE_GBN", "STATE_CODE", "STATUS_CODE", "영업상태구분코드", "영업상태코드"),
+    "status_name": ("SALS_STTS_NM", "TRD_STATE_NM", "STATUS_NAME", "영업상태명", "상태명"),
+    "detailed_status_code": ("DTL_SALS_STTS_CD", "DTL_STATE_GBN", "상세영업상태코드"),
+    "detailed_status_name": ("DTL_SALS_STTS_NM", "DTL_STATE_NM", "상세영업상태명"),
     "korean_rooms": ("KSRM_CNT", "KSRMCNT", "KOREAN_ROOM_COUNT", "한실수", "한실객실수"),
     "western_rooms": ("WSRM_CNT", "WSRMCNT", "WESTERN_ROOM_COUNT", "양실수", "양실객실수"),
     "phone": ("SITETEL", "TELNO", "TEL_NO", "PHONE", "TEL", "전화번호"),
-    "longitude": ("X", "X_COORDINATE", "XCORD", "LNG", "LONGITUDE", "경도"),
-    "latitude": ("Y", "Y_COORDINATE", "YCORD", "LAT", "LATITUDE", "위도"),
-    "updated_at": ("LAST_MOD_TS", "LAST_UPDT_DT", "UPDATE_DATE", "UPDATED_AT", "MODIFIED_AT", "최종수정일", "데이터기준일자"),
+    "longitude": ("LNG", "LONGITUDE", "경도"),
+    "latitude": ("LAT", "LATITUDE", "위도"),
+    "projected_x": ("XCRD",),
+    "projected_y": ("YCRD",),
+    "updated_at": ("LAST_MDFCN_YMD", "LAST_MOD_TS", "LAST_UPDT_DT", "UPDATE_DATE", "UPDATED_AT", "MODIFIED_AT", "최종수정일"),
+    "data_updated_on": ("DATA_UPDT_YMD", "데이터기준일자"),
+    "data_update_point": ("DAT_UPDT_PNT",),
 }
 _ALIASES = {field: tuple(_alias_key(alias) for alias in aliases) for field, aliases in _ALIASES.items()}
 _ALL_ALIASES = {alias for aliases in _ALIASES.values() for alias in aliases}
@@ -66,6 +73,7 @@ class LicenseRecord:
 
     source_id: str
     source_record_id: str | None
+    jurisdiction_code: str | None
     observed_on: date
     source_name: str | None
     normalized_name: str | None
@@ -79,12 +87,20 @@ class LicenseRecord:
     closure_date: date | None
     status_code: str | None
     status_name: str | None
+    status_class: str | None
+    detailed_status_code: str | None
+    detailed_status_name: str | None
     room_count: int | None
     room_count_quality: str
     normalized_phone: str | None
     longitude: float | None
     latitude: float | None
+    projected_x: float | None
+    projected_y: float | None
+    coordinate_crs: str | None
     source_updated_at: str | None
+    data_updated_on: date | None
+    data_update_point: str | None
     source_payload_json: dict[str, object]
 
 
@@ -141,6 +157,18 @@ def _parse_coordinate(value: object | None) -> float | None:
         return None
 
 
+def _status_class(value: object | None) -> str | None:
+    code = _as_text(value)
+    if code is None:
+        return None
+    return {
+        "01": "active",
+        "02": "suspended",
+        "03": "closed",
+        "04": "cancelled_or_expired_or_stopped",
+    }.get(code, "unknown")
+
+
 def _room_count(korean: object | None, western: object | None) -> tuple[int | None, str]:
     parsed = [_parse_number(korean), _parse_number(western)]
     if any(value is not None and value < 0 for value in parsed):
@@ -180,6 +208,7 @@ def normalize_license(
     return LicenseRecord(
         source_id=source_id,
         source_record_id=_as_text(values.get("source_record_id")),
+        jurisdiction_code=_as_text(values.get("jurisdiction_code")),
         observed_on=observed_on,
         source_name=_as_text(values.get("name")),
         normalized_name=normalize_name(_as_text(values.get("name"))),
@@ -193,11 +222,24 @@ def normalize_license(
         closure_date=_parse_date(values.get("closure_date")),
         status_code=_as_text(values.get("status_code")),
         status_name=_as_text(values.get("status_name")),
+        status_class=_status_class(values.get("status_code")),
+        detailed_status_code=_as_text(values.get("detailed_status_code")),
+        detailed_status_name=_as_text(values.get("detailed_status_name")),
         room_count=room_count,
         room_count_quality=room_count_quality,
         normalized_phone=normalize_phone(_as_text(values.get("phone"))),
         longitude=_parse_coordinate(values.get("longitude")),
         latitude=_parse_coordinate(values.get("latitude")),
+        projected_x=_parse_coordinate(values.get("projected_x")),
+        projected_y=_parse_coordinate(values.get("projected_y")),
+        coordinate_crs=(
+            "EPSG:5174"
+            if values.get("projected_x") not in (None, "")
+            or values.get("projected_y") not in (None, "")
+            else None
+        ),
         source_updated_at=_as_text(values.get("updated_at")),
+        data_updated_on=_parse_date(values.get("data_updated_on")),
+        data_update_point=_as_text(values.get("data_update_point")),
         source_payload_json=source_payload,
     )

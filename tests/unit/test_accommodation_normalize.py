@@ -102,3 +102,64 @@ def test_busan_lot_address_is_used_when_road_address_is_not_busan() -> None:
     assert record.is_busan is True
     assert record.district == "사하구"
     assert record.region_group == "west"
+
+
+def test_official_current_fields_preserve_status_dates_and_projected_coordinates() -> None:
+    """Catches current official fields being nulled or EPSG:5174 being read as degrees."""
+    record = normalize_license(
+        "lodgings",
+        {
+            "MNG_NO": "BUSAN-OFFICIAL-1",
+            "BPLC_NM": "공식 숙박업소",
+            "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
+            "OPN_ATMY_GRP_CD": "6260000",
+            "LCPMT_YMD": "20200102",
+            "CLSBIZ_YMD": "20250831",
+            "SALS_STTS_CD": "03",
+            "SALS_STTS_NM": "폐업",
+            "DTL_SALS_STTS_CD": "03",
+            "DTL_SALS_STTS_NM": "폐업",
+            "LAST_MDFCN_YMD": "20250831",
+            "DATA_UPDT_YMD": "20250901",
+            "DAT_UPDT_PNT": "01",
+            "XCRD": "963210.12",
+            "YCRD": "1812345.67",
+        },
+        date(2026, 8, 16),
+    )
+
+    assert record.jurisdiction_code == "6260000"
+    assert record.license_date == date(2020, 1, 2)
+    assert record.closure_date == date(2025, 8, 31)
+    assert record.status_code == "03"
+    assert record.status_name == "폐업"
+    assert record.status_class == "closed"
+    assert record.detailed_status_code == "03"
+    assert record.detailed_status_name == "폐업"
+    assert record.source_updated_at == "20250831"
+    assert record.data_updated_on == date(2025, 9, 1)
+    assert record.data_update_point == "01"
+    assert record.projected_x == 963210.12
+    assert record.projected_y == 1812345.67
+    assert record.coordinate_crs == "EPSG:5174"
+    assert record.longitude is None
+    assert record.latitude is None
+
+
+def test_overall_status_codes_have_pinned_official_meanings() -> None:
+    """Catches an overall status code being reinterpreted as a detailed status."""
+    expected = {
+        "01": "active",
+        "02": "suspended",
+        "03": "closed",
+        "04": "cancelled_or_expired_or_stopped",
+        "99": "unknown",
+    }
+
+    for code, status_class in expected.items():
+        record = normalize_license(
+            "lodgings",
+            {"MNG_NO": code, "SALS_STTS_CD": code},
+            date(2026, 8, 16),
+        )
+        assert record.status_class == status_class

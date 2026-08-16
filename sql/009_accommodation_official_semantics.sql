@@ -1,0 +1,9 @@
+alter table staging_license_snapshot add column if not exists jurisdiction_code varchar;
+alter table staging_license_snapshot add column if not exists status_class varchar;
+alter table staging_license_snapshot add column if not exists detailed_status_code varchar;
+alter table staging_license_snapshot add column if not exists detailed_status_name varchar;
+alter table staging_license_snapshot add column if not exists projected_x double;
+alter table staging_license_snapshot add column if not exists projected_y double;
+alter table staging_license_snapshot add column if not exists coordinate_crs varchar;
+alter table staging_license_snapshot add column if not exists data_updated_on date;
+alter table staging_license_snapshot add column if not exists data_update_point varchar;

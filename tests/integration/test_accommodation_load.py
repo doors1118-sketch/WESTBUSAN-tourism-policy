@@ -36,3 +36,53 @@ def test_load_filters_non_busan_after_normalization(tmp_path: Path) -> None:
     assert record.source_payload_json == {}
     assert load_license_snapshot(db, [record], uuid4()) == 0
     assert db.query("select count(*) from staging_license_snapshot") == [(0,)]
+
+
+def test_load_persists_official_semantics_without_using_projected_coordinates_as_degrees(
+    tmp_path: Path,
+) -> None:
+    """Catches normalized official status/CRS evidence being dropped at staging."""
+    db = Database(tmp_path / "test.duckdb", Path("sql"))
+    db.migrate()
+    record = normalize_license(
+        "lodgings",
+        {
+            "MNG_NO": "BUSAN-OFFICIAL-1",
+            "BPLC_NM": "공식 숙박업소",
+            "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
+            "OPN_ATMY_GRP_CD": "6260000",
+            "LCPMT_YMD": "20200102",
+            "SALS_STTS_CD": "01",
+            "SALS_STTS_NM": "영업",
+            "DTL_SALS_STTS_CD": "01",
+            "DTL_SALS_STTS_NM": "정상",
+            "LAST_MDFCN_YMD": "20250831",
+            "DATA_UPDT_YMD": "20250901",
+            "DAT_UPDT_PNT": "01",
+            "XCRD": "963210.12",
+            "YCRD": "1812345.67",
+        },
+        date(2026, 8, 16),
+    )
+
+    assert load_license_snapshot(db, [record], uuid4()) == 1
+    assert db.query(
+        """select jurisdiction_code, status_class, detailed_status_code,
+                  detailed_status_name, projected_x, projected_y, coordinate_crs,
+                  longitude, latitude, data_updated_on, data_update_point
+           from staging_license_snapshot"""
+    ) == [
+        (
+            "6260000",
+            "active",
+            "01",
+            "정상",
+            963210.12,
+            1812345.67,
+            "EPSG:5174",
+            None,
+            None,
+            date(2025, 9, 1),
+            "01",
+        )
+    ]
