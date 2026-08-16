@@ -63,7 +63,16 @@ def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_p
         )
         """
     ) == [(2,)]
-    first_ids = db.query("select facility_id from dim_facility order by facility_id")
+    first_facilities = db.query(
+        "select facility_id, created_at from dim_facility order by facility_id"
+    )
+    first_links = db.query(
+        """
+        select facility_id, source_id, source_record_id, linked_at
+        from bridge_facility_license
+        order by facility_id, source_id, source_record_id
+        """
+    )
     assert '"decision": "auto_merge"' in db.query(
         """
         select evidence_json from bridge_facility_license
@@ -72,4 +81,140 @@ def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_p
     )[0][0]
 
     assert build_facilities(db, uuid4()).facility_count == 2
-    assert db.query("select facility_id from dim_facility order by facility_id") == first_ids
+    assert db.query("select facility_id, created_at from dim_facility order by facility_id") == first_facilities
+    assert db.query(
+        """
+        select facility_id, source_id, source_record_id, linked_at
+        from bridge_facility_license
+        order by facility_id, source_id, source_record_id
+        """
+    ) == first_links
+
+
+def test_unmatched_tourist_pension_is_reviewed_without_creating_a_facility(tmp_path: Path) -> None:
+    """Catches counting an unmatched designation as an additive physical facility."""
+    db = Database(tmp_path / "test.duckdb", Path("sql"))
+    db.migrate()
+    records = [
+        _license("lodgings", "L1", "기장호텔", "부산광역시 기장군 해맞이로 1", "051-111-1111"),
+        _license(
+            "tourist_pensions",
+            "P1",
+            "연결되지 않은 관광펜션",
+            "부산광역시 기장군 다른길 99",
+            "051-999-9999",
+        ),
+    ]
+    run_id = uuid4()
+    assert load_license_snapshot(db, records, run_id) == 2
+
+    result = build_facilities(db, run_id)
+
+    assert result.facility_count == 1
+    assert result.license_links == 1
+    assert result.unmatched_designations == 1
+    assert db.query("select count(*) from bridge_facility_license where source_id = 'tourist_pensions'") == [
+        (0,)
+    ]
+    assert db.query("select count(*) from duplicate_review where evidence_json like '%unmatched_designation%'") == [
+        (1,)
+    ]
+
+
+def test_confident_tourist_pension_overlay_links_to_its_physical_facility(tmp_path: Path) -> None:
+    """Catches a confident non-additive designation being omitted from its facility."""
+    db = Database(tmp_path / "test.duckdb", Path("sql"))
+    db.migrate()
+    run_id = uuid4()
+    records = [
+        _license("rural_homestays", "R1", "농가민박", "부산광역시 기장군 농가로 1", "051-111-1111"),
+        _license("tourist_pensions", "R1", "농가민박", "부산광역시 기장군 농가로 1", None),
+    ]
+    assert load_license_snapshot(db, records, run_id) == 2
+
+    result = build_facilities(db, run_id)
+
+    assert result.facility_count == 1
+    assert result.license_links == 2
+    assert result.designation_links == 1
+    assert result.unmatched_designations == 0
+    assert db.query(
+        """
+        select count(*) from bridge_facility_license
+        where facility_id = (
+            select facility_id from bridge_facility_license
+            where source_id = 'rural_homestays' and source_record_id = 'R1'
+        )
+        """
+    ) == [(2,)]
+
+
+def test_transitive_conflicting_phone_chain_does_not_collapse_three_records(tmp_path: Path) -> None:
+    """Catches an A-B-C automatic chain overriding direct A-C review evidence."""
+    db = Database(tmp_path / "test.duckdb", Path("sql"))
+    db.migrate()
+    records = [
+        _license("lodgings", "A", "연결호텔", "부산광역시 사하구 낙동대로 1", "051-111-1111"),
+        _license("tourist_accommodations", "B", "연결 호텔", "부산광역시 사하구 낙동대로 1", None),
+        _license("lodgings", "C", "연결호텔", "부산광역시 사하구 낙동대로 1", "051-222-2222"),
+    ]
+    run_id = uuid4()
+    assert load_license_snapshot(db, records, run_id) == 3
+
+    result = build_facilities(db, run_id)
+
+    assert result.facility_count == 2
+    assert result.license_links == 3
+    assert result.review_pairs >= 1
+    assert db.query(
+        "select count(*) from duplicate_review where left_facility_id = right_facility_id"
+    ) == [(0,)]
+    assert db.query("select count(*) from duplicate_review where review_status = 'pending'")[0][0] >= 1
+
+
+def test_rebuild_removes_pending_review_that_is_no_longer_a_candidate(tmp_path: Path) -> None:
+    """Catches stale pending duplicate-review evidence after the latest snapshot changes."""
+    db = Database(tmp_path / "test.duckdb", Path("sql"))
+    db.migrate()
+    first_run = uuid4()
+    initial = [
+        _license("lodgings", "A", "동일숙소", "부산광역시 사하구 낙동대로 1", "051-111-1111"),
+        _license("lodgings", "B", "동일 숙소", "부산광역시 사하구 낙동대로 1", "051-222-2222"),
+    ]
+    assert load_license_snapshot(db, initial, first_run) == 2
+    assert build_facilities(db, first_run).review_pairs == 1
+
+    second_run = uuid4()
+    moved_record = _license(
+        "lodgings",
+        "B",
+        "동일 숙소",
+        "부산광역시 사하구 낙동대로 99",
+        "051-222-2222",
+        observed_on=date(2026, 8, 17),
+    )
+    assert load_license_snapshot(db, [moved_record], second_run) == 1
+
+    assert build_facilities(db, second_run).review_pairs == 0
+    assert db.query("select count(*) from duplicate_review where review_status = 'pending'") == [
+        (0,)
+    ]
+
+
+def _license(
+    source_id: str,
+    source_record_id: str,
+    name: str,
+    address: str,
+    phone: str | None,
+    *,
+    observed_on: date = date(2026, 8, 16),
+):
+    row: dict[str, object] = {
+        "MNG_NO": source_record_id,
+        "BPLC_NM": name,
+        "ROAD_NM_ADDR": address,
+    }
+    if phone is not None:
+        row["SITETEL"] = phone
+    return normalize_license(source_id, row, observed_on)

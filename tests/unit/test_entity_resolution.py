@@ -1,4 +1,7 @@
+import csv
 from pathlib import Path
+
+import pytest
 
 from westbusan.entity_resolution.match import (
     classify_pair,
@@ -78,3 +81,40 @@ def test_labeled_fixture_has_perfect_auto_merge_precision() -> None:
 
     assert precision == 1.0
     assert precision >= 0.99
+
+
+def test_labeled_fixture_validates_each_representative_decision() -> None:
+    """Catches a mislabeled or unexercised negative in the precision sample."""
+    with Path("tests/fixtures/entity_resolution/labeled_pairs.csv").open(
+        encoding="utf-8", newline=""
+    ) as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert len(rows) >= 30
+    for row in rows:
+        left = {
+            key.removeprefix("left_"): value
+            for key, value in row.items()
+            if key.startswith("left_") and value
+        }
+        right = {
+            key.removeprefix("right_"): value
+            for key, value in row.items()
+            if key.startswith("right_") and value
+        }
+        assert classify_pair(left, right).label == row["expected"]
+
+
+def test_precision_rejects_a_sample_with_too_few_positive_predictions(
+    tmp_path: Path,
+) -> None:
+    """Catches reporting 1.0 precision from a sample too small to be meaningful."""
+    sample = tmp_path / "one-positive.csv"
+    sample.write_text(
+        "left_source_id,left_source_record_id,left_name,right_source_id,right_source_record_id,right_name,expected\n"
+        "lodgings,L1,부산호텔,tourist_accommodations,T1,부산 호텔,auto_merge\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="at least 10"):
+        evaluate_auto_merge_precision(sample, classify_pair)

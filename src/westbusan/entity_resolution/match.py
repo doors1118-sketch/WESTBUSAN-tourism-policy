@@ -58,6 +58,7 @@ class FacilityBuildResult:
     license_links: int
     review_pairs: int
     designation_links: int
+    unmatched_designations: int
 
 
 def candidate_features(left: LicenseRecord, right: LicenseRecord) -> MatchFeatures:
@@ -108,6 +109,10 @@ def evaluate_auto_merge_precision(labeled_pairs: Path, matcher: Callable) -> flo
             predicted_positive += 1
             if row["expected"] == "auto_merge":
                 true_positive += 1
+    if predicted_positive < 10:
+        raise ValueError(
+            "labeled entity-resolution sample must produce at least 10 auto_merge predictions"
+        )
     return true_positive / predicted_positive if predicted_positive else 0.0
 
 
@@ -119,50 +124,109 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
         record["building_ids"] = building_ids.get(_registration_key(record), set())
 
     decisions: list[tuple[dict[str, object], dict[str, object], MatchDecision]] = []
-    merge_edges: list[tuple[str, str]] = []
     for left, right in combinations(records, 2):
         decision = classify_pair(left, right)
         if not decision.features.is_candidate:
             continue
         decisions.append((left, right, decision))
-        if decision.label in {"auto_merge", "designation_link"}:
-            merge_edges.append((_registration_key(left), _registration_key(right)))
 
-    components = _components(records, merge_edges)
+    physical_records = [record for record in records if not _is_tourist_pension(record)]
+    physical_keys = {_registration_key(record) for record in physical_records}
+    physical_decisions = [
+        decision
+        for decision in decisions
+        if _registration_key(decision[0]) in physical_keys
+        and _registration_key(decision[1]) in physical_keys
+    ]
+    merge_edges, blocked_edges = _safe_physical_merge_edges(
+        physical_records, physical_decisions
+    )
+    physical_components = _components(physical_records, merge_edges)
+    components, unmatched_designations = _attach_designations(
+        records, decisions, physical_components
+    )
+
     evidence_by_key: dict[str, list[dict[str, object]]] = defaultdict(list)
-    review_rows: list[tuple[UUID, UUID, UUID, str]] = []
+    review_rows: dict[UUID, tuple[UUID | None, UUID | None, str]] = {}
+
+    def add_review(
+        review_key: str,
+        left_id: UUID | None,
+        right_id: UUID | None,
+        evidence: dict[str, object],
+    ) -> None:
+        if left_id is not None and left_id == right_id:
+            return
+        review_rows[uuid5(NAMESPACE_URL, review_key)] = (
+            left_id,
+            right_id,
+            json.dumps(evidence, ensure_ascii=False, sort_keys=True),
+        )
+
+    accepted_edges = {tuple(sorted(edge)) for edge in merge_edges}
     for left, right, decision in decisions:
+        left_key = _registration_key(left)
+        right_key = _registration_key(right)
         evidence = {
             "decision": decision.label,
-            "left_registration_key": _registration_key(left),
-            "right_registration_key": _registration_key(right),
+            "left_registration_key": left_key,
+            "right_registration_key": right_key,
             "features": asdict(decision.features),
         }
-        if decision.label in {"auto_merge", "designation_link"}:
-            evidence_by_key[_registration_key(left)].append(evidence)
-            evidence_by_key[_registration_key(right)].append(evidence)
-        elif decision.label == "review":
-            left_id = _facility_id(components[_registration_key(left)])
-            right_id = _facility_id(components[_registration_key(right)])
-            review_rows.append(
-                (
-                    uuid5(
-                        NAMESPACE_URL,
-                        "duplicate-review:"
-                        + "|".join(sorted((_registration_key(left), _registration_key(right)))),
-                    ),
-                    left_id,
-                    right_id,
-                    json.dumps(evidence, ensure_ascii=False, sort_keys=True),
-                )
+        if (
+            decision.label == "auto_merge"
+            and tuple(sorted((left_key, right_key))) in accepted_edges
+        ) or (
+            decision.label == "designation_link"
+            and left_key in components
+            and right_key in components
+            and components[left_key] == components[right_key]
+        ):
+            evidence_by_key[left_key].append(evidence)
+            evidence_by_key[right_key].append(evidence)
+        elif decision.label == "review" and left_key in components and right_key in components:
+            add_review(
+                "duplicate-review:" + "|".join(sorted((left_key, right_key))),
+                _facility_id(components[left_key]),
+                _facility_id(components[right_key]),
+                evidence,
             )
 
-    db.connection.execute("delete from bridge_facility_license")
-    db.connection.execute("delete from bridge_facility_building")
-    db.connection.execute("delete from dim_facility")
+    for left, right, witnesses in blocked_edges:
+        left_key = _registration_key(left)
+        right_key = _registration_key(right)
+        add_review(
+            "blocked-transitive-merge:" + "|".join(sorted((left_key, right_key))),
+            _facility_id(components[left_key]),
+            _facility_id(components[right_key]),
+            {
+                "decision": "blocked_transitive_merge",
+                "left_registration_key": left_key,
+                "right_registration_key": right_key,
+                "witnesses": witnesses,
+            },
+        )
+
+    for key, reason in unmatched_designations.items():
+        add_review(
+            "unmatched-designation:" + key,
+            None,
+            None,
+            {
+                "decision": "unmatched_designation",
+                "registration_key": key,
+                "reason": reason,
+            },
+        )
+
+    records_by_key = {_registration_key(record): record for record in records}
+    desired_facilities: set[UUID] = set()
+    desired_license_links: set[tuple[UUID, str, str]] = set()
+    desired_building_links: set[tuple[UUID, UUID]] = set()
     for component in {tuple(keys) for keys in components.values()}:
         facility_id = _facility_id(component)
-        component_records = [record for record in records if _registration_key(record) in component]
+        desired_facilities.add(facility_id)
+        component_records = [records_by_key[key] for key in component]
         canonical = next(
             (record["source_name"] for record in component_records if record["source_name"]),
             None,
@@ -176,11 +240,18 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
             """
             insert into dim_facility (facility_id, canonical_name, district, region_group)
             values (?, ?, ?, ?)
+            on conflict (facility_id) do update set
+                canonical_name = excluded.canonical_name,
+                district = excluded.district,
+                region_group = excluded.region_group
             """,
             [facility_id, canonical, district, region_group],
         )
         for record in component_records:
             key = _registration_key(record)
+            source_id = str(record["source_id"])
+            source_record_id = str(record["source_record_id"])
+            desired_license_links.add((facility_id, source_id, source_record_id))
             evidence = json.dumps(
                 {"registration_key": key, "merge_evidence": evidence_by_key[key]},
                 ensure_ascii=False,
@@ -191,10 +262,13 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
                 insert into bridge_facility_license
                     (facility_id, source_id, source_record_id, evidence_json)
                 values (?, ?, ?, ?)
+                on conflict (facility_id, source_id, source_record_id) do update set
+                    evidence_json = excluded.evidence_json
                 """,
-                [facility_id, record["source_id"], record["source_record_id"], evidence],
+                [facility_id, source_id, source_record_id, evidence],
             )
             for building_id in record["building_ids"]:
+                desired_building_links.add((facility_id, building_id))
                 db.connection.execute(
                     """
                     insert into bridge_facility_building (facility_id, building_id)
@@ -204,7 +278,31 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
                     [facility_id, building_id],
                 )
 
-    for review_id, left_id, right_id, evidence in review_rows:
+    for facility_id, source_id, source_record_id in db.query(
+        "select facility_id, source_id, source_record_id from bridge_facility_license"
+    ):
+        if (facility_id, str(source_id), str(source_record_id)) not in desired_license_links:
+            db.connection.execute(
+                """
+                delete from bridge_facility_license
+                where facility_id = ? and source_id = ? and source_record_id = ?
+                """,
+                [facility_id, source_id, source_record_id],
+            )
+    for facility_id, building_id in db.query(
+        "select facility_id, building_id from bridge_facility_building"
+    ):
+        if (facility_id, building_id) not in desired_building_links:
+            db.connection.execute(
+                "delete from bridge_facility_building where facility_id = ? and building_id = ?",
+                [facility_id, building_id],
+            )
+    for (facility_id,) in db.query("select facility_id from dim_facility"):
+        if facility_id not in desired_facilities:
+            db.connection.execute("delete from dim_facility where facility_id = ?", [facility_id])
+
+    db.connection.execute("delete from duplicate_review where review_status = 'pending'")
+    for review_id, (left_id, right_id, evidence) in review_rows.items():
         db.connection.execute(
             """
             insert into duplicate_review
@@ -220,11 +318,11 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
 
     return FacilityBuildResult(
         facility_count=len({tuple(keys) for keys in components.values()}),
-        license_links=len(records),
+        license_links=len(components),
         review_pairs=len(review_rows),
-        designation_links=sum(
-            decision.label == "designation_link" for _, _, decision in decisions
-        ),
+        designation_links=sum(_is_tourist_pension(record) for record in records)
+        - len(unmatched_designations),
+        unmatched_designations=len(unmatched_designations),
     )
 
 
@@ -297,6 +395,106 @@ def _building_ids(db: Database) -> dict[str, set[UUID]]:
     ):
         result[f"{source_id}:{source_record_id}"].add(building_id)
     return result
+
+
+def _safe_physical_merge_edges(
+    records: list[dict[str, object]],
+    decisions: list[tuple[dict[str, object], dict[str, object], MatchDecision]],
+) -> tuple[
+    list[tuple[str, str]],
+    list[tuple[dict[str, object], dict[str, object], list[dict[str, object]]]],
+]:
+    """Accept only automatic edges that do not cross contradictory components."""
+    parent = {_registration_key(record): _registration_key(record) for record in records}
+
+    def find(key: str) -> str:
+        while parent[key] != key:
+            parent[key] = parent[parent[key]]
+            key = parent[key]
+        return key
+
+    automatic = sorted(
+        (
+            (left, right)
+            for left, right, decision in decisions
+            if decision.label == "auto_merge"
+        ),
+        key=lambda pair: tuple(sorted((_registration_key(pair[0]), _registration_key(pair[1])))),
+    )
+    accepted: list[tuple[str, str]] = []
+    blocked: list[tuple[dict[str, object], dict[str, object], list[dict[str, object]]]] = []
+    for left, right in automatic:
+        left_root = find(_registration_key(left))
+        right_root = find(_registration_key(right))
+        if left_root == right_root:
+            continue
+        witnesses: list[dict[str, object]] = []
+        for witness_left, witness_right, witness_decision in decisions:
+            witness_left_root = find(_registration_key(witness_left))
+            witness_right_root = find(_registration_key(witness_right))
+            spans_components = {
+                witness_left_root,
+                witness_right_root,
+            } == {left_root, right_root}
+            if spans_components and (
+                witness_decision.label in {"review", "separate"}
+                or witness_decision.features.phones_conflict
+            ):
+                witnesses.append(
+                    {
+                        "left_registration_key": _registration_key(witness_left),
+                        "right_registration_key": _registration_key(witness_right),
+                        "decision": witness_decision.label,
+                        "features": asdict(witness_decision.features),
+                    }
+                )
+        if witnesses:
+            blocked.append((left, right, witnesses))
+            continue
+        parent[max(left_root, right_root)] = min(left_root, right_root)
+        accepted.append((_registration_key(left), _registration_key(right)))
+    return accepted, blocked
+
+
+def _attach_designations(
+    records: list[dict[str, object]],
+    decisions: list[tuple[dict[str, object], dict[str, object], MatchDecision]],
+    physical_components: dict[str, tuple[str, ...]],
+) -> tuple[dict[str, tuple[str, ...]], dict[str, str]]:
+    """Attach only unambiguous tourist-pension overlays to physical components."""
+    designation_keys = {
+        _registration_key(record) for record in records if _is_tourist_pension(record)
+    }
+    targets: dict[str, set[str]] = defaultdict(set)
+    for left, right, decision in decisions:
+        if decision.label != "designation_link":
+            continue
+        left_key = _registration_key(left)
+        right_key = _registration_key(right)
+        if left_key in designation_keys and right_key in physical_components:
+            targets[left_key].add(right_key)
+        if right_key in designation_keys and left_key in physical_components:
+            targets[right_key].add(left_key)
+
+    additions: dict[tuple[str, ...], set[str]] = defaultdict(set)
+    unmatched: dict[str, str] = {}
+    for designation_key in designation_keys:
+        target_components = {
+            physical_components[target_key] for target_key in targets[designation_key]
+        }
+        if len(target_components) == 1:
+            additions[next(iter(target_components))].add(designation_key)
+        elif not target_components:
+            unmatched[designation_key] = "no_confident_physical_facility_match"
+        else:
+            unmatched[designation_key] = "ambiguous_physical_facility_match"
+
+    components: dict[str, tuple[str, ...]] = {}
+    for physical_component in set(physical_components.values()):
+        component = tuple(sorted((*physical_component, *additions[physical_component])))
+        for key in component:
+            components[key] = component
+    return components, unmatched
 
 
 def _components(

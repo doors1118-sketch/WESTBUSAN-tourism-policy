@@ -10,22 +10,24 @@ lodgings,L08,사상스테이,0512000007,부산광역시 사상구 광장로 8,B0
 lodgings,L09,기장바다펜션,0512000008,부산광역시 기장군 해맞이로 9,B09,tourist_accommodations,T09,기장 바다 펜션,,부산광역시 기장군 해맞이로 9,,auto_merge
 lodgings,L10,영도뷰호텔,,부산광역시 영도구 절영로 10,,tourist_accommodations,T10,영도 뷰 호텔,0512000009,부산광역시 영도구 절영로 10,,auto_merge
 lodgings,L11,남포스테이,0512000010,부산광역시 중구 광복로 11,,tourist_accommodations,T11,남포 스테이,,부산광역시 중구 광복로 11,,auto_merge
-lodgings,L12,동래호텔,,부산광역시 동래구 온천장로 12,,tourist_accommodations,T12,동래 호텔,,부산광역시 동래구 온천장로 12,,auto_merge
+lodgings,L12,동래호텔,,부산광역시 동래구 온천장로 12,,tourist_accommodations,T12,동래 호텔,,부산광역시 동래구 온천장로 12,,review
 lodgings,L13,서면레지던스,0512000012,부산광역시 부산진구 중앙대로 13,,tourist_accommodations,T13,서면 레지던스,0512000012,부산광역시 부산진구 중앙대로 13,,auto_merge
 lodgings,L14,태종대하우스,0512000013,부산광역시 영도구 태종로 14,,tourist_accommodations,T14,태종대 하우스,,부산광역시 영도구 태종로 14,,auto_merge
 lodgings,L15,북구모텔,0512000014,부산광역시 북구 금곡대로 15,,tourist_accommodations,T15,북구 모텔,0512000014,부산광역시 북구 금곡대로 15,,auto_merge
 lodgings,L16,부산바다호텔,0511111111,부산광역시 중구 중앙대로 16,,lodgings,X16,부산바다호텔,0512222222,부산광역시 중구 중앙대로 16,,review
 lodgings,L17,중앙게스트하우스,0511111112,부산광역시 중구 중앙대로 17,,lodgings,X17,중앙호텔,0512222223,부산광역시 중구 중앙대로 17,,separate
 lodgings,L18,해운대레지던스,,부산광역시 해운대구 해운대로 18,,lodgings,X18,해운대하우스,,부산광역시 해운대구 해운대로 18,,review
-lodgings,L19,사하모텔,0511111113,부산광역시 사하구 낙동대로 19,,lodgings,X19,사상모텔,0512222224,부산광역시 사하구 낙동대로 19,,separate
+lodgings,L19,사하모텔,0511111113,부산광역시 사하구 낙동대로 19,,lodgings,X19,사상모텔,0512222224,부산광역시 사하구 낙동대로 19,,review
 lodgings,L20,다대포하우스,0511111114,부산광역시 사하구 다대로 20,,lodgings,X20,다대포카페,0512222225,부산광역시 사하구 다대로 20,,separate
 lodgings,L21,광안리호텔,0511111115,부산광역시 수영구 광안로 21,,lodgings,X21,광안리식당,0512222226,부산광역시 수영구 광안로 21,,separate
 lodgings,L22,기장펜션,0511111116,부산광역시 기장군 기장로 22,,lodgings,X22,기장펜션별관,0512222227,부산광역시 기장군 기장로 22,,review
 lodgings,L23,명지스테이,,부산광역시 강서구 명지로 23,,lodgings,X23,명지스테이2,,부산광역시 강서구 명지로 23,,review
-lodgings,L24,송도호텔,0511111117,부산광역시 서구 송도로 24,,lodgings,X24,송도모텔,0512222228,부산광역시 서구 송도로 24,,separate
+lodgings,L24,송도호텔,0511111117,부산광역시 서구 송도로 24,,lodgings,X24,송도모텔,0512222228,부산광역시 서구 송도로 24,,review
 lodgings,L25,영도하우스,0511111118,부산광역시 영도구 영선로 25,,lodgings,X25,영도하우스카페,0512222229,부산광역시 영도구 영선로 25,,review
 rural_homestays,R26,농가민박,0511111120,부산광역시 기장군 농가로 26,B26,tourist_pensions,R26,농가민박,,,B26,designation_link
 lodgings,L27,바다펜션,0511111121,부산광역시 기장군 바다로 27,B27,tourist_pensions,P27,바다 펜션,,,B27,designation_link
 lodgings,L28,산들펜션,0511111122,부산광역시 기장군 산들로 28,B28,tourist_pensions,P28,산들 펜션,,,B28,designation_link
-lodgings,L29,같은주소A,0511111123,부산광역시 북구 금곡로 29,,lodgings,X29,같은주소B,0512222230,부산광역시 북구 금곡로 29,,separate
-lodgings,L30,부산모텔,0511111124,부산광역시 사상구 사상로 30,,lodgings,X30,부산호텔,0512222231,부산광역시 사상구 사상로 30,,separate
+lodgings,L29,같은주소A,0511111123,부산광역시 북구 금곡로 29,,lodgings,X29,같은주소B,0512222230,부산광역시 북구 금곡로 29,,review
+lodgings,L30,부산모텔,0511111124,부산광역시 사상구 사상로 30,,lodgings,X30,부산호텔,0512222231,부산광역시 사상구 사상로 30,,review
+lodgings,L31,오션호텔,0511111125,부산광역시 해운대구 해운대로 31,B31,tourist_accommodations,T31,루프탑카페,0512222232,부산광역시 해운대구 해운대로 31,B31,separate
+lodgings,L32,해운대스테이,0511111126,부산광역시 해운대구 해운대로 32,B32,tourist_accommodations,T32,해운대 스테이,0512222233,부산광역시 해운대구 해운대로 32,B32,review
