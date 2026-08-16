@@ -166,13 +166,15 @@ def test_collector_fails_closed_on_mixed_national_rows(
 
     with pytest.raises(SchemaError, match="jurisdiction filter"):
         pipeline._collect_accommodation(run, "lodgings", date(2026, 8, 16), logger)
+    with pytest.raises(SchemaError, match="jurisdiction filter"):
+        pipeline._collect_accommodation(run, "lodgings", date(2026, 8, 16), logger)
 
-    assert pipeline.db.scalar("select count(*) from raw_artifact") == 1
+    assert pipeline.db.scalar("select count(*) from raw_artifact") == 2
     assert pipeline.db.scalar("select count(*) from staging_license_snapshot") == 0
     assert pipeline.db.query(
         """select accepted_count, out_of_scope_count, rejected_count
            from accommodation_collection_audit"""
-    ) == [(1, 1, 0)]
+    ) == [(1, 1, 0), (1, 1, 0)]
 
 
 def test_collector_rejects_nonempty_rows_without_jurisdiction_evidence(
