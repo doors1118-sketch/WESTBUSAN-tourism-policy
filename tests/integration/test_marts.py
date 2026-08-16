@@ -837,6 +837,48 @@ def test_incomplete_mart_retry_purges_partial_outputs_and_writes_manifest_last(
     ) == [(1,)]
 
 
+def test_group_month_tamper_invalidates_manifest_and_forces_rebuild(
+    tmp_path: Path,
+) -> None:
+    """The group-month output is a first-class mart, not an untracked side table."""
+    db, run_id = _built_db(
+        tmp_path,
+        [_license("lodgings", "L1", "호텔", "부산광역시 사하구 하단동 1", 10)],
+    )
+    policy = PolicyConfig(small_room_threshold=20, old_building_years=[20, 30])
+    build_marts(db, run_id, policy)
+    original_count = int(
+        db.scalar(
+            "select count(*) from mart_region_group_month where run_id = ?",
+            [run_id],
+        )
+    )
+    counts = json.loads(
+        db.scalar(
+            "select table_counts_json from mart_build_manifest where run_id = ?",
+            [run_id],
+        )
+    )
+
+    assert original_count > 0
+    assert counts["mart_region_group_month"] == original_count
+    db.connection.execute(
+        """delete from mart_region_group_month where run_id = ?
+           and rowid = (
+             select min(rowid) from mart_region_group_month where run_id = ?
+           )""",
+        [run_id, run_id],
+    )
+    assert mart_manifest_is_valid(db, run_id) is False
+
+    build_marts(db, run_id, policy)
+
+    assert db.scalar(
+        "select count(*) from mart_region_group_month where run_id = ?", [run_id]
+    ) == original_count
+    assert mart_manifest_is_valid(db, run_id) is True
+
+
 def test_mart_stage_write_rolls_back_when_fence_is_lost_before_commit(
     tmp_path: Path,
 ) -> None:

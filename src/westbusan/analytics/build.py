@@ -32,6 +32,7 @@ QualityBand = Literal["good", "warning", "insufficient", "incompatible"]
 _MART_TABLES = (
     "mart_facility_current",
     "mart_region_month",
+    "mart_region_group_month",
     "mart_metric_evidence",
     "mart_region_comparison",
     "mart_policy_signal",
