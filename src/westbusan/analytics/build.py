@@ -366,7 +366,7 @@ def _region_rows(
             consumption = _monthly_native_sum(db, run_id, "fact_tourism_demand", district, period, "area_tourism_consumption", "area_tar_svc_dem_list.1107", "KRW")
             transport = _monthly_native_sum(db, run_id, "fact_transport_flow", district, period, "public_transport_od_usage", "public_transport_od_volume", "passengers")
             period_values = values if period == "current" else _same_period_inventory(
-                db, run_id, as_of, district, period, values
+                db, run_id, as_of, district, period, values, policy
             )
             denom = period_values["room_sum"]
             ratios = {
@@ -455,7 +455,7 @@ def _same_period_supply(
 
 def _same_period_inventory(
     db: Database, run_id: UUID, as_of: date | None, district: str, period: str,
-    fallback: dict[str, object],
+    fallback: dict[str, object], policy: PolicyConfig,
 ) -> dict[str, object]:
     """Build the room distribution from this period's snapshot, never today’s one."""
     visible_runs = _visible_run_ids(db, run_id)
@@ -479,15 +479,13 @@ def _same_period_inventory(
             facility_rooms[facility_id].add(float(rooms))
     known = [next(iter(values)) for values in facility_rooms.values() if len(values) == 1]
     total = len(facilities)
+    metrics = _period_metric_set(
+        known + [None] * (total - len(known)),
+        small_room_threshold=policy.small_room_threshold,
+    )
     if not total:
-        return {**fallback, "facilities": 0, "known": 0, "room_sum": None, "room_mean": None,
-                "room_median": None, "q1": None, "q3": None, "coverage": None,
-                "small": None, "small_share": None}
-    return {**fallback, "facilities": total, "known": len(known), "room_sum": sum(known) if known else None,
-            "room_mean": mean(known) if known else None, "room_median": median(known) if known else None,
-            "q1": _quantile(known, .25), "q3": _quantile(known, .75),
-            "coverage": len(known) / total, "small": sum(room <= 20 for room in known) if known else None,
-            "small_share": sum(room <= 20 for room in known) / len(known) if known else None}
+        return {**fallback, **metrics}
+    return {**fallback, **metrics}
 
 
 def _month(period: str) -> str:
@@ -639,8 +637,13 @@ def _replace_signals(
         group_facilities = [item for item in facilities if item["region_group"] == group]
         rooms = [float(item["room_count"]) for item in group_facilities if item["room_count"] is not None] if period == "current" else [float(row["values"]["room_median"]) for row in group_rows if row["values"]["room_median"] is not None]
         ages = [float(item["building_age"]) for item in group_facilities if item["building_age"] is not None] if period == "current" else [float(row["values"]["age_median"]) for row in group_rows if row["values"]["age_median"] is not None]
-        visitor_values = [item["evidence"]["visitors_per_100_rooms"]["value"] for item in group_rows]
-        metrics = RegionMetrics(group, median(rooms) if rooms else None, sum(room <= policy.small_room_threshold for room in rooms) / len(rooms) if rooms else None, sum(age >= 30 for age in ages) / len(ages) if ages else None, _aggregate(visitor_values), _group_band(group_rows, "pressure"), _group_band(group_rows, "supply"))
+        visitor_pairs = [
+            (float(item["evidence"]["visitors_per_100_rooms"]["numerator"]), float(item["evidence"]["visitors_per_100_rooms"]["denominator"]))
+            for item in group_rows
+            if item["evidence"]["visitors_per_100_rooms"]["numerator"] is not None
+            and item["evidence"]["visitors_per_100_rooms"]["denominator"] is not None
+        ]
+        metrics = RegionMetrics(group, median(rooms) if rooms else None, sum(room <= policy.small_room_threshold for room in rooms) / len(rooms) if rooms else None, sum(age >= 30 for age in ages) / len(ages) if ages else None, _group_pressure(visitor_pairs), _group_band(group_rows, "pressure"), _group_band(group_rows, "supply"))
         for signal in policy_signals(metrics, small_room_threshold=policy.small_room_threshold):
             db.connection.execute("insert into mart_policy_signal values (?, ?, ?, ?, ?)", [run_id, group, period, signal.code, signal.evidence_json]); count += 1
     return count

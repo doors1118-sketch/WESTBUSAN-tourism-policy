@@ -46,6 +46,39 @@ def test_marts_deduplicate_physical_facilities_but_preserve_registrations(
     ) == [(1.0, 2.0, 0.5, "warning")]
 
 
+def test_build_marts_end_to_end_handles_empty_evidence(tmp_path: Path) -> None:
+    """Regression: an empty run must build no fabricated metrics."""
+    db = Database(tmp_path / "empty.duckdb", Path("sql")); db.migrate()
+    assert build_marts(db, uuid4(), PolicyConfig(small_room_threshold=20, old_building_years=[20, 30])).region_rows == 0
+
+
+def test_build_marts_end_to_end_keeps_tourist_pension_out_of_supply(tmp_path: Path) -> None:
+    """Regression: a linked designation remains non-additive in legal supply."""
+    db, run = _built_db(tmp_path, [_license("lodgings", "L", "호텔", "부산광역시 사하구 길 1", 10), _license("tourist_pensions", "L", "호텔", "부산광역시 사하구 길 1", 10)])
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+    assert db.query("select legal_registration_count from mart_region_month where district = '사하구' and period = 'current'") == [(1,)]
+
+
+def test_build_marts_end_to_end_preserves_unknown_room_coverage(tmp_path: Path) -> None:
+    """Regression: unknown rooms lower coverage instead of becoming zero rooms."""
+    db, run = _built_db(tmp_path, [_license("lodgings", "L1", "호텔1", "부산광역시 사하구 길 1", 10), _license("lodgings", "L2", "호텔2", "부산광역시 사하구 길 2", None)])
+    build_marts(db, run, PolicyConfig(small_room_threshold=5, old_building_years=[20, 30]))
+    assert db.query("select room_sum, room_coverage, small_facility_share from mart_region_month where district = '사하구' and period = 'current'") == [(10.0, 0.5, 0.0)]
+
+
+def test_build_marts_end_to_end_marks_partial_division_coverage_as_warning(tmp_path: Path) -> None:
+    """Regression: a West/East comparison cannot be good with incomplete rooms."""
+    db, run = _built_db(tmp_path, [_license("lodgings", "W", "서부", "부산광역시 사하구 길 1", None), _license("lodgings", "E", "동부", "부산광역시 해운대구 길 1", 10)])
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+    assert db.query("select quality_band from mart_region_comparison where comparison_type = 'west_divided_by_east' limit 1") == [("insufficient",)]
+
+
+def _built_db(tmp_path: Path, records: list[object]) -> tuple[Database, object]:
+    db = Database(tmp_path / "case.duckdb", Path("sql")); db.migrate(); run = uuid4()
+    load_license_snapshot(db, records, run); build_facilities(db, run)
+    return db, run
+
+
 def _license(source_id: str, record_id: str, name: str, address: str, rooms: int | None):
     row: dict[str, object] = {
         "MNG_NO": record_id,
