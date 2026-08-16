@@ -331,6 +331,23 @@ def _legacy_evidence_counts(db: Database, run_id: UUID) -> dict[str, int]:
                 [run_id, run_id],
             )
         ),
+        "missing_license_base_revisions": int(
+            db.scalar(
+                """select count(*) from staging_license_snapshot as legacy
+                   where (
+                       legacy.first_loaded_run_id = ?
+                       or legacy.last_loaded_run_id = ?
+                   ) and not exists (
+                       select 1 from staging_license_revision as revision
+                       where revision.version_run_id = ?
+                         and revision.source_id = legacy.source_id
+                         and revision.source_record_id = legacy.source_record_id
+                         and revision.observed_on = legacy.observed_on
+                         and revision.record_hash = legacy.record_hash
+                   )""",
+                [run_id, run_id, run_id],
+            )
+        ),
         "building_revisions": int(
             db.scalar(
                 "select count(*) from staging_building_revision where version_run_id = ?",
@@ -348,6 +365,19 @@ def _legacy_evidence_counts(db: Database, run_id: UUID) -> dict[str, int]:
                          and revision.building_id = legacy.building_id
                          and revision.observed_on = legacy.observed_on
                      )""",
+                [run_id, run_id],
+            )
+        ),
+        "missing_building_base_revisions": int(
+            db.scalar(
+                """select count(*) from staging_building_snapshot as legacy
+                   where legacy.first_loaded_run_id = ? and not exists (
+                       select 1 from staging_building_revision as revision
+                       where revision.version_run_id = ?
+                         and revision.building_id = legacy.building_id
+                         and revision.observed_on = legacy.observed_on
+                         and revision.source_payload_json = legacy.source_payload_json
+                   )""",
                 [run_id, run_id],
             )
         ),

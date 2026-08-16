@@ -436,6 +436,70 @@ def test_migrate_legacy_rejects_null_tourism_key_without_membership(
     ) == [("tester", "legacy audit", "rejected")]
 
 
+def test_migrate_legacy_rejects_unrecoverable_base_only_license_history(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A mutable base row cannot stand in for a missing immutable run revision."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    run_id = uuid4()
+    pipeline.db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'legacy', now(), 'BLOCKED', '2026-08-16', false)""",
+        [run_id],
+    )
+    load_license_snapshot(
+        pipeline.db,
+        [
+            normalize_license(
+                "lodgings",
+                {
+                    "MNG_NO": "lost-history",
+                    "BPLC_NM": "이력유실호텔",
+                    "ROAD_NM_ADDR": "부산광역시 사하구 길 2",
+                },
+                date(2026, 8, 16),
+            )
+        ],
+        run_id,
+    )
+    pipeline.db.connection.execute(
+        "delete from staging_license_snapshot_version where version_run_id = ?",
+        [run_id],
+    )
+    pipeline.db.connection.execute(
+        "delete from staging_license_revision where version_run_id = ?", [run_id]
+    )
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "migrate-legacy",
+            "--run-id",
+            str(run_id),
+            "--operator",
+            "tester",
+            "--reason",
+            "base history audit",
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+
+    assert result.exit_code == 1
+    evidence = json.loads(
+        pipeline.db.scalar(
+            "select evidence_json from legacy_migration_audit where run_id = ?",
+            [run_id],
+        )
+    )
+    assert evidence["missing_license_base_revisions"] == 1
+
+
 def test_export_requires_explicit_rebuild_for_mismatched_same_date_bundle(
     tmp_path: Path, monkeypatch
 ) -> None:
