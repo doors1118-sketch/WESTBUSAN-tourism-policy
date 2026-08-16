@@ -174,6 +174,44 @@ def test_missing_required_raw_contract_evidence_fails_closed(tmp_path: Path) -> 
     assert _check(report, "raw_total_matches_staging").status == "failed"
 
 
+@pytest.mark.parametrize("missing_field", ["totalCount", "pageNo", "numOfRows"])
+def test_accommodation_quality_reparse_requires_actual_paging_metadata(
+    tmp_path: Path,
+    missing_field: str,
+) -> None:
+    """Catches legacy or tampered raw bypassing the official paging contract."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    payload = {
+        "data": [{"MNG_NO": "L1"}],
+        "totalCount": 1,
+        "pageNo": 1,
+        "numOfRows": 1,
+    }
+    del payload[missing_field]
+    body = json.dumps(payload).encode()
+    page = parse_data_page(body, "application/json")
+    path = tmp_path / f"missing-{missing_field}.json"
+    path.write_bytes(body)
+    _record_raw_page(db, run_id, "lodgings", path, body, "info", date(2026, 8, 16))
+    approve_schema_baseline(db, "lodgings", "info", page.schema_fingerprint)
+    db.record_source_status(
+        SourceStatus(
+            "lodgings",
+            datetime(2026, 8, 16, tzinfo=UTC),
+            "READY",
+            {"required": True},
+            run_id,
+        )
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    assert _check(report, "required_record_structure", "lodgings").status == "failed"
+    assert _check(report, "schema_fingerprint_approved", "lodgings").status == "failed"
+    assert _check(report, "raw_total_matches_staging", "lodgings").status == "failed"
+
+
 def test_schema_changed_then_ready_cannot_be_approved_by_its_later_status(
     tmp_path: Path,
 ) -> None:

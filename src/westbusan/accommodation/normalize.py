@@ -137,7 +137,7 @@ def _parse_date_with_quality(value: object | None) -> tuple[date | None, str]:
     text = _as_text(value)
     if text is None:
         return None, "missing"
-    match = re.fullmatch(r"(\d{4})[-/.]?(\d{2})[-/.]?(\d{2})", text[:10])
+    match = re.fullmatch(r"(\d{4})[-/.]?(\d{2})[-/.]?(\d{2})", text)
     if match is None:
         return None, "invalid"
     try:

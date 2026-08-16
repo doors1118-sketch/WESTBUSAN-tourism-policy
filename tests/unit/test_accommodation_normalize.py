@@ -193,3 +193,29 @@ def test_invalid_official_dates_are_explicitly_classified_not_silently_preserved
     assert record.source_modified_date_quality == "invalid"
     assert record.data_updated_on is None
     assert record.data_updated_date_quality == "invalid"
+
+
+def test_official_dates_reject_trailing_garbage_in_the_entire_value() -> None:
+    """Catches a valid date prefix certifying a malformed official field."""
+    record = normalize_license(
+        "lodgings",
+        {
+            "MNG_NO": "TRAILING-GARBAGE",
+            "LCPMT_YMD": "2020-01-02garbage",
+            "CLSBIZ_YMD": "2025-08-31 trailing",
+            "LAST_MDFCN_YMD": "20250831T120000",
+            "DATA_UPDT_YMD": "2025/09/01Z",
+        },
+        date(2026, 8, 16),
+    )
+
+    assert (record.license_date, record.license_date_quality) == (None, "invalid")
+    assert (record.closure_date, record.closure_date_quality) == (None, "invalid")
+    assert (record.source_modified_on, record.source_modified_date_quality) == (
+        None,
+        "invalid",
+    )
+    assert (record.data_updated_on, record.data_updated_date_quality) == (
+        None,
+        "invalid",
+    )

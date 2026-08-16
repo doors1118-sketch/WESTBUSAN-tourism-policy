@@ -18,6 +18,7 @@ from westbusan.entity_resolution.match import (
     classify_pair,
     evaluate_auto_merge_precision,
 )
+from westbusan.http import SchemaError
 from westbusan.sources.datagokr import parse_data_page
 
 CheckStatus = Literal["passed", "failed", "warning", "skipped"]
@@ -310,8 +311,12 @@ def _parse_artifacts(
             else _partition(source_date) or _metadata_partition(metadata)
         )
         try:
-            page = parse_data_page(Path(path_text).read_bytes(), "application/json")
-        except (OSError, ValueError, TypeError) as error:
+            page = parse_data_page(
+                Path(path_text).read_bytes(),
+                "application/json",
+                require_paging_metadata=source_id in _ACCOMMODATION_SOURCES,
+            )
+        except (OSError, SchemaError, TypeError, ValueError) as error:
             pages.append(_ArtifactPage(artifact_id, source_id, operation, partition, source_date, None, None, None, None, None, str(error)))
         else:
             pages.append(_ArtifactPage(artifact_id, source_id, operation, partition, source_date, page.page_no, page.page_size, page.total_count, page.schema_fingerprint, page.rows, None))
