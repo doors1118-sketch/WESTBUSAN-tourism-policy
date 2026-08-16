@@ -18,7 +18,7 @@ from tests.integrity_fixtures import (
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.db import Database
 from westbusan.entity_resolution.match import build_facilities
-from westbusan.models import SourceStatus
+from westbusan.models import RunContext, SourceStatus
 from westbusan.quality import publish as publish_module
 from westbusan.quality.checks import (
     QualityReport,
@@ -28,6 +28,8 @@ from westbusan.quality.checks import (
 from westbusan.quality.checks import run_quality_suite as _run_quality_suite
 from westbusan.quality.publish import current_published_run, publish_if_valid
 from westbusan.sources.datagokr import parse_data_page
+from westbusan.sources.registry import SourceRegistry
+from westbusan.transport.load import load_transport
 
 
 def run_quality_suite(db: Database, run_id) -> QualityReport:
@@ -209,6 +211,47 @@ def test_present_optional_source_failure_blocks_publication(
     assert _check(report, "raw_content_hash", source_id).severity == "required"
     assert report.has_failed_required_check is True
     assert publish_if_valid(db, run_id, report).published is False
+
+
+def test_valid_transport_csv_uses_file_native_quality_contract(tmp_path: Path) -> None:
+    """A valid manual CSV must not be rejected by the JSON page parser."""
+    db = _db(tmp_path)
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 16, tzinfo=UTC),
+        business_date=date(2022, 6, 30),
+    )
+    ensure_integrity_run(db, run.run_id, business_date=run.cutoff_date)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "KORAIL_근무지_2022.csv").write_bytes(
+        Path("tests/fixtures/transport/railway.csv").read_bytes()
+    )
+    registry = SourceRegistry.load(Path("config/sources.yaml"))
+    selected = SourceRegistry((registry.get("korail_workplace_ticketing_file"),))
+    result = load_transport(
+        db,
+        selected,
+        date(2022, 4, 1),
+        date(2022, 6, 30),
+        run,
+        inbox_dir=inbox,
+    )
+
+    report = _run_quality_suite(db, run.run_id)
+    checks = {
+        check.name: check
+        for check in report.checks
+        if check.source_id == "korail_workplace_ticketing_file"
+    }
+
+    assert result.records_loaded == 1
+    assert checks["raw_content_hash"].status == "passed"
+    assert checks["required_record_structure"].status == "passed"
+    assert checks["schema_fingerprint_approved"].status == "passed"
+    assert checks["raw_total_matches_staging"].status == "passed"
+    assert all(check.severity == "required" for check in checks.values())
 
 
 def test_monthly_freshness_uses_run_business_cutoff_not_wall_clock(

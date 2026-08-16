@@ -27,6 +27,8 @@ from westbusan.revisions import (
     target_facility_license_links,
 )
 from westbusan.sources.datagokr import parse_data_page
+from westbusan.sources.files import read_tabular_rows
+from westbusan.transport.load import normalize_transport_rows
 
 CheckStatus = Literal["passed", "failed", "warning", "skipped"]
 Severity = Literal["required", "warning", "informational"]
@@ -35,6 +37,13 @@ _ACCOMMODATION_SOURCES = frozenset({"lodgings", "tourist_accommodations", "forei
 _MONTHLY_SOURCES = frozenset({"building_register_title", "building_register_basis_outline", "building_permit_basis_outline", "building_permit_site", "closed_register_basis_outline", "tourism_data_lab", "area_tourism_demand", "area_tourism_consumption", "tourism_concentration_rate", "area_tourism_destination_division", "related_tourism_destinations"})
 _TOURISM_SOURCES = frozenset({"tourism_data_lab", "area_tourism_demand", "area_tourism_consumption", "tourism_concentration_rate", "area_tourism_destination_division", "related_tourism_destinations"})
 _BUILDING_SOURCES = frozenset({"building_register_title", "building_register_basis_outline", "building_permit_basis_outline", "building_permit_site", "closed_register_basis_outline"})
+_FILE_TRANSPORT_SOURCES = frozenset(
+    {
+        "korail_workplace_ticketing_file",
+        "korail_residence_ticketing_file",
+        "srt_station_boarding_file",
+    }
+)
 _UNAVAILABLE = frozenset({"AUTH_FAILED", "QUOTA_EXCEEDED", "SPEC_UNRESOLVED", "HTTP_FAILED", "SCHEMA_CHANGED"})
 _BUSAN_AUTHORITY_CODE = "6260000"
 _OFFICIAL_OVERALL_STATUS_CODES = frozenset({"01", "02", "03", "04"})
@@ -352,6 +361,7 @@ def _parse_artifacts(
     pages: list[_ArtifactPage] = []
     for artifact_id, path_text, expected_hash, source_date, metadata in artifacts:
         operation = str(metadata.get("operation") or "unknown")
+        content_hash_ok = False
         partition = (
             _metadata_partition(metadata) or _partition(source_date)
             if source_id in _BUILDING_SOURCES
@@ -360,12 +370,26 @@ def _parse_artifacts(
         try:
             body = Path(path_text).read_bytes()
             content_hash_ok = hashlib.sha256(body).hexdigest() == expected_hash
-            page = parse_data_page(
-                body,
-                "application/json",
-                require_paging_metadata=source_id in _ACCOMMODATION_SOURCES,
-            )
-        except (OSError, SchemaError, TypeError, ValueError) as error:
+            if source_id in _FILE_TRANSPORT_SOURCES:
+                rows = read_tabular_rows(Path(path_text))
+                for row in rows:
+                    normalize_transport_rows(source_id, row)
+                page_no = 1
+                page_size = len(rows)
+                total_count = len(rows)
+                schema_fingerprint = _row_schema_fingerprint(rows)
+            else:
+                page = parse_data_page(
+                    body,
+                    "application/json",
+                    require_paging_metadata=source_id in _ACCOMMODATION_SOURCES,
+                )
+                rows = page.rows
+                page_no = page.page_no
+                page_size = page.page_size
+                total_count = page.total_count
+                schema_fingerprint = page.schema_fingerprint
+        except (KeyError, OSError, SchemaError, TypeError, ValueError) as error:
             pages.append(
                 _ArtifactPage(
                     artifact_id,
@@ -379,7 +403,7 @@ def _parse_artifacts(
                     None,
                     None,
                     str(error),
-                    False,
+                    content_hash_ok,
                 )
             )
         else:
@@ -390,11 +414,11 @@ def _parse_artifacts(
                     operation,
                     partition,
                     source_date,
-                    page.page_no,
-                    page.page_size,
-                    page.total_count,
-                    page.schema_fingerprint,
-                    page.rows,
+                    page_no,
+                    page_size,
+                    total_count,
+                    schema_fingerprint,
+                    rows,
                     None,
                     content_hash_ok,
                 )
@@ -425,10 +449,63 @@ def _raw_contract_checks(db: Database, run_id: UUID, source_id: str, pages: list
     malformed = [page for page in pages if page.error or page.rows is None]
     missing_ids = sum(1 for page in pages if page.rows is not None and source_id in _ACCOMMODATION_SOURCES for row in page.rows if not _has_identifier(row))
     structure = CheckResult("required_record_structure", "passed" if not malformed and not missing_ids else "failed", {"malformed_pages": len(malformed), "missing_identifier_rows": missing_ids}, {"malformed_pages": 0, "missing_identifier_rows": 0}, severity, source_id, "raw_artifact", {"malformed_page_errors": sorted(page.error for page in malformed if page.error)})
-    checks = [integrity, structure, _schema_check(db, source_id, pages, statuses, severity), _reconciliation_check(db, run_id, source_id, pages, severity)]
+    if source_id in _FILE_TRANSPORT_SOURCES:
+        checks = [
+            integrity,
+            structure,
+            _file_schema_check(source_id, pages, severity),
+            _file_reconciliation_check(db, run_id, source_id, pages, severity),
+        ]
+    else:
+        checks = [integrity, structure, _schema_check(db, source_id, pages, statuses, severity), _reconciliation_check(db, run_id, source_id, pages, severity)]
     if source_id in _TOURISM_SOURCES:
         checks.append(_date_parse_check(db, run_id, source_id, pages, severity))
     return checks
+
+
+def _file_schema_check(
+    source_id: str, pages: list[_ArtifactPage], severity: Severity
+) -> CheckResult:
+    fingerprints = sorted(
+        {page.schema_fingerprint for page in pages if page.schema_fingerprint}
+    )
+    passed = bool(fingerprints) and all(page.error is None for page in pages)
+    return CheckResult(
+        "schema_fingerprint_approved",
+        "passed" if passed else "failed",
+        fingerprints or "MISSING_FILE_SCHEMA_FINGERPRINT",
+        "file-native parser accepted a deterministic header schema",
+        severity,
+        source_id,
+        "raw_artifact",
+        {"artifact_type": "file", "schema_fingerprints": fingerprints},
+    )
+
+
+def _file_reconciliation_check(
+    db: Database,
+    run_id: UUID,
+    source_id: str,
+    pages: list[_ArtifactPage],
+    severity: Severity,
+) -> CheckResult:
+    expected = sum(
+        len(record.measures)
+        for page in pages
+        for row in page.rows or []
+        for record in normalize_transport_rows(source_id, row)
+    )
+    actual = _transport_observation_count(db, run_id, source_id)
+    return CheckResult(
+        "raw_total_matches_staging",
+        "passed" if expected == actual else "failed",
+        {"expected_facts": expected, "target_facts": actual},
+        "file-native normalized facts equal run-scoped transport observations",
+        severity,
+        source_id,
+        "fact_transport_flow",
+        {"artifact_type": "file"},
+    )
 
 
 def _schema_check(db: Database, source_id: str, pages: list[_ArtifactPage], statuses: list[tuple[str, dict[str, object]]], severity: Severity) -> CheckResult:
@@ -684,6 +761,21 @@ def _tourism_observation_count(
         )
         parameters.insert(0, run_id)
     return int(db.scalar(sql, parameters))
+
+
+def _transport_observation_count(
+    db: Database, run_id: UUID, source_id: str
+) -> int:
+    return int(
+        db.scalar(
+            """select count(*) from fact_transport_flow as fact
+               join run_fact_observation as membership
+                 on membership.family = 'transport'
+                and membership.observation_key = fact.observation_key
+               where membership.run_id = ? and fact.source_id = ?""",
+            [run_id, source_id],
+        )
+    )
 
 
 def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> list[CheckResult]:
@@ -1169,6 +1261,11 @@ def _canonical_json(value: object) -> str:
 def _has_identifier(row: dict[str, object]) -> bool:
     values = {str(key).casefold(): value for key, value in row.items()}
     return any(values.get(key.casefold()) not in (None, "") for key in _IDENTIFIER_FIELDS)
+
+
+def _row_schema_fingerprint(rows: list[dict[str, object]]) -> str:
+    fields = sorted({str(field) for row in rows for field in row})
+    return hashlib.sha256(_canonical_json(fields).encode("utf-8")).hexdigest()
 
 
 def _partition(source_date: date | None) -> str | None:
