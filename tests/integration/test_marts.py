@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +11,7 @@ from westbusan.analytics.build import build_marts, mart_manifest_is_valid
 from westbusan.config import PolicyConfig
 from westbusan.db import Database
 from westbusan.entity_resolution.match import build_facilities
+from westbusan.models import SourceStatus
 
 
 def test_marts_deduplicate_physical_facilities_but_preserve_registrations(
@@ -60,6 +61,130 @@ def test_build_marts_end_to_end_keeps_tourist_pension_out_of_supply(tmp_path: Pa
     db, run = _built_db(tmp_path, [_license("lodgings", "L", "호텔", "부산광역시 사하구 길 1", 10), _license("tourist_pensions", "L", "호텔", "부산광역시 사하구 길 1", 10)])
     build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
     assert db.query("select legal_registration_count from mart_region_month where district = '사하구' and period = 'current'") == [(1,)]
+    assert db.query(
+        "select has_tourist_pension_designation from mart_facility_current"
+    ) == [(True,)]
+
+
+def test_inactive_status_or_closed_status_name_never_enters_active_inventory(
+    tmp_path: Path,
+) -> None:
+    """Catches closure-code records with no closure date being counted as current supply."""
+    db = Database(tmp_path / "inactive.duckdb", Path("sql")); db.migrate(); run = uuid4()
+    inactive = replace(
+        _license("lodgings", "L1", "상태코드폐업", "부산광역시 사하구 길 1", 10),
+        status_code="02",
+        status_name="폐업",
+    )
+    load_license_snapshot(db, [inactive], run); build_facilities(db, run)
+
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+
+    assert db.query("select count(*) from mart_facility_current") == [(0,)]
+    assert db.query(
+        "select physical_facility_count from mart_region_month where district = '사하구' and period = 'current'"
+    ) == [(0,)]
+
+
+def test_record_absent_from_later_complete_snapshot_ceases_current_membership(
+    tmp_path: Path,
+) -> None:
+    """Catches carrying a disappeared registration forward from an older full snapshot."""
+    db = Database(tmp_path / "presence.duckdb", Path("sql")); db.migrate()
+    first, second = uuid4(), uuid4()
+    db.connection.execute(
+        "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', '2026-08-16', 'DONE')",
+        [first],
+    )
+    db.connection.execute(
+        "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', '2026-08-17', 'DONE')",
+        [second],
+    )
+    load_license_snapshot(
+        db, [_license("lodgings", "L1", "사라진호텔", "부산광역시 사하구 길 1", 10)], first
+    )
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, first)
+    )
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 17, tzinfo=UTC), "EMPTY", {}, second)
+    )
+
+    assert build_facilities(db, second).facility_count == 0
+    build_marts(db, second, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+    assert db.query("select count(*) from mart_facility_current") == [(0,)]
+
+
+def test_stock_before_first_observed_full_snapshot_is_null_not_zero(
+    tmp_path: Path,
+) -> None:
+    """Catches legal license dates being misrepresented as observed historical stock."""
+    db = Database(tmp_path / "history-null.duckdb", Path("sql")); db.migrate(); run = uuid4()
+    record = replace(
+        _license("lodgings", "L1", "호텔", "부산광역시 사하구 길 1", 10),
+        license_date=date(2020, 1, 1),
+    )
+    load_license_snapshot(db, [record], run); build_facilities(db, run)
+
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+
+    assert db.query(
+        "select physical_facility_count, room_sum from mart_region_month where district = '사하구' and period = '2020-01'"
+    ) == [(None, None)]
+    evidence = db.query(
+        "select quality_band, evidence_json from mart_metric_evidence where district = '사하구' and period = '2020-01' and metric_name = 'physical_facility_count'"
+    )[0]
+    assert evidence[0] == "insufficient"
+    assert '"stock_observed":false' in evidence[1]
+
+
+def test_historical_registrations_count_distinct_source_record_pairs(
+    tmp_path: Path,
+) -> None:
+    """Catches collapsing two same-source legal records into one source-name count."""
+    db = Database(tmp_path / "registration-pairs.duckdb", Path("sql")); db.migrate(); run = uuid4()
+    records = [
+        _license("lodgings", "L1", "공동운영호텔", "부산광역시 사하구 길 1", 10, date(2026, 1, 15)),
+        _license("lodgings", "L2", "공동운영호텔", "부산광역시 사하구 길 1", 10, date(2026, 1, 15)),
+    ]
+    load_license_snapshot(db, records, run); build_facilities(db, run)
+
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+
+    assert db.query(
+        "select physical_facility_count, legal_registration_count from mart_region_month where district = '사하구' and period = '2026-01'"
+    ) == [(1, 2)]
+
+
+def test_building_age_uses_only_use_approval_date(tmp_path: Path) -> None:
+    """Catches a generic approval/permit event being used as building age."""
+    db, run = _built_db(
+        tmp_path, [_license("lodgings", "L1", "호텔", "부산광역시 사하구 길 1", 10)]
+    )
+    facility_id = db.query("select facility_id from dim_facility")[0][0]
+    building_id = uuid4()
+    db.connection.execute(
+        "insert into dim_building (building_id, building_key) values (?, 'B1')", [building_id]
+    )
+    db.connection.execute(
+        "insert into bridge_facility_building (facility_id, building_id) values (?, ?)",
+        [facility_id, building_id],
+    )
+    db.connection.execute(
+        """
+        insert into staging_building_snapshot (
+            building_id, observed_on, first_loaded_run_id, parcel_hash, approval_date,
+            use_approval_date, permit_date, is_closed, source_payload_json
+        ) values ('B1', '2026-08-16', ?, 'parcel', '1980-01-01', null, '2025-01-01', false, '{}')
+        """,
+        [run],
+    )
+
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[10, 25]))
+
+    assert db.query(
+        "select building_age_years, building_age_quality, recent_permit_event from mart_facility_current"
+    ) == [(None, "missing_use_approval", True)]
 
 
 def test_build_marts_end_to_end_preserves_unknown_room_coverage(tmp_path: Path) -> None:
@@ -317,6 +442,8 @@ def _license(source_id: str, record_id: str, name: str, address: str, rooms: int
         "BPLC_NM": name,
         "ROAD_NM_ADDR": address,
         "SITETEL": "051-123-4567" if "별도" not in name else "051-999-9999",
+        "DTL_STATE_GBN": "01",
+        "DTL_STATE_NM": "영업/정상",
     }
     if rooms is not None:
         row["WSRM_CNT"] = rooms

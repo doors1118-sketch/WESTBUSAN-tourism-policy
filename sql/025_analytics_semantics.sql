@@ -31,3 +31,12 @@ create table if not exists building_link_review (
     evidence_json varchar not null,
     created_at timestamp with time zone not null default current_timestamp
 );
+
+alter table mart_facility_current
+    add column if not exists has_tourist_pension_designation boolean default false;
+
+alter table mart_region_month
+    alter column physical_facility_count drop not null;
+
+alter table mart_region_month
+    alter column legal_registration_count drop not null;

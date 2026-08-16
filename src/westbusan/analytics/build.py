@@ -14,6 +14,10 @@ from uuid import UUID
 
 from westbusan.config import PolicyConfig
 from westbusan.db import Database, ensure_run_rebuildable
+from westbusan.inventory import (
+    is_active_status,
+    latest_complete_snapshot_runs,
+)
 
 QualityBand = Literal["good", "warning", "insufficient", "incompatible"]
 
@@ -223,7 +227,8 @@ def _facility_rows(
     snapshots = db.query(
         """select link.facility_id, facility.district, facility.region_group,
                snap.source_id, snap.room_count, snap.license_date, snap.closure_date,
-               snap.observed_on
+               snap.observed_on, snap.status_code, snap.status_name,
+               snap.version_run_id, snap.source_record_id
         from run_facility_license as link
         join run_facility as facility
           on facility.run_id = link.run_id and facility.facility_id = link.facility_id
@@ -235,12 +240,17 @@ def _facility_rows(
          and snap.revision_sequence = link.selected_revision_sequence
         where link.run_id = ?
           and facility.district is not null and facility.region_group is not null
-          and (snap.closure_date is null or ? is null or snap.closure_date > ?)
         """,
-        [run_id, as_of, as_of],
+        [run_id],
     )
+    completed = latest_complete_snapshot_runs(db, run_id)
     by_facility: dict[object, list[tuple[object, ...]]] = defaultdict(list)
     for row in snapshots:
+        source_id = str(row[3])
+        if source_id in completed and row[10] != completed[source_id]:
+            continue
+        if not is_active_status(row[8], row[9], row[6], row[7]):
+            continue
         by_facility[row[0]].append(row)
     building_ages = _building_ages(db, by_facility, as_of, run_id)
     rows: list[dict[str, object]] = []
@@ -257,6 +267,12 @@ def _facility_rows(
         source_names = [str(item[3]) for item in items]
         sources = set(source_names)
         age, age_quality, recent_permit = building_ages.get(facility_id, (None, "missing", None))
+        has_designation = bool(
+            db.query(
+                "select 1 from bridge_facility_designation where facility_id = ? limit 1",
+                [facility_id],
+            )
+        )
         rows.append(
             {
                 "facility_id": facility_id,
@@ -273,6 +289,7 @@ def _facility_rows(
                 "building_age": age,
                 "building_quality": age_quality,
                 "recent_permit": recent_permit,
+                "has_tourist_pension_designation": has_designation,
                 "license_dates": [item[5] for item in items if item[5] is not None],
                 "closure_dates": [item[6] for item in items if item[6] is not None],
             }
@@ -297,7 +314,7 @@ def _building_ages(
             from staging_building_revision
             where version_run_id in ({placeholders}) and (? is null or observed_on <= ?)
         )
-        select link.facility_id, snap.approval_date, snap.permit_date, snap.observed_on
+        select link.facility_id, snap.use_approval_date, snap.permit_date, snap.observed_on
         from run_facility_building as link
         join dim_building as building on building.building_id = link.building_id
         join latest as snap on snap.building_id = building.building_key and snap.row_num = 1
@@ -314,7 +331,16 @@ def _building_ages(
         linked = grouped.get(facility_id, [])
         approvals = {item[1] for item in linked if item[1] is not None}
         if len(approvals) != 1 or not linked:
-            result[facility_id] = (None, "missing" if not linked else "ambiguous", None)
+            result[facility_id] = (
+                None,
+                "missing" if not linked else "missing_use_approval" if not approvals else "ambiguous",
+                None if not linked else any(
+                    item[2] is not None
+                    and item[3] is not None
+                    and 0 <= (item[3] - item[2]).days <= 5 * 365
+                    for item in linked
+                ),
+            )
             continue
         observed = max(item[3] for item in linked if item[3] is not None)
         approval = next(iter(approvals))
@@ -330,8 +356,15 @@ def _replace_facilities(db: Database, run_id: UUID, rows: list[dict[str, object]
     db.connection.execute("delete from mart_facility_current where run_id = ?", [run_id])
     for row in rows:
         db.connection.execute(
-            """insert into mart_facility_current values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [run_id, row["facility_id"], row["district"], row["region_group"], row["legal_registration_count"], row["room_count"], row["room_quality"], row["tourism"], row["foreigner"], row["foreign_capable"], row["building_age"], row["building_quality"], row["recent_permit"], True],
+            """insert into mart_facility_current (
+                run_id, facility_id, district, region_group, legal_registration_count,
+                room_count, room_count_quality, has_tourism_registration,
+                has_foreigner_city_homestay,
+                has_foreign_visitor_capable_registration, building_age_years,
+                building_age_quality, recent_permit_event, active,
+                has_tourist_pension_designation
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            [run_id, row["facility_id"], row["district"], row["region_group"], row["legal_registration_count"], row["room_count"], row["room_quality"], row["tourism"], row["foreigner"], row["foreign_capable"], row["building_age"], row["building_quality"], row["recent_permit"], True, row["has_tourist_pension_designation"]],
         )
 
 
@@ -356,6 +389,7 @@ def _district_metrics(rows: list[dict[str, object]], policy: PolicyConfig) -> di
             sum(float(item["building_age"]) * float(item["room_count"]) for item in age_weight_rows)
             / age_weight_denominator if age_weight_denominator > 0 else None
         )
+        younger_threshold, older_threshold = sorted(policy.old_building_years)
         result[district] = {
             "district": district, "group": str(items[0]["region_group"]), "facilities": len(items),
             "registrations": sum(int(item["legal_registration_count"]) for item in items), "known": len(known),
@@ -371,16 +405,17 @@ def _district_metrics(rows: list[dict[str, object]], policy: PolicyConfig) -> di
             "foreigner_registrations": sum(int(item["foreigner_registrations"]) for item in items),
             "foreign_capable_registrations": sum(int(item["foreign_capable_registrations"]) for item in items),
             "age_mean": mean(ages) if ages else None, "age_median": median(ages) if ages else None, "weighted_age": weighted_age,
-            "age20": sum(age >= 20 for age in ages) / len(ages) if ages else None,
-            "age30": sum(age >= 30 for age in ages) / len(ages) if ages else None,
-            "age20_count": sum(age >= 20 for age in ages), "age30_count": sum(age >= 30 for age in ages),
+            "age20": sum(age >= younger_threshold for age in ages) / len(ages) if ages else None,
+            "age30": sum(age >= older_threshold for age in ages) / len(ages) if ages else None,
+            "age20_count": sum(age >= younger_threshold for age in ages), "age30_count": sum(age >= older_threshold for age in ages),
+            "age_thresholds": [younger_threshold, older_threshold],
             "age_known": len(ages),
             "permit_share": sum(item["recent_permit"] is True for item in items) / sum(item["recent_permit"] is not None for item in items) if any(item["recent_permit"] is not None for item in items) else None,
             "permit_known": sum(item["recent_permit"] is not None for item in items),
             "permit_count": sum(item["recent_permit"] is True for item in items),
             "license_dates": [value for item in items for value in item["license_dates"]],
             "closure_dates": [value for item in items for value in item["closure_dates"]],
-            "room_values": known, "age_values": ages,
+            "room_values": known, "age_values": ages, "stock_observed": True,
         }
     return result
 
@@ -421,8 +456,23 @@ def _empty_metrics(district: str, group: str) -> dict[str, object]:
         "weighted_age": None, "age20": None, "age30": None, "age20_count": 0,
         "age30_count": 0, "age_known": 0, "permit_share": None, "permit_known": 0,
         "permit_count": 0, "license_dates": [], "closure_dates": [],
-        "room_values": [], "age_values": [],
+        "room_values": [], "age_values": [], "age_thresholds": [],
+        "stock_observed": True,
     }
+
+
+def _unknown_stock_metrics(district: str, group: str) -> dict[str, object]:
+    values = _empty_metrics(district, group)
+    values.update(
+        {
+            "facilities": None,
+            "registrations": None,
+            "coverage": None,
+            "tourism_share": None,
+            "stock_observed": False,
+        }
+    )
+    return values
 
 
 def _periods(
@@ -484,20 +534,31 @@ def _region_rows(
             )
             denom = period_values["room_sum"]
             ratios = {
-                "room_coverage": (float(period_values["known"]), float(period_values["facilities"]), period_values["coverage"], "inventory.room_count"),
+                "physical_facility_count": (
+                    float(period_values["facilities"])
+                    if period_values["facilities"] is not None
+                    else None,
+                    1.0 if period_values["facilities"] is not None else None,
+                    1.0 if period_values.get("stock_observed") else None,
+                    "inventory.full_snapshot_membership",
+                ),
+                "room_coverage": (float(period_values["known"]), _optional_float(period_values["facilities"]), period_values["coverage"], "inventory.room_count"),
                 "small_facility_share": (float(period_values["small"]) if period_values["small"] is not None else None, float(period_values["known"]), period_values["coverage"], "inventory.room_count"),
                 "visitors_per_100_rooms": (visitor[0], denom, period_values["coverage"], visitor[1]),
                 "lodging_consumption_per_room": (consumption[0], denom, period_values["coverage"], consumption[1]),
                 "transport_inflow_per_room": (transport[0], denom, period_values["coverage"], transport[1]),
-                "tourism_registration_facility_share": (float(period_values["tourism_facilities"]), float(period_values["facilities"]), 1.0, "inventory.registration_type"),
+                "tourism_registration_facility_share": (float(period_values["tourism_facilities"]), _optional_float(period_values["facilities"]), 1.0 if period_values.get("stock_observed") else None, "inventory.registration_type"),
                 "tourism_registration_room_share": (period_values["tourism_rooms"], denom, period_values["coverage"], "inventory.registration_type"),
-                "foreigner_city_homestay_registration_share": (float(period_values["foreigner_registrations"]), float(period_values["registrations"]), 1.0, "inventory.registration_type"),
-                "foreign_visitor_capable_registration_share": (float(period_values["foreign_capable_registrations"]), float(period_values["registrations"]), 1.0, "inventory.registration_type"),
-                "building_20y_share": (float(period_values["age20_count"]), float(period_values["age_known"]), period_values["age_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.approval_date"),
-                "building_30y_share": (float(period_values["age30_count"]), float(period_values["age_known"]), period_values["age_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.approval_date"),
+                "foreigner_city_homestay_registration_share": (float(period_values["foreigner_registrations"]), _optional_float(period_values["registrations"]), 1.0 if period_values.get("stock_observed") else None, "inventory.registration_type"),
+                "foreign_visitor_capable_registration_share": (float(period_values["foreign_capable_registrations"]), _optional_float(period_values["registrations"]), 1.0 if period_values.get("stock_observed") else None, "inventory.registration_type"),
+                "building_20y_share": (float(period_values["age20_count"]), float(period_values["age_known"]), period_values["age_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.use_approval_date"),
+                "building_30y_share": (float(period_values["age30_count"]), float(period_values["age_known"]), period_values["age_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.use_approval_date"),
                 "recent_five_year_permit_event_share": (float(period_values["permit_count"]), float(period_values["permit_known"]), period_values["permit_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.permit_date"),
             }
             evidence = {name: _evidence(name, numerator, denominator, coverage, period, source, factor=100 if name == "visitors_per_100_rooms" else 1) for name, (numerator, denominator, coverage, source) in ratios.items()}
+            evidence["physical_facility_count"]["stock_observed"] = bool(
+                period_values.get("stock_observed")
+            )
             evidence["visitor_growth_minus_room_supply_growth"] = _evidence(
                 "visitor_growth_minus_room_supply_growth", None, None, None, period,
                 "missing_consecutive_comparable_period",
@@ -596,7 +657,9 @@ def _same_period_inventory(
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
     rows = db.query(
-        f"""select link.facility_id, snapshot.source_id, snapshot.room_count
+        f"""select link.facility_id, snapshot.source_id, snapshot.source_record_id,
+                   snapshot.room_count, snapshot.status_code, snapshot.status_name,
+                   snapshot.closure_date, snapshot.observed_on, snapshot.version_run_id
         from run_facility_license as link
         join run_facility as facility
           on facility.run_id = link.run_id and facility.facility_id = link.facility_id
@@ -605,15 +668,30 @@ def _same_period_inventory(
         where link.run_id = ? and facility.district = ? and snapshot.observed_on::varchar like ?
           and snapshot.source_id <> 'tourist_pensions'
           and snapshot.version_run_id in ({placeholders})
-          and (snapshot.closure_date is null or snapshot.closure_date > snapshot.observed_on)
           and (? is null or snapshot.observed_on <= ?)""",
         [run_id, district, f"{period}%", *visible_runs, as_of, as_of],
     )
+    completed = latest_complete_snapshot_runs(db, run_id)
+    observed_snapshot_rows = bool(rows)
+    rows = [
+        row
+        for row in rows
+        if (
+            str(row[1]) not in completed or row[8] == completed[str(row[1])]
+        )
+        and is_active_status(row[4], row[5], row[6], row[7])
+    ]
+    if not rows:
+        if observed_snapshot_rows:
+            return _empty_metrics(district, str(fallback["group"]))
+        return _unknown_stock_metrics(district, str(fallback["group"]))
     facility_rooms: dict[object, set[float]] = defaultdict(set)
     facility_sources: dict[object, set[str]] = defaultdict(set)
+    facility_registrations: dict[object, set[tuple[str, str]]] = defaultdict(set)
     facilities = {item[0] for item in rows}
-    for facility_id, source_id, rooms in rows:
+    for facility_id, source_id, source_record_id, rooms, *_ in rows:
         facility_sources[facility_id].add(str(source_id))
+        facility_registrations[facility_id].add((str(source_id), str(source_record_id)))
         if rooms is not None and float(rooms) >= 0:
             facility_rooms[facility_id].add(float(rooms))
     known = [next(iter(values)) for values in facility_rooms.values() if len(values) == 1]
@@ -624,7 +702,7 @@ def _same_period_inventory(
     )
     tourism = sum(bool(sources & {"tourist_accommodations"}) for sources in facility_sources.values())
     foreigner = sum("foreigner_city_homestays" in sources for sources in facility_sources.values())
-    registrations = sum(len(sources) for sources in facility_sources.values())
+    registrations = sum(len(values) for values in facility_registrations.values())
     # Age and permit facts are intentionally null for a historical period unless
     # a period-compatible building snapshot is implemented for that period.
     tourism_rooms = sum(next(iter(facility_rooms[facility])) for facility, sources in facility_sources.items() if "tourist_accommodations" in sources and len(facility_rooms[facility]) == 1)
@@ -640,14 +718,14 @@ def _same_period_inventory(
             "tourism_room_share": tourism_rooms / room_sum if room_sum else None, "age_mean": None, "age_median": None,
             "weighted_age": None, "age20": None, "age30": None, "age_known": 0,
             "age20_count": 0, "age30_count": 0, "permit_share": None,
-            "permit_known": 0, "permit_count": 0}
-    output.update(_period_building_metrics(db, run_id, as_of, period, facilities, facility_rooms))
+            "permit_known": 0, "permit_count": 0, "stock_observed": True}
+    output.update(_period_building_metrics(db, run_id, as_of, period, facilities, facility_rooms, policy))
     return output
 
 
 def _period_building_metrics(
     db: Database, run_id: UUID, as_of: date | None, period: str,
-    facilities: set[object], rooms: dict[object, set[float]],
+    facilities: set[object], rooms: dict[object, set[float]], policy: PolicyConfig,
 ) -> dict[str, object]:
     if not facilities:
         return {}
@@ -662,7 +740,7 @@ def _period_building_metrics(
             from staging_building_revision
             where observed_on::varchar like ? and version_run_id in ({placeholders})
               and (? is null or observed_on <= ?)
-        ) select link.facility_id, snapshot.approval_date, snapshot.permit_date, snapshot.observed_on
+        ) select link.facility_id, snapshot.use_approval_date, snapshot.permit_date, snapshot.observed_on
         from run_facility_building as link join dim_building as building on building.building_id = link.building_id
         join latest as snapshot on snapshot.building_id = building.building_key and snapshot.row_num = 1
         where link.run_id = ?
@@ -682,11 +760,13 @@ def _period_building_metrics(
         permit_by_facility[facility] = permit is not None and 0 <= (observed - permit).days <= 5 * 365
     ages = list(age_by_facility.values()); weighted = [(age_by_facility[key], next(iter(rooms[key]))) for key in age_by_facility if len(rooms[key]) == 1 and next(iter(rooms[key])) > 0]
     permit_known = len(permit_by_facility); permit_count = sum(permit_by_facility.values())
+    younger_threshold, older_threshold = sorted(policy.old_building_years)
     return {"age_values": ages, "age_mean": mean(ages) if ages else None, "age_median": median(ages) if ages else None,
             "weighted_age": sum(age * room for age, room in weighted) / sum(room for _, room in weighted) if weighted else None,
-            "age20_count": sum(age >= 20 for age in ages), "age30_count": sum(age >= 30 for age in ages),
-            "age_known": len(ages), "age20": sum(age >= 20 for age in ages) / len(ages) if ages else None,
-            "age30": sum(age >= 30 for age in ages) / len(ages) if ages else None,
+            "age20_count": sum(age >= younger_threshold for age in ages), "age30_count": sum(age >= older_threshold for age in ages),
+            "age_known": len(ages), "age20": sum(age >= younger_threshold for age in ages) / len(ages) if ages else None,
+            "age30": sum(age >= older_threshold for age in ages) / len(ages) if ages else None,
+            "age_thresholds": [younger_threshold, older_threshold],
             "permit_known": permit_known, "permit_count": permit_count,
             "permit_share": permit_count / permit_known if permit_known else None}
 
@@ -860,6 +940,10 @@ def _quantile(values: list[float], fraction: float) -> float | None:
         return None
     ordered = sorted(values); position = (len(ordered) - 1) * fraction; low = int(position); high = min(low + 1, len(ordered) - 1)
     return ordered[low] + (ordered[high] - ordered[low]) * (position - low)
+
+
+def _optional_float(value: object) -> float | None:
+    return float(value) if value is not None else None
 
 
 def _tercile(value: float, values: list[float]) -> str:

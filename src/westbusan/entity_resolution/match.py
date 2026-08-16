@@ -23,6 +23,7 @@ from westbusan.entity_resolution.normalize import (
     normalize_name,
     normalize_phone,
 )
+from westbusan.inventory import is_active_status, latest_complete_snapshot_runs
 
 DecisionLabel = Literal["auto_merge", "designation_link", "review", "separate"]
 ALGORITHM_VERSION = "entity-resolution-v2"
@@ -594,7 +595,8 @@ def _latest_records(db: Database, run_id: UUID) -> list[dict[str, object]]:
         f"""
         select source_id, source_record_id, source_name, normalized_name, road_address,
                lot_address, district, region_group, normalized_phone, longitude, latitude,
-               version_run_id, observed_on, revision_sequence
+               version_run_id, observed_on, revision_sequence,
+               status_code, status_name, closure_date
         from (
             select snapshot.*, row_number() over (
                 partition by source_id, source_record_id
@@ -615,8 +617,24 @@ def _latest_records(db: Database, run_id: UUID) -> list[dict[str, object]]:
         "source_id", "source_record_id", "source_name", "normalized_name", "road_address",
         "lot_address", "district", "region_group", "normalized_phone", "longitude", "latitude",
         "selected_version_run_id", "selected_observed_on", "selected_revision_sequence",
+        "status_code", "status_name", "closure_date",
     )
-    return [dict(zip(fields, row, strict=True)) for row in rows]
+    completed = latest_complete_snapshot_runs(db, run_id)
+    records = [dict(zip(fields, row, strict=True)) for row in rows]
+    return [
+        record
+        for record in records
+        if (
+            str(record["source_id"]) not in completed
+            or record["selected_version_run_id"] == completed[str(record["source_id"])]
+        )
+        and is_active_status(
+            record["status_code"],
+            record["status_name"],
+            record["closure_date"],
+            record["selected_observed_on"],
+        )
+    ]
 
 
 def _visible_run_ids(db: Database, run_id: UUID) -> tuple[UUID, ...]:
