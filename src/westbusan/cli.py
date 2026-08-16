@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 import typer
 
 from westbusan.orchestrator import Pipeline, RunSummary, export_current, redact_for_log
+from westbusan.quality.checks import approve_schema_baseline, observed_schema_contracts
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -61,6 +62,68 @@ def probe(
     )
     if any(status.status not in {"READY", "EMPTY"} for status in statuses):
         raise typer.Exit(1)
+
+
+@app.command("schema-approve")
+def schema_approve(
+    source_id: Annotated[str | None, typer.Option(help="Observed source to approve.")] = None,
+    operation: Annotated[str | None, typer.Option(help="Observed operation to approve.")] = None,
+    partition: Annotated[str | None, typer.Option(help="Observed partition to approve.")] = None,
+    fingerprint: Annotated[
+        str | None, typer.Option(help="Exact observed schema fingerprint.")
+    ] = None,
+    approver: Annotated[
+        str | None, typer.Option(help="Non-secret operator identifier.")
+    ] = None,
+    rationale: Annotated[
+        str | None, typer.Option(help="Brief review rationale without secrets.")
+    ] = None,
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Display observed contracts and approve only one exact explicit confirmation."""
+    pipeline = _pipeline(root)
+    pipeline.db.migrate()
+    observed = observed_schema_contracts(pipeline.db)
+    values = (source_id, operation, partition, fingerprint, approver, rationale)
+    if not any(value is not None for value in values):
+        _print_json({"status": "REVIEW_REQUIRED", "observed": observed})
+        raise typer.Exit(1)
+    if any(value is None or not value.strip() for value in values):
+        _print_json(
+            {
+                "status": "BLOCKED",
+                "reason": "incomplete_explicit_confirmation",
+                "observed": observed,
+            }
+        )
+        raise typer.Exit(1)
+    assert all(value is not None for value in values)
+    confirmation = {
+        "source_id": source_id,
+        "operation": operation,
+        "partition": partition,
+        "fingerprint": fingerprint,
+    }
+    if confirmation not in observed:
+        _print_json(
+            {
+                "status": "BLOCKED",
+                "reason": "confirmation_does_not_match_observation",
+                "observed": observed,
+            }
+        )
+        raise typer.Exit(1)
+    approve_schema_baseline(
+        pipeline.db,
+        source_id,
+        operation,
+        fingerprint,
+        partition=partition,
+        approval_method="operator_cli",
+        approver=approver,
+        rationale=rationale,
+    )
+    _print_json({"status": "APPROVED", "approved": confirmation, "observed": observed})
 
 
 @app.command()

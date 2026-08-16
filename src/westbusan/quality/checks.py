@@ -146,6 +146,8 @@ def approve_schema_baseline(
     *,
     partition: str | None = None,
     approval_method: str = "inspection",
+    approver: str | None = None,
+    rationale: str | None = None,
 ) -> None:
     """Record an explicit contract approval; collection evidence never self-approves."""
     if not source_id or not operation or not schema_fingerprint:
@@ -153,15 +155,58 @@ def approve_schema_baseline(
     db.connection.execute(
         """
         insert into quality_schema_baseline (
-            source_id, operation, partition_key, approved_schema_fingerprint, approval_method
-        ) values (?, ?, ?, ?, ?)
+            source_id, operation, partition_key, approved_schema_fingerprint,
+            approval_method, approver, rationale
+        ) values (?, ?, ?, ?, ?, ?, ?)
         on conflict (source_id, operation, partition_key) do update set
             approved_schema_fingerprint = excluded.approved_schema_fingerprint,
             approval_method = excluded.approval_method,
+            approver = excluded.approver,
+            rationale = excluded.rationale,
             approved_at = now()
         """,
-        [source_id, operation, partition or "*", schema_fingerprint, approval_method],
+        [
+            source_id,
+            operation,
+            partition or "*",
+            schema_fingerprint,
+            approval_method,
+            approver,
+            rationale,
+        ],
     )
+
+
+def observed_schema_contracts(db: Database) -> list[dict[str, str]]:
+    """List parseable raw schema observations without approving any baseline."""
+    observations: set[tuple[str, str, str, str]] = set()
+    for source_id, path, source_date, request_json in db.query(
+        """select source_id, path, source_date, request_json
+           from raw_artifact order by created_at, artifact_id"""
+    ):
+        metadata = _json_object(request_json)
+        operation = metadata.get("operation")
+        partition = metadata.get("partition") or metadata.get("quality_partition")
+        if partition is None and source_date is not None:
+            partition = source_date.isoformat()
+        if not isinstance(operation, str) or not isinstance(partition, str):
+            continue
+        try:
+            page = parse_data_page(Path(str(path)).read_bytes(), "application/json")
+        except (OSError, ValueError, TypeError):
+            continue
+        observations.add(
+            (str(source_id), operation, partition, page.schema_fingerprint)
+        )
+    return [
+        {
+            "source_id": source_id,
+            "operation": operation,
+            "partition": partition,
+            "fingerprint": fingerprint,
+        }
+        for source_id, operation, partition, fingerprint in sorted(observations)
+    ]
 
 
 def _run_statuses(db: Database, run_id: UUID) -> dict[str, list[tuple[str, dict[str, object]]]]:

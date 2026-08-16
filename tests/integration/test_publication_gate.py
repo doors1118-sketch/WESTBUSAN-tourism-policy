@@ -47,9 +47,20 @@ def test_publication_is_idempotent_for_a_verified_valid_run(tmp_path: Path) -> N
 
 def _valid_report(db: Database, tmp_path: Path, run_id) -> QualityReport:
     for source_id in _CORE_ACCOMMODATION_SOURCES:
+        official_row = {
+            "MNG_NO": "L1",
+            "OPN_ATMY_GRP_CD": "6260000",
+            "LCPMT_YMD": "20200102",
+            "SALS_STTS_CD": "01",
+            "SALS_STTS_NM": "영업",
+            "DTL_SALS_STTS_CD": "01",
+            "DTL_SALS_STTS_NM": "정상",
+            "LAST_MDFCN_YMD": "20250831",
+            "DATA_UPDT_YMD": "20250901",
+        }
         body = json.dumps(
             {
-                "data": [{"MNG_NO": "L1"}] if source_id == "lodgings" else [],
+                "data": [official_row] if source_id == "lodgings" else [],
                 "totalCount": 1 if source_id == "lodgings" else 0,
                 "pageNo": 1,
                 "numOfRows": 1,
@@ -92,8 +103,14 @@ def _valid_report(db: Database, tmp_path: Path, run_id) -> QualityReport:
         insert into staging_license_snapshot (
             source_id, source_record_id, observed_on, first_loaded_run_id, last_loaded_run_id,
             district, region_group, region_quality, room_count, room_count_quality,
-            source_payload_json, record_hash
-        ) values ('lodgings', 'L1', ?, ?, ?, '사하구', 'west', 'resolved', 1, 'reported', '{}', 'hash')
+            jurisdiction_code, license_date, source_updated_at, data_updated_on,
+            status_code, status_name, status_class, detailed_status_code,
+            detailed_status_name, source_payload_json, record_hash
+        ) values (
+            'lodgings', 'L1', ?, ?, ?, '사하구', 'west', 'resolved', 1, 'reported',
+            '6260000', '2020-01-02', '20250831', '2025-09-01',
+            '01', '영업', 'active', '01', '정상', '{}', 'hash'
+        )
         """,
         [date(2026, 8, 16), run_id, run_id],
     )
