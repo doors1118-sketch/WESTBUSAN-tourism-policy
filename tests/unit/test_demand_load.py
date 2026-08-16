@@ -93,7 +93,16 @@ def test_load_persists_raw_page_and_source_native_demand_record(
     assert db.query(
         "select metric_code, period, district, region_group, metric_value from fact_tourism_demand"
     ) == [("visitor_count", "2026-01", "사하구", "west", 1200.0)]
-    assert db.query("select count(*) from raw_artifact") == [(1,)]
+    request_json, content_hash, source_date = db.query(
+        "select request_json, content_hash, source_date from raw_artifact"
+    )[0]
+    raw_request = json.loads(request_json)
+    assert raw_request["operation"] == "reviewedOperation"
+    assert raw_request["parameters"] == {"areaCd": "26", "baseYm": "202601"}
+    assert raw_request["pageNo"] == 1
+    assert raw_request["schema_fingerprint"] == "observed-fields"
+    assert raw_request["source_revision"] == content_hash
+    assert source_date == date(2026, 1, 1)
     status = db.query("select detail_json from source_status")[0][0]
     assert '"baseYm": "202601"' in status
     assert "secret-service-key" not in status

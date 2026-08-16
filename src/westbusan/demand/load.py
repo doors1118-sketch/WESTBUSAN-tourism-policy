@@ -157,6 +157,7 @@ def load_tourism_demand(
             pager_spec = replace(spec, url=spec.endpoint_url, operation=None)
             pager = DataGoKrPager(SafeHttpClient(), service_key)
             for page in pager.iter_pages(pager_spec, parameters):
+                source_revision = hashlib.sha256(page.raw_body).hexdigest()
                 artifact = raw_store.write(
                     run,
                     source_id,
@@ -165,6 +166,8 @@ def load_tourism_demand(
                         "parameters": parameters,
                         "pageNo": page.page_no,
                         "numOfRows": page.page_size,
+                        "schema_fingerprint": page.schema_fingerprint,
+                        "source_revision": source_revision,
                     },
                     page.raw_body,
                     ".json",
