@@ -16,7 +16,7 @@ from uuid import NAMESPACE_URL, UUID, uuid5
 from rapidfuzz.fuzz import ratio
 
 from westbusan.accommodation.normalize import LicenseRecord
-from westbusan.db import Database
+from westbusan.db import Database, ensure_run_rebuildable
 from westbusan.entity_resolution.normalize import (
     normalize_address,
     normalize_name,
@@ -472,6 +472,7 @@ def _latest_records(db: Database, run_id: UUID) -> list[dict[str, object]]:
 
 
 def _visible_run_ids(db: Database, run_id: UUID) -> tuple[UUID, ...]:
+    ensure_run_rebuildable(db, run_id)
     rows = db.query(
         """select lineage.input_run_id from pipeline_run_input as lineage
            left join pipeline_run as input on input.run_id = lineage.input_run_id

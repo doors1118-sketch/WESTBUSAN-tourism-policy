@@ -164,6 +164,37 @@ def test_fence_touch_conflicts_with_two_connection_takeover(tmp_path: Path) -> N
     first.db.connection.execute("rollback")
 
 
+def test_legacy_run_without_lineage_is_non_rebuildable(tmp_path: Path) -> None:
+    """Unknown legacy system-time visibility fails closed instead of guessing history."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    run_id = uuid4()
+    pipeline.db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'legacy', now(), 'BLOCKED', '2026-08-16', false)""",
+        [run_id],
+    )
+    load_license_snapshot(
+        pipeline.db,
+        [
+            normalize_license(
+                "lodgings",
+                {
+                    "MNG_NO": "legacy",
+                    "BPLC_NM": "레거시호텔",
+                    "ROAD_NM_ADDR": "부산광역시 사하구 길 1",
+                },
+                date(2026, 8, 16),
+            )
+        ],
+        run_id,
+    )
+
+    with pytest.raises(RuntimeError, match="migrate-legacy"):
+        build_facilities(pipeline.db, run_id)
+
+
 def test_terminal_source_status_and_completed_checkpoint_commit_atomically(
     tmp_path: Path, monkeypatch
 ) -> None:

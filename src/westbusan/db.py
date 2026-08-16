@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import duckdb
 
@@ -117,3 +118,68 @@ class Database:
                 source_status.run_id,
             ],
         )
+
+
+def ensure_run_rebuildable(db: Database, run_id: UUID) -> None:
+    """Reject legacy runs whose immutable input visibility was never captured."""
+    rows = db.query("select rebuildable from pipeline_run where run_id = ?", [run_id])
+    if rows and rows[0][0] is not True:
+        raise RuntimeError(
+            f"legacy run {run_id} is non-rebuildable; run "
+            f"`python -m westbusan.cli migrate-legacy --run-id {run_id}`"
+        )
+
+
+def migrate_legacy_run(db: Database, run_id: UUID) -> None:
+    """Approve self-lineage only when every mutable legacy row has a revision copy."""
+    began = False
+    try:
+        db.connection.execute("begin transaction")
+        began = True
+        if not db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
+            raise RuntimeError(f"pipeline run {run_id} does not exist")
+        missing_license = int(
+            db.scalar(
+                """select count(*) from staging_license_snapshot as legacy
+                   where (legacy.first_loaded_run_id = ? or legacy.last_loaded_run_id = ?)
+                     and not exists (
+                       select 1 from staging_license_revision as revision
+                       where revision.version_run_id = ?
+                         and revision.source_id = legacy.source_id
+                         and revision.source_record_id = legacy.source_record_id
+                         and revision.observed_on = legacy.observed_on
+                     )""",
+                [run_id, run_id, run_id],
+            )
+        )
+        missing_building = int(
+            db.scalar(
+                """select count(*) from staging_building_snapshot as legacy
+                   where legacy.first_loaded_run_id = ?
+                     and not exists (
+                       select 1 from staging_building_revision as revision
+                       where revision.version_run_id = ?
+                         and revision.building_id = legacy.building_id
+                         and revision.observed_on = legacy.observed_on
+                     )""",
+                [run_id, run_id],
+            )
+        )
+        if missing_license or missing_building:
+            raise RuntimeError(
+                "legacy run has mutable snapshots without immutable revision copies"
+            )
+        db.connection.execute(
+            """insert into pipeline_run_input (run_id, input_run_id)
+               values (?, ?) on conflict do nothing""",
+            [run_id, run_id],
+        )
+        db.connection.execute(
+            "update pipeline_run set rebuildable = true where run_id = ?", [run_id]
+        )
+        db.connection.execute("commit")
+        began = False
+    except Exception:
+        if began:
+            db.connection.execute("rollback")
+        raise

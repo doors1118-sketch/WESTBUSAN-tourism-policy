@@ -6,8 +6,11 @@ from uuid import uuid4
 
 from typer.testing import CliRunner
 
+from westbusan.accommodation.load import load_license_snapshot
+from westbusan.accommodation.normalize import normalize_license
 from westbusan.cli import app, exit_code_for_summary
 from westbusan.db import Database
+from westbusan.entity_resolution.match import build_facilities
 from westbusan.orchestrator import Pipeline, RunSummary
 
 
@@ -245,3 +248,44 @@ def test_schema_approval_accepts_exact_observation_with_operator_audit(
             "reviewed official fields",
         )
     ]
+
+
+def test_migrate_legacy_command_approves_only_backfilled_self_lineage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The operator command makes a safely versioned legacy run rebuildable."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    run_id = uuid4()
+    pipeline.db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'legacy', now(), 'BLOCKED', '2026-08-16', false)""",
+        [run_id],
+    )
+    load_license_snapshot(
+        pipeline.db,
+        [
+            normalize_license(
+                "lodgings",
+                {
+                    "MNG_NO": "legacy",
+                    "BPLC_NM": "레거시호텔",
+                    "ROAD_NM_ADDR": "부산광역시 사하구 길 1",
+                },
+                date(2026, 8, 16),
+            )
+        ],
+        run_id,
+    )
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+
+    result = CliRunner().invoke(
+        app,
+        ["migrate-legacy", "--run-id", str(run_id), "--root", str(Path.cwd())],
+    )
+
+    assert result.exit_code == 0
+    assert build_facilities(pipeline.db, run_id).facility_count == 1

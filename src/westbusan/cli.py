@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import typer
 
+from westbusan.db import migrate_legacy_run
 from westbusan.orchestrator import Pipeline, RunSummary, export_current, redact_for_log
 from westbusan.quality.checks import approve_schema_baseline, observed_schema_contracts
 
@@ -35,6 +36,22 @@ def init_db(
     pipeline = _pipeline(root)
     pipeline.db.migrate()
     _print_json({"status": "initialized", "db_path": str(pipeline.db.path)})
+
+
+@app.command("migrate-legacy")
+def migrate_legacy(
+    run_id: Annotated[UUID, typer.Option(help="Legacy run to approve after revision audit.")],
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Backfill self-lineage only when immutable revision copies are complete."""
+    pipeline = _pipeline(root)
+    pipeline.db.migrate()
+    try:
+        migrate_legacy_run(pipeline.db, run_id)
+    except RuntimeError as error:
+        _print_json({"status": "BLOCKED", "run_id": run_id, "reason": str(error)})
+        raise typer.Exit(1) from error
+    _print_json({"status": "migrated", "run_id": run_id})
 
 
 @app.command()

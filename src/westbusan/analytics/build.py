@@ -13,7 +13,7 @@ from typing import Literal
 from uuid import UUID
 
 from westbusan.config import PolicyConfig
-from westbusan.db import Database
+from westbusan.db import Database, ensure_run_rebuildable
 
 QualityBand = Literal["good", "warning", "insufficient", "incompatible"]
 
@@ -914,6 +914,7 @@ def _group_band(rows: list[dict[str, object]], key: str) -> str:
 
 def _visible_run_ids(db: Database, target_run_id: UUID) -> tuple[UUID, ...]:
     """Return the immutable approved observation set captured for this run."""
+    ensure_run_rebuildable(db, target_run_id)
     rows = db.query(
         """select lineage.input_run_id from pipeline_run_input as lineage
            left join pipeline_run as input on input.run_id = lineage.input_run_id

@@ -14,7 +14,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import duckdb
 
-from westbusan.db import Database
+from westbusan.db import Database, ensure_run_rebuildable
 from westbusan.entity_resolution.match import (
     classify_pair,
     evaluate_auto_merge_precision,
@@ -828,6 +828,7 @@ def _active_facility_count(db: Database, run_id: UUID) -> int:
 
 
 def _quality_visible_runs(db: Database, run_id: UUID) -> tuple[UUID, ...]:
+    ensure_run_rebuildable(db, run_id)
     rows = db.query(
         "select input_run_id from pipeline_run_input where run_id = ? order by input_run_id",
         [run_id],
