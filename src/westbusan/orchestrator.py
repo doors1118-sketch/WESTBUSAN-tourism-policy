@@ -215,11 +215,13 @@ class Pipeline:
         client = SafeHttpClient()
 
         for source_id in selected:
+            self._refresh_lease(run.run_id)
             spec = self.registry.get(source_id)
             if spec.source_type != "api":
                 continue
             try:
                 status = probe_source(spec, client, self.db)
+                self._refresh_lease(run.run_id)
                 self.db.connection.execute(
                     "update source_status set run_id = ? where source_id = ? and checked_at = ?",
                     [run.run_id, source_id, status.checked_at],
@@ -248,7 +250,11 @@ class Pipeline:
             )
             try:
                 result = collect_buildings_for_licenses(
-                    self.db, building_registry, run, raw_store=self.raw_store
+                    self.db,
+                    building_registry,
+                    run,
+                    raw_store=self.raw_store,
+                    progress=lambda: self._refresh_lease(run.run_id),
                 )
             except Exception as error:  # noqa: BLE001 - terminal family boundary
                 for source_id in selected:
@@ -264,7 +270,12 @@ class Pipeline:
                 tourism_start = date(tourism_end.year, tourism_end.month, 1)
             try:
                 result = load_tourism_demand(
-                    self.db, selected_registry, tourism_start, tourism_end, run
+                    self.db,
+                    selected_registry,
+                    tourism_start,
+                    tourism_end,
+                    run,
+                    progress=lambda: self._refresh_lease(run.run_id),
                 )
             except Exception as error:  # noqa: BLE001 - terminal family boundary
                 for source_id in selected:
@@ -304,6 +315,7 @@ class Pipeline:
                             range_start,
                             range_end,
                             run,
+                            progress=lambda: self._refresh_lease(run.run_id),
                         )
                         total_rows += result.records_loaded
                         for evidence in result.source_months:
@@ -681,6 +693,7 @@ class Pipeline:
         as_of: date,
         logger: _JsonlLogger,
     ) -> int:
+        self._refresh_lease(run.run_id)
         assert self.fixture_dir is not None
         fixture_path = self.fixture_dir / "accommodation" / f"{source_id}.json"
         rows = (
@@ -702,6 +715,7 @@ class Pipeline:
             separators=(",", ":"),
         ).encode("utf-8")
         page = parse_data_page(body, "application/json")
+        self._refresh_lease(run.run_id)
         artifact = self.raw_store.write(
             run,
             source_id,
@@ -718,10 +732,14 @@ class Pipeline:
             ".json",
             source_date=as_of,
         )
+        self._refresh_lease(run.run_id)
         self.db.record_artifact(artifact)
+        self._refresh_lease(run.run_id)
         self.raw_store.write_rows(artifact, rows)
         records = [normalize_license(source_id, row, as_of) for row in rows]
+        self._refresh_lease(run.run_id)
         load_license_snapshot(self.db, records, run.run_id)
+        self._refresh_lease(run.run_id)
         approve_schema_baseline(
             self.db,
             source_id,
@@ -730,6 +748,7 @@ class Pipeline:
             approval_method="fixture",
         )
         status = "READY" if rows else "EMPTY"
+        self._refresh_lease(run.run_id)
         self.db.record_source_status(
             SourceStatus(
                 source_id=source_id,
@@ -745,6 +764,7 @@ class Pipeline:
                 run_id=run.run_id,
             )
         )
+        self._refresh_lease(run.run_id)
         logger.write(
             "source_complete",
             run_id=run.run_id,
@@ -763,6 +783,7 @@ class Pipeline:
         as_of: date,
         logger: _JsonlLogger,
     ) -> int:
+        self._refresh_lease(run.run_id)
         spec = self.registry.get(source_id)
         service_key = self.settings.service_key.get_secret_value()
         if not service_key:
@@ -778,6 +799,7 @@ class Pipeline:
         loaded = 0
         started = monotonic()
         while True:
+            self._refresh_lease(run.run_id)
             parameters = {
                 **dict(spec.required_parameters),
                 "serviceKey": service_key,
@@ -788,6 +810,7 @@ class Pipeline:
             result = client.get(spec.endpoint_url, parameters)
             page = parse_data_page(result.body, result.content_type)
             suffix = ".xml" if "xml" in result.content_type.casefold() else ".json"
+            self._refresh_lease(run.run_id)
             artifact = self.raw_store.write(
                 run,
                 source_id,
@@ -804,9 +827,12 @@ class Pipeline:
                 suffix,
                 source_date=as_of,
             )
+            self._refresh_lease(run.run_id)
             self.db.record_artifact(artifact)
+            self._refresh_lease(run.run_id)
             self.raw_store.write_rows(artifact, page.rows)
             rows = [normalize_license(source_id, row, as_of) for row in page.rows]
+            self._refresh_lease(run.run_id)
             load_license_snapshot(self.db, rows, run.run_id)
             loaded += len(rows)
             completed = not page.rows or page_no * spec.page_size >= page.total_count
@@ -821,6 +847,7 @@ class Pipeline:
                 break
             page_no += 1
         status = "READY" if loaded else "EMPTY"
+        self._refresh_lease(run.run_id)
         self.db.record_source_status(
             SourceStatus(
                 source_id,
@@ -834,6 +861,7 @@ class Pipeline:
                 run.run_id,
             )
         )
+        self._refresh_lease(run.run_id)
         logger.write(
             "source_complete",
             run_id=run.run_id,
@@ -906,6 +934,7 @@ class Pipeline:
         error: Exception,
         logger: _JsonlLogger,
     ) -> None:
+        self._refresh_lease(run.run_id)
         if isinstance(error, AuthenticationError):
             status = "AUTH_FAILED"
         elif isinstance(error, QuotaError):
@@ -914,6 +943,7 @@ class Pipeline:
             status = "SCHEMA_CHANGED"
         else:
             status = "HTTP_FAILED"
+        self._refresh_lease(run.run_id)
         self.db.record_source_status(
             SourceStatus(
                 source_id,
@@ -923,6 +953,7 @@ class Pipeline:
                 run.run_id,
             )
         )
+        self._refresh_lease(run.run_id)
         logger.write(
             "source_failed",
             run_id=run.run_id,
@@ -941,7 +972,9 @@ class Pipeline:
         logger: _JsonlLogger,
     ) -> None:
         """Persist a required synthetic contract for a failed loader boundary."""
+        self._refresh_lease(run.run_id)
         source_id = f"orchestration:{family}"
+        self._refresh_lease(run.run_id)
         self.db.record_source_status(
             SourceStatus(
                 source_id,
@@ -955,6 +988,7 @@ class Pipeline:
                 run.run_id,
             )
         )
+        self._refresh_lease(run.run_id)
         logger.write(
             "source_failed",
             run_id=run.run_id,

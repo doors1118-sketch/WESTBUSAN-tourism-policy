@@ -68,6 +68,14 @@
   Atomic compare-and-set acquisition rejects a second active owner, permits a
   safe stale-lease takeover of the same attempt, and makes checkpoints and
   terminal finalization validate/refresh ownership.
+- Fenced the complete collection write path with synchronous lease heartbeats.
+  Building, tourism, and transport loaders accept an optional no-op-compatible
+  progress callback and invoke it before provider/page/file work and every
+  artifact, staging, fact, status, or checkpoint mutation. Orchestration supplies
+  the current attempt's owner-validated refresh callback; fixture and live
+  accommodation collectors plus failure recording use the same guard. A revoked
+  owner now raises before it can append raw, staging, fact, checkpoint, or failure
+  evidence, while long source loops keep an active attempt non-takeoverable.
 - `load_transport` now accepts an inclusive date range, schedules every OD
   source month, filters snapshot/file records before fact persistence, and
   returns explicit source-month evidence. Orchestration plans monthly transport
@@ -100,13 +108,20 @@
   RUNNING recollection, dual ownership of one attempt, out-of-range transport
   facts, reused OD request months, and blanket/repeated transport checkpoints.
   Each test failed for the named behavior before the corresponding minimal fix.
+- Final lease-fencing REDs reproduced a stale owner successfully collecting a
+  fixture after takeover, the absence of a loader progress interface, and all
+  three production family calls omitting ownership refresh callbacks. The green
+  adversarial coverage additionally forces lease expiry twice inside a multi-month
+  transport file loop, confirms a second pipeline is rejected after each refresh,
+  and verifies stale fixture/accommodation/family/failure calls leave all evidence
+  table counts unchanged.
 - Final focused command:
-  `python -m pytest tests/integration/test_transport_load.py tests/integration/test_end_to_end.py tests/unit/test_orchestrator.py tests/unit/test_cli.py -v`
-  — 40 passed, 1 skipped (opt-in live transport check).
+  `python -m pytest tests/unit/test_orchestrator.py tests/unit/test_demand_load.py tests/integration/test_building_load.py tests/integration/test_transport_load.py -q`
+  — 77 passed, 1 skipped (opt-in live transport check).
 
 ## Final verification
 
-- Full `python -m pytest -v`: 185 passed, 3 skipped (opt-in live tests), exit 0.
+- Full `python -m pytest -q`: 188 passed, 3 skipped (opt-in live tests), exit 0.
 - `python -m ruff check .`: all checks passed, exit 0.
 - `python -m westbusan.cli --help`: six commands listed, exit 0.
 - Ignored-path `python -m westbusan.cli init-db --root .`: structured initialized

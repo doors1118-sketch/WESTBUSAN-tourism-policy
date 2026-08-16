@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from pydantic import SecretStr
 
 import westbusan.orchestrator as orchestrator_module
 from westbusan.models import SourceSpec, SourceStatus
@@ -15,7 +16,7 @@ from westbusan.orchestrator import (
     redact_for_log,
 )
 from westbusan.sources.registry import SourceRegistry
-from westbusan.transport.load import SourceMonthEvidence
+from westbusan.transport.load import SourceMonthEvidence, load_transport
 
 
 def test_monthly_partitions_include_both_boundary_months() -> None:
@@ -140,6 +141,214 @@ def test_expired_lease_takeover_revokes_the_previous_owner(
     )["next_page"] == 4
 
 
+def test_expired_lease_takeover_fences_old_collectors_and_failure_status(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches stale collectors writing raw, staging, or status evidence after takeover."""
+    first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    first.db.migrate()
+    first_run, _ = first._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "collector-takeover"
+    )
+    assert first_run is not None
+    logger = orchestrator_module._JsonlLogger(tmp_path / "logs", date(2026, 8, 16))
+    first.db.connection.execute(
+        """update pipeline_run set lease_expires_at = now() - interval '1 second'
+           where run_id = ?""",
+        [first_run.run_id],
+    )
+    second = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    second.db.migrate()
+    second_run, _ = second._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "collector-takeover"
+    )
+    assert second_run is not None
+    assert second_run.run_id == first_run.run_id
+    first.settings.service_key = SecretStr("test-service-key")
+    network_calls: list[str] = []
+
+    class UnexpectedClient:
+        def get(self, *_args, **_kwargs):
+            network_calls.append("called")
+            raise AssertionError("a fenced collector must not contact the provider")
+
+    monkeypatch.setattr(orchestrator_module, "SafeHttpClient", UnexpectedClient)
+
+    def counts() -> tuple[int, int, int, int, int]:
+        return tuple(
+            int(first.db.scalar(f"select count(*) from {table}"))
+            for table in (
+                "raw_artifact",
+                "staging_license_snapshot",
+                "source_status",
+                "collection_checkpoint",
+                "fact_transport_flow",
+            )
+        )
+
+    before = counts()
+    with pytest.raises(RuntimeError, match="lease ownership"):
+        first._collect_fixture_source(
+            first_run, "lodgings", date(2026, 8, 16), logger
+        )
+    assert counts() == before
+
+    with pytest.raises(RuntimeError, match="lease ownership"):
+        first._collect_accommodation(
+            first_run, "lodgings", date(2026, 8, 16), logger
+        )
+    assert network_calls == []
+    assert counts() == before
+
+    with pytest.raises(RuntimeError, match="lease ownership"):
+        load_transport(
+            first.db,
+            SourceRegistry((first.registry.get("srt_station_boarding_file"),)),
+            date(2026, 7, 1),
+            date(2026, 7, 31),
+            first_run,
+            progress=lambda: first._refresh_lease(first_run.run_id),
+        )
+    assert counts() == before
+
+    with pytest.raises(RuntimeError, match="lease ownership"):
+        first._record_failure(first_run, "lodgings", ValueError("late"), logger)
+    assert counts() == before
+
+
+def test_transport_long_file_loop_heartbeats_keep_attempt_owned(
+    tmp_path: Path,
+) -> None:
+    """Catches a long file normalization loop that lets its run lease expire."""
+    first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    first.db.migrate()
+    first_run, _ = first._prepare_run(
+        "production", "backfill", date(2026, 3, 31), "transport-heartbeat"
+    )
+    assert first_run is not None
+    inbox = first.db.path.parent / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "SRT_역_heartbeat.csv").write_text(
+        "승차역,2026년1월,2026년2월,2026년3월\n부산역,10,20,30\n",
+        encoding="utf-8",
+    )
+    registry = SourceRegistry(
+        (first.registry.get("srt_station_boarding_file"),)
+    )
+    second = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    second.db.migrate()
+    heartbeats = 0
+    takeover_checked = False
+
+    def heartbeat() -> None:
+        nonlocal heartbeats, takeover_checked
+        heartbeats += 1
+        if heartbeats in {4, 8}:
+            first.db.connection.execute(
+                """update pipeline_run
+                   set lease_expires_at = now() - interval '1 second'
+                   where run_id = ?""",
+                [first_run.run_id],
+            )
+        first._refresh_lease(first_run.run_id)
+        if heartbeats == 8:
+            with pytest.raises(RuntimeError, match="active lease"):
+                second._prepare_run(
+                    "production",
+                    "backfill",
+                    date(2026, 3, 31),
+                    "transport-heartbeat",
+                )
+            takeover_checked = True
+
+    result = load_transport(
+        first.db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 3, 31),
+        first_run,
+        progress=heartbeat,
+    )
+
+    assert result.records_loaded == 3
+    assert heartbeats >= 8
+    assert takeover_checked is True
+    assert first.db.scalar("select count(*) from fact_transport_flow") == 3
+
+
+def test_production_passes_lease_progress_to_every_loader_family(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches an orchestration branch invoking a family loader without fencing writes."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.fixture_dir = None
+    specs = (
+        SourceSpec(
+            "building_register_title",
+            "https://example.test/building",
+            group="building",
+        ),
+        SourceSpec(
+            "tourism_data_lab",
+            "https://example.test/tourism",
+            group="tourism",
+            cadence="monthly",
+        ),
+        SourceSpec(
+            "srt_station_boarding_file",
+            "https://example.test/transport",
+            source_type="file",
+            group="transport",
+            cadence="monthly",
+        ),
+    )
+    pipeline.registry = SourceRegistry(specs)
+    calls: list[str] = []
+
+    def ready_probe(spec, client, db):
+        status = SourceStatus(spec.source_id, datetime.now(UTC), "READY", {})
+        db.record_source_status(status)
+        return status
+
+    def building_loader(db, registry, run, *, raw_store, progress):
+        progress()
+        calls.append("building")
+        return SimpleNamespace(building_rows=0)
+
+    def tourism_loader(db, registry, start, end, run, *, progress):
+        progress()
+        calls.append("tourism")
+        return SimpleNamespace(records_loaded=0)
+
+    def transport_loader(db, registry, start, end, run, *, progress):
+        progress()
+        calls.append("transport")
+        source_id = registry.ids()[0]
+        return SimpleNamespace(
+            records_loaded=0,
+            source_months=(
+                SourceMonthEvidence(source_id, start.strftime("%Y-%m"), 0, True),
+            ),
+        )
+
+    monkeypatch.setattr(orchestrator_module, "probe_source", ready_probe)
+    monkeypatch.setattr(
+        orchestrator_module, "collect_buildings_for_licenses", building_loader
+    )
+    monkeypatch.setattr(orchestrator_module, "load_tourism_demand", tourism_loader)
+    monkeypatch.setattr(orchestrator_module, "load_transport", transport_loader)
+    monkeypatch.setattr(
+        pipeline, "_finish_run", lambda run, total_rows, logger: "finished"
+    )
+
+    result = pipeline._execute_production(
+        "daily", date(2026, 8, 16), date(2026, 8, 16), list(pipeline.registry.ids())
+    )
+
+    assert result == "finished"
+    assert calls == ["building", "tourism", "transport"]
+
+
 def test_fixture_backfill_defaults_to_the_complete_required_fixture_set(
     tmp_path: Path,
 ) -> None:
@@ -246,7 +455,8 @@ def test_daily_tourism_requests_the_previous_complete_month(
     pipeline.registry = SourceRegistry((spec,))
     observed: dict[str, date] = {}
 
-    def fake_load(db, registry, start, end, run):
+    def fake_load(db, registry, start, end, run, *, progress):
+        progress()
         observed.update(start=start, end=end)
         return SimpleNamespace(records_loaded=0, sources_ready=())
 
@@ -274,7 +484,8 @@ def test_daily_transport_requests_and_checkpoints_previous_complete_month(
     pipeline.registry = SourceRegistry((spec,))
     observed: dict[str, date] = {}
 
-    def fake_load(db, registry, start, end, run):
+    def fake_load(db, registry, start, end, run, *, progress):
+        progress()
         observed.update(start=start, end=end)
         return SimpleNamespace(
             records_loaded=1,
@@ -315,7 +526,8 @@ def test_transport_restart_skips_only_evidence_backed_months(
     pipeline.registry = SourceRegistry((spec,))
     calls: list[tuple[date, date]] = []
 
-    def fake_load(db, registry, start, end, run):
+    def fake_load(db, registry, start, end, run, *, progress):
+        progress()
         calls.append((start, end))
         evidence = (
             (SourceMonthEvidence(spec.source_id, "2026-01", 1),)

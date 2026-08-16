@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 from calendar import monthrange
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -18,6 +18,12 @@ from westbusan.models import RunContext, SourceSpec, SourceStatus
 from westbusan.sources.datagokr import DataGoKrPager
 from westbusan.sources.registry import SourceRegistry
 from westbusan.storage import RawStore
+
+ProgressCallback = Callable[[], None]
+
+
+def _noop_progress() -> None:
+    """Default progress hook for callers that do not own a pipeline lease."""
 
 _FIELD_ALIASES: dict[str, tuple[tuple[str, str | None, str, str], ...]] = {
     "tourism_data_lab": (
@@ -261,8 +267,12 @@ def load_tourism_demand(
     start: date,
     end: date,
     run: RunContext,
+    *,
+    progress: ProgressCallback | None = None,
 ) -> LoadResult:
     """Collect inspected KTO series month by month, persisting each raw page first."""
+    heartbeat = progress or _noop_progress
+    heartbeat()
     service_key = os.getenv("DATA_GO_KR_SERVICE_KEY", "")
     end = min(end, _latest_complete_month_end(run.started_at.date()))
     raw_store = RawStore(db.path.parent)
@@ -271,9 +281,11 @@ def load_tourism_demand(
     ready: list[str] = []
     skipped: list[str] = []
     for source_id in registry.ids(group="tourism"):
+        heartbeat()
         specs = _resolved_specs(registry.get(source_id), db)
         source_succeeded = bool(specs)
         for spec in specs:
+            heartbeat()
             if not service_key:
                 _record_status(
                     db,
@@ -281,6 +293,7 @@ def load_tourism_demand(
                     "AUTH_FAILED",
                     {"reason": "DATA_GO_KR_SERVICE_KEY is not configured"},
                     run,
+                    heartbeat,
                 )
                 source_succeeded = False
                 continue
@@ -291,6 +304,7 @@ def load_tourism_demand(
                     "SPEC_UNRESOLVED",
                     {"reason": _skip_reason(spec, service_key)},
                     run,
+                    heartbeat,
                 )
                 source_succeeded = False
                 continue
@@ -299,11 +313,21 @@ def load_tourism_demand(
             )
             page_statuses: dict[int, dict[int, list[str]]] = {}
             for month in months:
+                heartbeat()
                 parameters = _month_parameters(spec.required_parameters, month)
                 pager_spec = replace(spec, url=spec.endpoint_url, operation=None)
                 pager = DataGoKrPager(SafeHttpClient(), service_key)
-                for page in pager.iter_pages(pager_spec, parameters, include_empty=True):
+                pages = iter(
+                    pager.iter_pages(pager_spec, parameters, include_empty=True)
+                )
+                while True:
+                    heartbeat()
+                    try:
+                        page = next(pages)
+                    except StopIteration:
+                        break
                     source_revision = hashlib.sha256(page.raw_body).hexdigest()
+                    heartbeat()
                     artifact = raw_store.write(
                         run,
                         source_id,
@@ -320,12 +344,15 @@ def load_tourism_demand(
                         ".json",
                         source_date=month.first_day,
                     )
+                    heartbeat()
                     db.record_artifact(artifact)
+                    heartbeat()
                     raw_store.write_rows(artifact, page.rows)
                     artifacts += 1
                     out_of_scope_rows = 0
                     invalid_rows = 0
                     for row in page.rows:
+                        heartbeat()
                         try:
                             record = normalize_demand_row(source_id, row)
                         except _OutOfScopeRow:
@@ -338,7 +365,12 @@ def load_tourism_demand(
                             invalid_rows += 1
                             continue
                         _persist_record(
-                            db, record, artifact.content_hash, artifact.artifact_id, run
+                            db,
+                            record,
+                            artifact.content_hash,
+                            artifact.artifact_id,
+                            run,
+                            heartbeat,
                         )
                         loaded += 1
                     page_status = (
@@ -368,10 +400,17 @@ def load_tourism_demand(
                             "source_revision": artifact.content_hash,
                         },
                         run,
+                        heartbeat,
                     )
             if backfill_phase is not None:
                 _record_backfill_checkpoint(
-                    db, source_id, spec.operation, backfill_phase, months, page_statuses
+                    db,
+                    source_id,
+                    spec.operation,
+                    backfill_phase,
+                    months,
+                    page_statuses,
+                    heartbeat,
                 )
             if not _operation_succeeded(page_statuses):
                 source_succeeded = False
@@ -575,6 +614,7 @@ def _record_backfill_checkpoint(
     phase: str,
     months: tuple[YearMonth, ...],
     page_statuses: Mapping[int, Mapping[int, list[str]]],
+    progress: ProgressCallback,
 ) -> None:
     if operation is None or not months:
         return
@@ -612,6 +652,7 @@ def _record_backfill_checkpoint(
             "consecutive_explicitly_empty_years": empty_years,
             "next_year": months[0].year - 1,
         }
+    progress()
     db.connection.execute(
         """
         insert into collection_checkpoint (
@@ -654,6 +695,7 @@ def _persist_record(
     source_revision: str,
     artifact_id: UUID,
     run: RunContext,
+    progress: ProgressCallback,
 ) -> None:
     dimensions_json = json.dumps(
         record.dimensions, ensure_ascii=False, sort_keys=True, default=str
@@ -662,6 +704,7 @@ def _persist_record(
     payload_json = json.dumps(
         record.source_payload_json, ensure_ascii=False, sort_keys=True, default=str
     )
+    progress()
     db.connection.execute(
         """
         insert into fact_tourism_demand (
@@ -696,7 +739,9 @@ def _record_status(
     status: str,
     detail: Mapping[str, object],
     run: RunContext,
+    progress: ProgressCallback,
 ) -> None:
+    progress()
     db.record_source_status(
         SourceStatus(
             source_id=spec.source_id,

@@ -7,7 +7,7 @@ import json
 import os
 import re
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
@@ -31,6 +31,12 @@ from westbusan.sources.odcloud import (
 )
 from westbusan.sources.registry import SourceRegistry
 from westbusan.storage import RawStore
+
+ProgressCallback = Callable[[], None]
+
+
+def _noop_progress() -> None:
+    """Default progress hook for callers that do not own a pipeline lease."""
 
 _REGION_BY_DISTRICT = {
     "강서구": "west",
@@ -180,8 +186,11 @@ def load_transport(
     run: RunContext,
     *,
     client: SafeHttpClient | None = None,
+    progress: ProgressCallback | None = None,
 ) -> LoadResult:
     """Load approved evidence; network collection is explicitly opt-in."""
+    heartbeat = progress or _noop_progress
+    heartbeat()
     if start > end:
         raise ValueError("transport start must be on or before end")
     files = FileSource(db.path.parent)
@@ -191,11 +200,16 @@ def load_transport(
     skipped: list[str] = []
     source_months: list[SourceMonthEvidence] = []
     for source_id in registry.ids(group="transport"):
+        heartbeat()
         spec = registry.get(source_id)
         if spec.source_type == "file":
-            outcome = _load_files(db, files, raw_store, spec, start, end, run)
+            outcome = _load_files(
+                db, files, raw_store, spec, start, end, run, heartbeat
+            )
         else:
-            outcome = _load_live(db, raw_store, spec, start, end, run, client)
+            outcome = _load_live(
+                db, raw_store, spec, start, end, run, client, heartbeat
+            )
         loaded += outcome.records_loaded
         artifacts += outcome.artifacts_written
         source_months.extend(outcome.source_months)
@@ -217,7 +231,9 @@ def _load_files(
     start: date,
     end: date,
     run: RunContext,
+    progress: ProgressCallback,
 ) -> _SourceOutcome:
+    progress()
     paths = files.discover(db.path.parent / "inbox", spec.source_id)
     if not paths:
         _status(
@@ -226,29 +242,55 @@ def _load_files(
             "SPEC_UNRESOLVED",
             {"reason": "no approved inbox file"},
             run,
+            progress,
         )
         return _SourceOutcome(0, 0, False)
     loaded = artifacts = 0
     represented: Counter[str] = Counter()
     for path in paths:
+        progress()
         artifact = files.ingest(path, spec.source_id, run)
+        progress()
         db.record_artifact(artifact)
         artifacts += 1
         try:
+            progress()
             rows = read_tabular_rows(path)
         except (OSError, ValueError) as error:
-            _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)}, run)
+            _status(
+                db,
+                spec.source_id,
+                "SCHEMA_CHANGED",
+                {"error": str(error)},
+                run,
+                progress,
+            )
             return _SourceOutcome(loaded, artifacts, False)
         if rows:
+            progress()
             raw_store.write_rows(artifact, rows)
         try:
             inserted, evidence = _persist_rows(
-                db, spec.source_id, rows, artifact, start, end, run
+                db,
+                spec.source_id,
+                rows,
+                artifact,
+                start,
+                end,
+                run,
+                progress=progress,
             )
             loaded += inserted
             represented.update(evidence)
         except (KeyError, TypeError, ValueError) as error:
-            _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)}, run)
+            _status(
+                db,
+                spec.source_id,
+                "SCHEMA_CHANGED",
+                {"error": str(error)},
+                run,
+                progress,
+            )
             return _SourceOutcome(loaded, artifacts, False)
     if not represented:
         _status(
@@ -257,6 +299,7 @@ def _load_files(
             "SPEC_UNRESOLVED",
             {"reason": "file has no records in the requested month range"},
             run,
+            progress,
         )
         return _SourceOutcome(loaded, artifacts, False)
     _status(
@@ -265,6 +308,7 @@ def _load_files(
         "READY",
         {"evidence_role": _evidence_role(spec.source_id), "native_grain": "source row"},
         run,
+        progress,
     )
     return _SourceOutcome(
         loaded,
@@ -285,19 +329,38 @@ def _load_live(
     end: date,
     run: RunContext,
     client: SafeHttpClient | None,
+    progress: ProgressCallback,
 ) -> _SourceOutcome:
+    progress()
     reason = _live_skip_reason(spec, db)
     if reason is not None:
-        _status(db, spec.source_id, "SPEC_UNRESOLVED", {"reason": reason}, run)
+        _status(
+            db,
+            spec.source_id,
+            "SPEC_UNRESOLVED",
+            {"reason": reason},
+            run,
+            progress,
+        )
         return _SourceOutcome(0, 0, False)
     try:
         if spec.source_id in _METRO_SOURCES:
+            progress()
             metadata_client = client or build_odcloud_metadata_client()
             dataset_client = client or build_odcloud_client(os.environ["ODCLOUD_API_KEY"])
             return _load_odcloud(
-                db, raw_store, spec, start, end, run, metadata_client, dataset_client
+                db,
+                raw_store,
+                spec,
+                start,
+                end,
+                run,
+                metadata_client,
+                dataset_client,
+                progress,
             )
         if spec.source_id in _OD_SOURCES:
+            progress()
             return _load_od(
                 db,
                 raw_store,
@@ -306,11 +369,21 @@ def _load_live(
                 end,
                 run,
                 client or SafeHttpClient(),
+                progress,
             )
     except AuthenticationError as error:
-        _status(db, spec.source_id, "AUTH_FAILED", {"error": str(error)}, run)
+        _status(
+            db, spec.source_id, "AUTH_FAILED", {"error": str(error)}, run, progress
+        )
     except QuotaError as error:
-        _status(db, spec.source_id, "QUOTA_EXCEEDED", {"error": str(error)}, run)
+        _status(
+            db,
+            spec.source_id,
+            "QUOTA_EXCEEDED",
+            {"error": str(error)},
+            run,
+            progress,
+        )
     except HttpStatusError as error:
         _status(
             db,
@@ -318,9 +391,17 @@ def _load_live(
             "AUTH_FAILED" if error.status_code in {401, 403} else "SCHEMA_CHANGED",
             {"error": str(error)},
             run,
+            progress,
         )
     except (SchemaError, ValueError, KeyError, TypeError) as error:
-        _status(db, spec.source_id, "SCHEMA_CHANGED", {"error": str(error)}, run)
+        _status(
+            db,
+            spec.source_id,
+            "SCHEMA_CHANGED",
+            {"error": str(error)},
+            run,
+            progress,
+        )
     return _SourceOutcome(0, 0, False)
 
 
@@ -333,7 +414,9 @@ def _load_odcloud(
     run: RunContext,
     metadata_client: SafeHttpClient,
     dataset_client: SafeHttpClient,
+    progress: ProgressCallback,
 ) -> _SourceOutcome:
+    progress()
     revision = discover_latest_dataset(
         _namespace(spec.url), metadata_client, portal_detail_url=spec.portal_detail_url
     )
@@ -341,6 +424,7 @@ def _load_odcloud(
     loaded = artifacts = 0
     represented: Counter[str] = Counter()
     if revision.portal_detail_raw_body is not None:
+        progress()
         metadata_artifact = raw_store.write(
             run,
             spec.source_id,
@@ -366,13 +450,23 @@ def _load_odcloud(
             ".json",
             revision.published_at,
         )
+        progress()
         db.record_artifact(metadata_artifact)
         artifacts += 1
-    for page in iter_revision_pages(
-        _namespace(spec.url), revision, dataset_client, page_size=spec.page_size
-    ):
+    pages = iter(
+        iter_revision_pages(
+            _namespace(spec.url), revision, dataset_client, page_size=spec.page_size
+        )
+    )
+    while True:
+        progress()
+        try:
+            page = next(pages)
+        except StopIteration:
+            break
         if revision.row_count is None:
             revision = replace(revision, row_count=page.total_count)
+        progress()
         artifact = raw_store.write(
             run,
             spec.source_id,
@@ -402,9 +496,11 @@ def _load_odcloud(
             ".json",
             revision.published_at,
         )
+        progress()
         db.record_artifact(artifact)
         artifacts += 1
         if page.rows:
+            progress()
             raw_store.write_rows(artifact, page.rows)
         inserted, evidence = _persist_rows(
             db,
@@ -415,6 +511,7 @@ def _load_odcloud(
             end,
             run,
             source_revision=source_revision,
+            progress=progress,
         )
         loaded += inserted
         represented.update(evidence)
@@ -425,6 +522,7 @@ def _load_odcloud(
             "SPEC_UNRESOLVED",
             {"reason": "snapshot has no records in the requested month range"},
             run,
+            progress,
         )
         return _SourceOutcome(loaded, artifacts, False)
     _status(
@@ -447,6 +545,7 @@ def _load_odcloud(
             "schema_fingerprint": revision.schema_fingerprint,
         },
         run,
+        progress,
     )
     return _SourceOutcome(
         loaded,
@@ -467,6 +566,7 @@ def _load_od(
     end: date,
     run: RunContext,
     client: SafeHttpClient,
+    progress: ProgressCallback,
 ) -> _SourceOutcome:
     if spec is None:
         return _SourceOutcome(0, 0, False)
@@ -475,10 +575,18 @@ def _load_od(
     pager_spec = replace(spec, url=spec.endpoint_url, operation=None)
     evidence: list[SourceMonthEvidence] = []
     for month in _iter_months(start, end):
+        progress()
         parameters = {**dict(spec.required_parameters), "opr_ym": month.replace("-", "")}
         represented = 0
         explicit_empty = False
-        for page in pager.iter_pages(pager_spec, parameters, include_empty=True):
+        pages = iter(pager.iter_pages(pager_spec, parameters, include_empty=True))
+        while True:
+            progress()
+            try:
+                page = next(pages)
+            except StopIteration:
+                break
+            progress()
             artifact = raw_store.write(
                 run,
                 spec.source_id,
@@ -494,12 +602,21 @@ def _load_od(
                 ".json",
                 _month_date(month),
             )
+            progress()
             db.record_artifact(artifact)
             artifacts += 1
             if page.rows:
+                progress()
                 raw_store.write_rows(artifact, page.rows)
             inserted, months = _persist_rows(
-                db, spec.source_id, page.rows, artifact, start, end, run
+                db,
+                spec.source_id,
+                page.rows,
+                artifact,
+                start,
+                end,
+                run,
+                progress=progress,
             )
             loaded += inserted
             represented += months.get(month, 0)
@@ -511,9 +628,23 @@ def _load_od(
                 )
             )
     if evidence and all(item.explicit_empty for item in evidence):
-        _status(db, spec.source_id, "EMPTY", {"operation": spec.operation}, run)
+        _status(
+            db,
+            spec.source_id,
+            "EMPTY",
+            {"operation": spec.operation},
+            run,
+            progress,
+        )
     else:
-        _status(db, spec.source_id, "READY", {"operation": spec.operation}, run)
+        _status(
+            db,
+            spec.source_id,
+            "READY",
+            {"operation": spec.operation},
+            run,
+            progress,
+        )
     return _SourceOutcome(loaded, artifacts, True, tuple(evidence))
 
 
@@ -527,11 +658,14 @@ def _persist_rows(
     run: RunContext,
     *,
     source_revision: str | None = None,
+    progress: ProgressCallback,
 ) -> tuple[int, Counter[str]]:
     loaded = 0
     represented: Counter[str] = Counter()
     for row in rows:
+        progress()
         for record in normalize_transport_rows(source_id, row):
+            progress()
             months = tuple(
                 month
                 for month in _record_months(record.period)
@@ -540,7 +674,12 @@ def _persist_rows(
             if not months:
                 continue
             inserted = _persist_record(
-                db, record, artifact, run, source_revision=source_revision
+                db,
+                record,
+                artifact,
+                run,
+                source_revision=source_revision,
+                progress=progress,
             )
             loaded += int(inserted)
             represented.update(months)
@@ -730,9 +869,11 @@ def _persist_record(
     run: RunContext,
     *,
     source_revision: str | None = None,
+    progress: ProgressCallback,
 ) -> bool:
     inserted = False
     for measure in record.measures:
+        progress()
         dimensions = {
             **record.dimensions,
             **measure.dimensions,
@@ -740,6 +881,7 @@ def _persist_record(
         }
         dimension_json = json.dumps(dimensions, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         payload = json.dumps(record.source_payload_json, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+        progress()
         rows = db.query(
             """
             insert into fact_transport_flow (
@@ -955,7 +1097,9 @@ def _status(
     status: str,
     detail: Mapping[str, object],
     run: RunContext,
+    progress: ProgressCallback,
 ) -> None:
+    progress()
     db.record_source_status(
         SourceStatus(source_id, datetime.now(UTC), status, detail, run.run_id)
     )

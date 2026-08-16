@@ -9,6 +9,7 @@ import os
 import re
 import zipfile
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,6 +23,12 @@ from westbusan.models import RunContext, SourceStatus
 from westbusan.sources.datagokr import DataGoKrPager
 from westbusan.sources.registry import SourceRegistry
 from westbusan.storage import RawStore
+
+ProgressCallback = Callable[[], None]
+
+
+def _noop_progress() -> None:
+    """Default progress hook for callers that do not own a pipeline lease."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,8 +123,11 @@ def collect_buildings_for_licenses(
     run: RunContext,
     *,
     raw_store: RawStore | None = None,
+    progress: ProgressCallback | None = None,
 ) -> BuildingCollectionResult:
     """Enrich only licensed accommodation parcels; duplicate parcels share API calls."""
+    heartbeat = progress or _noop_progress
+    heartbeat()
     service_key = os.getenv("DATA_GO_KR_SERVICE_KEY")
     if not service_key:
         return BuildingCollectionResult(parcel_queries=0, building_rows=0, bridge_rows=0)
@@ -131,6 +141,7 @@ def collect_buildings_for_licenses(
         where lot_address is not null and lot_address <> ''
         """
     ):
+        heartbeat()
         query = parcel_query(
             NormalizedAddress(value=str(lot_address), district=None, is_busan=True), db
         )
@@ -144,11 +155,23 @@ def collect_buildings_for_licenses(
     building_rows = 0
     bridge_rows = 0
     for parcel_hash, query in queries.items():
+        heartbeat()
         responses = _parcel_responses(
-            pager, registry, query, db, run, raw_store, service_key
+            pager,
+            registry,
+            query,
+            db,
+            run,
+            raw_store,
+            service_key,
+            heartbeat,
         )
         _store_closed_register_events(
-            db, run, parcel_hash, responses["closed_register_basis_outline"]
+            db,
+            run,
+            parcel_hash,
+            responses["closed_register_basis_outline"],
+            heartbeat,
         )
         titles = [
             normalize_building_title(row)
@@ -162,15 +185,24 @@ def collect_buildings_for_licenses(
             for row in rows
         ]
         for title in titles:
+            heartbeat()
             if title.building_id is None:
                 continue
             record = title
             for extra in _parcel_enrichments(title, titles, enrichments):
                 record = _merge(record, extra)
-            _store_building(db, record, parcel_hash, run, responses)
+            _store_building(db, record, parcel_hash, run, responses, heartbeat)
             building_rows += 1
             for source_id, source_record_id in licenses_by_parcel[parcel_hash]:
-                if _link_license(db, source_id, source_record_id, record.building_id, parcel_hash):
+                heartbeat()
+                if _link_license(
+                    db,
+                    source_id,
+                    source_record_id,
+                    record.building_id,
+                    parcel_hash,
+                    heartbeat,
+                ):
                     bridge_rows += 1
     return BuildingCollectionResult(len(queries), building_rows, bridge_rows)
 
@@ -183,6 +215,7 @@ def _parcel_responses(
     run: RunContext,
     raw_store: RawStore,
     service_key: str,
+    progress: ProgressCallback,
 ) -> dict[str, list[dict[str, object]]]:
     source_ids = (
         "building_register_title",
@@ -193,16 +226,25 @@ def _parcel_responses(
     )
     responses: dict[str, list[dict[str, object]]] = {}
     for source_id in source_ids:
+        progress()
         spec = registry.get(source_id)
         rows: list[dict[str, object]] = []
-        for page in pager.iter_url(
-            spec.endpoint_url,
-            query.parameters,
-            page_size=spec.page_size,
-            format_parameter=spec.format_parameter,
-            format_value=spec.format_value,
-            include_empty=True,
-        ):
+        pages = iter(
+            pager.iter_url(
+                spec.endpoint_url,
+                query.parameters,
+                page_size=spec.page_size,
+                format_parameter=spec.format_parameter,
+                format_value=spec.format_value,
+                include_empty=True,
+            )
+        )
+        while True:
+            progress()
+            try:
+                page = next(pages)
+            except StopIteration:
+                break
             request = {
                 **query.parameters,
                 "endpoint": spec.endpoint_url,
@@ -215,6 +257,7 @@ def _parcel_responses(
                 spec.format_parameter: spec.format_value,
                 "serviceKey": service_key,
             }
+            progress()
             artifact = raw_store.write(
                 run,
                 source_id,
@@ -223,9 +266,20 @@ def _parcel_responses(
                 ".json",
                 source_date=run.started_at.date(),
             )
+            progress()
             db.record_artifact(artifact)
-            _record_building_page(db, run, source_id, spec.operation or "", query, page, artifact.artifact_id)
+            _record_building_page(
+                db,
+                run,
+                source_id,
+                spec.operation or "",
+                query,
+                page,
+                artifact.artifact_id,
+                progress,
+            )
             if page.rows:
+                progress()
                 raw_store.write_rows(artifact, page.rows)
             rows.extend(page.rows)
         responses[source_id] = rows
@@ -240,8 +294,10 @@ def _record_building_page(
     query: ParcelQuery,
     page,
     artifact_id,
+    progress: ProgressCallback,
 ) -> None:
     """Persist one raw building response as its own run-scoped reconciliation target."""
+    progress()
     db.connection.execute(
         """
         insert into staging_building_response (
@@ -266,6 +322,7 @@ def _record_building_page(
             artifact_id,
         ],
     )
+    progress()
     db.record_source_status(
         SourceStatus(
             source_id=source_id,
@@ -287,9 +344,11 @@ def _store_building(
     parcel_hash: str,
     run: RunContext,
     responses: dict[str, list[dict[str, object]]],
+    progress: ProgressCallback,
 ) -> None:
     assert record.building_id is not None
     building_uuid = uuid5(NAMESPACE_URL, record.building_id)
+    progress()
     db.connection.execute(
         """
         insert into dim_building (building_id, building_key, road_address, lot_address)
@@ -300,6 +359,7 @@ def _store_building(
         [building_uuid, record.building_id, record.road_address, record.lot_address],
     )
     payload = json.dumps(responses, ensure_ascii=False, sort_keys=True, default=str)
+    progress()
     db.connection.execute(
         """
         insert into staging_building_snapshot (
@@ -344,7 +404,12 @@ def _store_building(
 
 
 def _link_license(
-    db: Database, source_id: str, source_record_id: str, building_key: str, parcel_hash: str
+    db: Database,
+    source_id: str,
+    source_record_id: str,
+    building_key: str,
+    parcel_hash: str,
+    progress: ProgressCallback,
 ) -> bool:
     building_uuid = uuid5(NAMESPACE_URL, building_key)
     existing = db.query(
@@ -356,6 +421,7 @@ def _link_license(
     )
     if existing:
         return False
+    progress()
     db.connection.execute(
         """
         insert into bridge_license_building (source_id, source_record_id, building_id, parcel_hash)
@@ -383,6 +449,7 @@ def _store_closed_register_events(
     run: RunContext,
     parcel_hash: str,
     rows: list[dict[str, object]],
+    progress: ProgressCallback,
 ) -> None:
     """Retain closed-register history without asserting it identifies a current title."""
     for row in rows:
@@ -394,6 +461,7 @@ def _store_closed_register_events(
             NAMESPACE_URL,
             f"closed-register:{parcel_hash}:{record.building_id or source_payload}",
         )
+        progress()
         db.connection.execute(
             """
             insert into fact_building_event (
