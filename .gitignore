@@ -1,10 +1,12 @@
 .worktrees/
 .superpowers/
 .env
+.env.local
 .venv
 data
 logs
 *.duckdb
+*.duckdb.wal
 __pycache__
 .pytest_cache
 .ruff_cache

@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
+import shutil
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -1533,8 +1536,8 @@ def export_current(db: Database, data_dir: Path, export_date: date) -> tuple[Pat
     run_id = current_published_run(db)
     if run_id is None:
         raise ValueError("there is no current published run to export")
-    directory = Path(data_dir) / "exports" / f"export_date={export_date.isoformat()}"
-    directory.mkdir(parents=True, exist_ok=True)
+    exports_dir = Path(data_dir) / "exports"
+    directory = exports_dir / f"export_date={export_date.isoformat()}"
     datasets = {
         "facility_current": (
             "select * from mart_facility_current where run_id = ? order by facility_id",
@@ -1561,15 +1564,28 @@ def export_current(db: Database, data_dir: Path, export_date: date) -> tuple[Pat
             [run_id],
         ),
     }
-    paths: list[Path] = []
-    for name, (query, parameters) in datasets.items():
-        table = db.connection.execute(query, parameters).to_arrow_table()
-        csv_path = directory / f"{name}.csv"
-        parquet_path = directory / f"{name}.parquet"
-        arrow_csv.write_csv(table, csv_path)
-        parquet.write_table(table, parquet_path)
-        paths.extend((csv_path, parquet_path))
-    return tuple(paths)
+    expected_names = tuple(
+        filename
+        for name in datasets
+        for filename in (f"{name}.csv", f"{name}.parquet")
+    )
+    if directory.exists():
+        existing = tuple(directory / name for name in expected_names)
+        if all(path.is_file() for path in existing):
+            return existing
+        raise RuntimeError(f"incomplete export bundle already exists: {directory}")
+    exports_dir.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=".export-", dir=exports_dir))
+    try:
+        for name, (query, parameters) in datasets.items():
+            table = db.connection.execute(query, parameters).to_arrow_table()
+            arrow_csv.write_csv(table, temporary / f"{name}.csv")
+            parquet.write_table(table, temporary / f"{name}.parquet")
+        os.replace(str(temporary), str(directory))
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return tuple(directory / name for name in expected_names)
 
 
 __all__ = [

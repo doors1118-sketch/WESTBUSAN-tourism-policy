@@ -183,6 +183,29 @@ def test_stale_owner_cannot_delete_facilities_or_pending_reviews_after_takeover(
     ) == before
 
 
+def test_export_failure_never_exposes_a_partial_bundle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches consumers discovering half of a dated export after a write failure."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    published = pipeline.daily(date(2026, 8, 16))
+    assert published.published is True
+
+    def fail_parquet(*_args, **_kwargs):
+        raise RuntimeError("parquet write failed")
+
+    monkeypatch.setattr(orchestrator_module.parquet, "write_table", fail_parquet)
+    export_date = date(2026, 8, 18)
+    with pytest.raises(RuntimeError, match="parquet write failed"):
+        export_current(pipeline.db, pipeline.settings.data_dir, export_date)
+
+    assert not (
+        pipeline.settings.data_dir
+        / "exports"
+        / f"export_date={export_date.isoformat()}"
+    ).exists()
+
+
 def test_prepare_run_separates_utc_execution_time_from_business_date(
     tmp_path: Path,
 ) -> None:

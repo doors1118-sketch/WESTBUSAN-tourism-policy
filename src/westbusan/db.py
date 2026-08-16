@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -28,16 +29,43 @@ class Database:
             )
             """
         )
+        self.connection.execute(
+            "alter table schema_migrations add column if not exists checksum varchar"
+        )
         for migration_path in sorted(self.migrations_dir.glob("*.sql")):
             version = migration_path.stem
+            body = migration_path.read_bytes()
+            checksum = hashlib.sha256(body).hexdigest()
             applied = self.connection.execute(
-                "select 1 from schema_migrations where version = ?", [version]
+                "select checksum from schema_migrations where version = ?", [version]
             ).fetchone()
-            if applied is None:
-                self.connection.execute(migration_path.read_text(encoding="utf-8"))
+            if applied is not None:
+                if applied[0] is None:
+                    self.connection.execute(
+                        "update schema_migrations set checksum = ? where version = ?",
+                        [checksum, version],
+                    )
+                    continue
+                if str(applied[0]) != checksum:
+                    raise RuntimeError(
+                        f"migration checksum mismatch for applied version {version}"
+                    )
+                continue
+            began = False
+            try:
+                self.connection.execute("begin transaction")
+                began = True
+                self.connection.execute(body.decode("utf-8"))
                 self.connection.execute(
-                    "insert into schema_migrations (version) values (?)", [version]
+                    "insert into schema_migrations (version, checksum) values (?, ?)",
+                    [version, checksum],
                 )
+                self.connection.execute("commit")
+                began = False
+            except Exception:
+                if began:
+                    self.connection.execute("rollback")
+                raise
 
     def query(self, sql: str, parameters: list[object] | None = None) -> list[tuple[Any, ...]]:
         return self.connection.execute(sql, parameters or []).fetchall()
