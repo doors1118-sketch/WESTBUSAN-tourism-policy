@@ -142,6 +142,64 @@ def test_prepare_run_rolls_back_after_active_writer_error(tmp_path: Path) -> Non
     second.db.connection.execute("rollback")
 
 
+def test_prepare_run_rejects_non_rebuildable_current_publication(
+    tmp_path: Path,
+) -> None:
+    """Collection cannot begin by inheriting a current pointer invalidated by upgrade."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    unsafe = uuid4()
+    pipeline.db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'daily', now(), 'PUBLISHED', '2026-08-15', false)""",
+        [unsafe],
+    )
+    pipeline.db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [unsafe, unsafe],
+    )
+    pipeline.db.connection.execute(
+        """insert into publication_state (publication_key, published_run_id)
+           values ('current', ?)""",
+        [unsafe],
+    )
+
+    with pytest.raises(RuntimeError, match="non-rebuildable"):
+        pipeline._prepare_run(
+            "fixture", "daily", date(2026, 8, 16), "unsafe-publication"
+        )
+
+    assert pipeline.db.scalar("select count(*) from pipeline_run") == 1
+
+
+def test_prepare_run_rejects_same_logical_current_publication_after_invalidation(
+    tmp_path: Path,
+) -> None:
+    """The published-run recovery shortcut must enforce the same lineage gate."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    run, _ = pipeline._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "invalidated-current"
+    )
+    assert run is not None
+    pipeline.db.connection.execute(
+        """update pipeline_run
+           set status = 'PUBLISHED', rebuildable = false where run_id = ?""",
+        [run.run_id],
+    )
+    pipeline.db.connection.execute(
+        """insert into publication_state (publication_key, published_run_id)
+           values ('current', ?)""",
+        [run.run_id],
+    )
+
+    with pytest.raises(RuntimeError, match="non-rebuildable"):
+        pipeline._prepare_run(
+            "fixture", "daily", date(2026, 8, 16), "invalidated-current"
+        )
+
+
 def test_fence_touch_conflicts_with_two_connection_takeover(tmp_path: Path) -> None:
     """A protected transaction must write the lease row that takeover replaces."""
     first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))

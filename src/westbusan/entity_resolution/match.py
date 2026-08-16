@@ -521,7 +521,9 @@ def _building_ids(db: Database, run_id: UUID) -> dict[str, set[UUID]]:
                     from run_license_building_snapshot as snapshot
                     join pipeline_run as producer
                       on producer.run_id = snapshot.producer_run_id
+                    join pipeline_run as target on target.run_id = ?
                     where snapshot.producer_run_id in ({placeholders})
+                      and producer.business_date <= target.business_date
                 )
                 select snapshot.source_id, snapshot.source_record_id,
                        observation.building_id
@@ -531,7 +533,7 @@ def _building_ids(db: Database, run_id: UUID) -> dict[str, set[UUID]]:
                  and observation.source_id = snapshot.source_id
                  and observation.source_record_id = snapshot.source_record_id
                 where snapshot.snapshot_rank = 1""",
-            list(visible_runs),
+            [run_id, *visible_runs],
         )
     else:
         rows = db.query(

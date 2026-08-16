@@ -2,10 +2,112 @@ from datetime import date
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
+import westbusan.entity_resolution.match as match_module
 from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.db import Database
 from westbusan.entity_resolution.match import build_facilities
+
+
+@pytest.mark.parametrize(
+    ("ancestor_status", "ancestor_date", "ancestor_rebuildable"),
+    (
+        ("PUBLISHED", "2026-08-15", False),
+        ("BLOCKED", "2026-08-15", True),
+        ("PUBLISHED", "2026-08-17", True),
+    ),
+)
+def test_build_rejects_invalid_transitive_input_lineage(
+    tmp_path: Path,
+    ancestor_status: str,
+    ancestor_date: str,
+    ancestor_rebuildable: bool,
+) -> None:
+    """A target cannot launder unsafe, blocked, or future observations."""
+    db = Database(tmp_path / "invalid-lineage.duckdb", Path("sql"))
+    db.migrate()
+    target, ancestor, unsafe_input = uuid4(), uuid4(), uuid4()
+    db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'daily', now(), 'RUNNING', '2026-08-16', true),
+                    (?, 'daily', now(), 'PUBLISHED', '2026-08-15', true),
+                    (?, 'daily', now(), ?, ?, ?)""",
+        [
+            target,
+            ancestor,
+            unsafe_input,
+            ancestor_status,
+            ancestor_date,
+            ancestor_rebuildable,
+        ],
+    )
+    db.connection.execute(
+        """insert into pipeline_run_input (run_id, input_run_id)
+           values (?, ?), (?, ?), (?, ?), (?, ?), (?, ?)""",
+        [
+            target,
+            target,
+            target,
+            ancestor,
+            ancestor,
+            ancestor,
+            ancestor,
+            unsafe_input,
+            unsafe_input,
+            unsafe_input,
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="input lineage"):
+        build_facilities(db, target)
+
+
+def test_building_snapshot_ranking_excludes_future_visible_producers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The SQL cutoff remains fail-closed even if upstream lineage validation regresses."""
+    db = Database(tmp_path / "future-building-snapshot.duckdb", Path("sql"))
+    db.migrate()
+    target, future = uuid4(), uuid4()
+    for run_id, business_date in (
+        (target, "2026-08-14"),
+        (future, "2026-08-16"),
+    ):
+        db.connection.execute(
+            """insert into pipeline_run (
+                   run_id, mode, started_at, status, business_date
+               ) values (?, 'daily', now(), 'PUBLISHED', ?)""",
+            [run_id, business_date],
+        )
+    db.connection.execute(
+        """insert into pipeline_run_input (run_id, input_run_id)
+           values (?, ?), (?, ?)""",
+        [target, target, target, future],
+    )
+    b1, b2 = uuid4(), uuid4()
+    for producer, building in ((target, b1), (future, b2)):
+        db.connection.execute(
+            """insert into run_license_building_snapshot (
+                   producer_run_id, source_id, source_record_id
+               ) values (?, 'lodgings', 'L1')""",
+            [producer],
+        )
+        db.connection.execute(
+            """insert into run_license_building_observation (
+                   run_id, source_id, source_record_id, building_id, parcel_hash
+               ) values (?, 'lodgings', 'L1', ?, 'parcel')""",
+            [producer, building],
+        )
+    monkeypatch.setattr(match_module, "ensure_run_rebuildable", lambda *_: None)
+
+    assert match_module._building_ids(db, target) == {"lodgings:L1": {b1}}
+    db.connection.execute(
+        "delete from run_license_building_observation where run_id = ?", [future]
+    )
+    assert match_module._building_ids(db, target) == {"lodgings:L1": {b1}}
 
 
 def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_path: Path) -> None:
@@ -316,16 +418,16 @@ def test_building_observation_uses_latest_complete_snapshot_and_explicit_empty(
     db = Database(tmp_path / "building-snapshot.duckdb", Path("sql"))
     db.migrate()
     first, corrected, empty = uuid4(), uuid4(), uuid4()
-    for run_id, business_date in (
-        (first, "2026-08-14"),
-        (corrected, "2026-08-15"),
-        (empty, "2026-08-16"),
+    for run_id, business_date, status in (
+        (first, "2026-08-14", "PUBLISHED"),
+        (corrected, "2026-08-15", "PUBLISHED"),
+        (empty, "2026-08-16", "RUNNING"),
     ):
         db.connection.execute(
             """insert into pipeline_run (
                    run_id, mode, started_at, status, business_date
-               ) values (?, 'daily', now(), 'RUNNING', ?)""",
-            [run_id, business_date],
+               ) values (?, 'daily', now(), ?, ?)""",
+            [run_id, status, business_date],
         )
         for input_run_id in (first, corrected, empty):
             if input_run_id == run_id or (

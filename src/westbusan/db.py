@@ -122,13 +122,62 @@ class Database:
 
 
 def ensure_run_rebuildable(db: Database, run_id: UUID) -> None:
-    """Reject legacy runs whose immutable input visibility was never captured."""
-    rows = db.query("select rebuildable from pipeline_run where run_id = ?", [run_id])
-    if rows and rows[0][0] is not True:
+    """Reject a target if any transitive input lacks approved point-in-time lineage."""
+    target_rows = db.query(
+        "select rebuildable, business_date from pipeline_run where run_id = ?",
+        [run_id],
+    )
+    if not target_rows:
+        return
+    rebuildable, target_date = target_rows[0]
+    if rebuildable is not True:
         raise RuntimeError(
             f"legacy run {run_id} is non-rebuildable; run "
             f"`python -m westbusan.cli migrate-legacy --run-id {run_id}`"
         )
+    visited: set[UUID] = set()
+    active: set[UUID] = set()
+
+    def validate(parent_run_id: UUID) -> None:
+        if parent_run_id in active:
+            raise RuntimeError(
+                f"input lineage for run {run_id} contains a cycle at {parent_run_id}"
+            )
+        if parent_run_id in visited:
+            return
+        active.add(parent_run_id)
+        inputs = db.query(
+            """select lineage.input_run_id, input.rebuildable, input.status,
+                      input.business_date
+               from pipeline_run_input as lineage
+               left join pipeline_run as input
+                 on input.run_id = lineage.input_run_id
+               where lineage.run_id = ?""",
+            [parent_run_id],
+        )
+        for input_run_id, input_rebuildable, input_status, input_date in inputs:
+            if input_run_id == parent_run_id:
+                continue
+            if input_rebuildable is not True:
+                raise RuntimeError(
+                    f"input lineage for run {run_id} contains non-rebuildable "
+                    f"run {input_run_id}"
+                )
+            if input_status not in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}:
+                raise RuntimeError(
+                    f"input lineage for run {run_id} contains unapproved "
+                    f"{input_status or 'missing'} run {input_run_id}"
+                )
+            if target_date is None or input_date is None or input_date > target_date:
+                raise RuntimeError(
+                    f"input lineage for run {run_id} contains future or undated "
+                    f"run {input_run_id}"
+                )
+            validate(input_run_id)
+        active.remove(parent_run_id)
+        visited.add(parent_run_id)
+
+    validate(run_id)
 
 
 def migrate_legacy_run(
@@ -282,6 +331,7 @@ def migrate_legacy_run(
         db.connection.execute(
             "update pipeline_run set rebuildable = true where run_id = ?", [run_id]
         )
+        ensure_run_rebuildable(db, run_id)
         _record_legacy_audit(
             db, run_id, operator, justification, evidence, "approved"
         )
@@ -381,6 +431,24 @@ def _legacy_evidence_counts(db: Database, run_id: UUID) -> dict[str, int]:
                 [run_id, run_id],
             )
         ),
+        "missing_linked_building_revisions": int(
+            db.scalar(
+                """select count(*)
+                   from run_facility_building as link
+                   join dim_building as building
+                     on building.building_id = link.building_id
+                   join pipeline_run as target on target.run_id = ?
+                   where link.run_id = ? and not exists (
+                     select 1 from staging_building_revision as revision
+                     join pipeline_run_input as lineage
+                       on lineage.run_id = ?
+                      and lineage.input_run_id = revision.version_run_id
+                     where revision.building_id = building.building_key
+                       and revision.observed_on <= target.business_date
+                   )""",
+                [run_id, run_id, run_id],
+            )
+        ),
         "missing_tourism_keys": _missing_fact_keys(
             db, "fact_tourism_demand", run_id
         ),
@@ -452,9 +520,14 @@ def _legacy_evidence_counts(db: Database, run_id: UUID) -> dict[str, int]:
             db.scalar(
                 """select count(*) from pipeline_run_input as lineage
                    join pipeline_run as input on input.run_id = lineage.input_run_id
-                   where lineage.run_id = ? and lineage.input_run_id <> ?
-                     and input.rebuildable is not true""",
-                [run_id, run_id],
+                   join pipeline_run as target on target.run_id = ?
+                   where lineage.run_id = ? and lineage.input_run_id <> ? and (
+                     input.rebuildable is not true
+                     or input.status not in ('PUBLISHED', 'PUBLISHED_WITH_WARNINGS')
+                     or input.business_date is null
+                     or input.business_date > target.business_date
+                   )""",
+                [run_id, run_id, run_id],
             )
         ),
     }

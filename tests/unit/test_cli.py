@@ -299,7 +299,7 @@ def test_migrate_legacy_command_approves_only_backfilled_self_lineage(
         """insert into staging_building_snapshot_version (
                version_run_id, building_id, observed_on, parcel_hash,
                is_closed, source_payload_json
-           ) values (?, 'legacy-register-building', '2026-08-16',
+           ) values (?, 'legacy-building', '2026-08-16',
                      'legacy-parcel', false, '{}')""",
         [run_id],
     )
@@ -498,6 +498,82 @@ def test_migrate_legacy_rejects_unrecoverable_base_only_license_history(
         )
     )
     assert evidence["missing_license_base_revisions"] == 1
+
+
+def test_migrate_legacy_rejects_linked_building_without_visible_revision(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A dim-building link alone is not historical building-register evidence."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    run_id, facility_id, building_id = uuid4(), uuid4(), uuid4()
+    pipeline.db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'legacy', now(), 'BLOCKED', '2026-08-16', false)""",
+        [run_id],
+    )
+    load_license_snapshot(
+        pipeline.db,
+        [
+            normalize_license(
+                "lodgings",
+                {
+                    "MNG_NO": "linked-no-revision",
+                    "BPLC_NM": "건축물이력유실호텔",
+                    "ROAD_NM_ADDR": "부산광역시 사하구 길 3",
+                },
+                date(2026, 8, 16),
+            )
+        ],
+        run_id,
+    )
+    pipeline.db.connection.execute(
+        "insert into run_facility values (?, ?, '호텔', '사하구', 'west')",
+        [run_id, facility_id],
+    )
+    pipeline.db.connection.execute(
+        """insert into run_facility_license (
+               run_id, facility_id, source_id, source_record_id, evidence_json
+           ) values (?, ?, 'lodgings', 'linked-no-revision', '{}')""",
+        [run_id, facility_id],
+    )
+    pipeline.db.connection.execute(
+        """insert into dim_building (building_id, building_key)
+           values (?, 'unversioned-building')""",
+        [building_id],
+    )
+    pipeline.db.connection.execute(
+        "insert into run_facility_building values (?, ?, ?)",
+        [run_id, facility_id, building_id],
+    )
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "migrate-legacy",
+            "--run-id",
+            str(run_id),
+            "--operator",
+            "tester",
+            "--reason",
+            "linked building audit",
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+
+    assert result.exit_code == 1
+    evidence = json.loads(
+        pipeline.db.scalar(
+            "select evidence_json from legacy_migration_audit where run_id = ?",
+            [run_id],
+        )
+    )
+    assert evidence["missing_linked_building_revisions"] == 1
 
 
 def test_export_requires_explicit_rebuild_for_mismatched_same_date_bundle(

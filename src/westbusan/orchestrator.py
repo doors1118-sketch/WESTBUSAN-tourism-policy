@@ -25,7 +25,7 @@ from westbusan.accommodation.normalize import normalize_license
 from westbusan.analytics.build import build_marts, mart_manifest_is_valid
 from westbusan.buildings.load import collect_buildings_for_licenses
 from westbusan.config import PolicyConfig, RegionConfig, Settings
-from westbusan.db import Database
+from westbusan.db import Database, ensure_run_rebuildable
 from westbusan.demand.load import load_tourism_demand
 from westbusan.entity_resolution.match import build_facilities
 from westbusan.http import (
@@ -495,6 +495,17 @@ class Pipeline:
                     ) = rows[0]
                     started_at = datetime.fromisoformat(str(prior_started_at))
                     if current_published_run(self.db) == prior_run_id:
+                        ensure_run_rebuildable(self.db, prior_run_id)
+                        if (
+                            str(prior_status)
+                            not in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}
+                            or prior_business_date is None
+                            or prior_business_date > as_of
+                        ):
+                            raise RuntimeError(
+                                f"current publication {prior_run_id} is not an "
+                                "eligible input lineage run"
+                            )
                         self.db.connection.execute("commit")
                         began = False
                         return None, self._recover_current_publication(
@@ -566,6 +577,24 @@ class Pipeline:
                     as_of,
                 )
                 inherited_run_id = current_published_run(self.db)
+                if inherited_run_id is not None:
+                    ensure_run_rebuildable(self.db, inherited_run_id)
+                    inherited_rows = self.db.query(
+                        """select status, business_date from pipeline_run
+                           where run_id = ?""",
+                        [inherited_run_id],
+                    )
+                    if (
+                        not inherited_rows
+                        or inherited_rows[0][0]
+                        not in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}
+                        or inherited_rows[0][1] is None
+                        or inherited_rows[0][1] > as_of
+                    ):
+                        raise RuntimeError(
+                            f"current publication {inherited_run_id} is not an "
+                            "eligible input lineage run"
+                        )
                 writer_epoch = self._acquire_global_writer(
                     run.run_id, now, lease_expires
                 )
