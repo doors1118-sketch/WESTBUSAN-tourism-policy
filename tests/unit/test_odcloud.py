@@ -5,27 +5,38 @@ import httpx
 
 from westbusan.http import SafeHttpClient
 from westbusan.sources.odcloud import (
+    build_odcloud_client,
     discover_latest_dataset,
     iter_revision_pages,
     select_latest_revision,
 )
 
 
+def test_odcloud_client_sends_the_key_in_authorization_header_not_a_query_string() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["Authorization"] == "test-key"
+        assert "test-key" not in str(request.url)
+        return httpx.Response(200, json={"data": [], "totalCount": 0})
+
+    client = build_odcloud_client("test-key", transport=httpx.MockTransport(handler))
+
+    assert client.get("https://api.odcloud.kr/api/example", {"page": 1}).status_code == 200
+
+
 def test_select_latest_revision_uses_publication_date_then_identifier() -> None:
-    revisions = json.loads(
-        Path("tests/fixtures/odcloud/dataset_list.json").read_text(encoding="utf-8")
-    )["data"]
+    revisions = json.loads(Path("tests/fixtures/odcloud/swagger.json").read_text(encoding="utf-8"))
 
     revision = select_latest_revision(revisions)
 
-    assert revision.uddi == "5d5bc9c4-new-b"
-    assert revision.published_at.isoformat() == "2026-07-10"
-    assert revision.row_count == 16
+    assert revision.uddi == "99999999-9999-9999-9999-999999999999"
+    assert revision.published_at.isoformat() == "2024-07-31"
+    assert revision.path == "/3057229/v1/uddi:99999999-9999-9999-9999-999999999999"
+    assert revision.row_count is None
     assert len(revision.schema_fingerprint) == 64
 
 
 def test_discover_latest_dataset_reads_metadata_without_assuming_revision_order() -> None:
-    body = Path("tests/fixtures/odcloud/dataset_list.json").read_bytes()
+    body = Path("tests/fixtures/odcloud/swagger.json").read_bytes()
     client = SafeHttpClient(
         httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, content=body))),
         sleeper=lambda _: None,
@@ -33,13 +44,22 @@ def test_discover_latest_dataset_reads_metadata_without_assuming_revision_order(
 
     revision = discover_latest_dataset("3057229/v1", client)
 
-    assert revision.uddi == "5d5bc9c4-new-b"
-    assert revision.metadata["dataCount"] == 16
+    assert revision.uddi == "99999999-9999-9999-9999-999999999999"
+    assert revision.metadata["summary"] == "부산교통공사_시간대별 승하차인원_20240731"
 
 
 def test_revision_pager_keeps_each_selected_uddi_page_at_the_source_grain() -> None:
     revision = select_latest_revision(
-        [{"uddi": "chosen", "published_at": "2026-07-10", "row_count": 2}]
+        {
+            "paths": {
+                "/3057229/v1/uddi:chosen": {
+                    "get": {
+                        "summary": "부산교통공사_시간대별 승하차인원_20260710",
+                        "responses": {"200": {"schema": {"$ref": "#/definitions/chosen"}}},
+                    }
+                }
+            }
+        }
     )
     calls: list[dict[str, str]] = []
 
@@ -64,6 +84,35 @@ def test_revision_pager_keeps_each_selected_uddi_page_at_the_source_grain() -> N
 
     assert [page.rows[0]["count"] for page in pages] == [1, 2]
     assert calls == [
-        {"uddi": "chosen", "page": "1", "perPage": "1"},
-        {"uddi": "chosen", "page": "2", "perPage": "1"},
+        {"page": "1", "perPage": "1", "returnType": "JSON"},
+        {"page": "2", "perPage": "1", "returnType": "JSON"},
     ]
+
+
+def test_revision_pager_returns_an_explicit_empty_page_for_raw_auditing() -> None:
+    revision = select_latest_revision(
+        {
+            "paths": {
+                "/3057229/v1/uddi:empty": {
+                    "get": {
+                        "summary": "부산교통공사_시간대별 승하차인원_20260710",
+                        "responses": {"200": {"schema": {"$ref": "#/definitions/empty"}}},
+                    }
+                }
+            }
+        }
+    )
+    client = SafeHttpClient(
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, json={"data": [], "totalCount": 0})
+            )
+        ),
+        sleeper=lambda _: None,
+    )
+
+    pages = list(iter_revision_pages("3057229/v1", revision, client))
+
+    assert len(pages) == 1
+    assert pages[0].rows == []
+    assert pages[0].raw_body == b'{"data":[],"totalCount":0}'

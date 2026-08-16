@@ -1,0 +1,17 @@
+{
+  "opr_ym": "202407",
+  "dptre_ctpv_cd": "26",
+  "dptre_ctpv_nm": "부산광역시",
+  "dptre_sgg_cd": "26530",
+  "dptre_sgg_nm": "사상구",
+  "dptre_emd_cd": "2653010900",
+  "dptre_emd_nm": "괘법동",
+  "arvl_ctpv_cd": "26",
+  "arvl_ctpv_nm": "부산광역시",
+  "arvl_sgg_cd": "26380",
+  "arvl_sgg_nm": "사하구",
+  "arvl_emd_cd": "2638010200",
+  "arvl_emd_nm": "하단동",
+  "trfvlm_se": "시내버스-도시철도",
+  "trfvlm": 347
+}

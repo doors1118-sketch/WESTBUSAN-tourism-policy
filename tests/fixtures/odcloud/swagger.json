@@ -1,0 +1,25 @@
+{
+  "swagger": "2.0",
+  "host": "api.odcloud.kr",
+  "basePath": "/api",
+  "paths": {
+    "/3057229/v1/uddi:11111111-1111-1111-1111-111111111111": {
+      "get": {
+        "summary": "부산교통공사_시간대별 승하차인원_20231231",
+        "responses": {"200": {"schema": {"$ref": "#/definitions/uddi:11111111-1111-1111-1111-111111111111_api"}}}
+      }
+    },
+    "/3057229/v1/uddi:99999999-9999-9999-9999-999999999999": {
+      "get": {
+        "summary": "부산교통공사_시간대별 승하차인원_20240731",
+        "responses": {"200": {"schema": {"$ref": "#/definitions/uddi:99999999-9999-9999-9999-999999999999_api"}}}
+      }
+    }
+  },
+  "definitions": {
+    "uddi:11111111-1111-1111-1111-111111111111_api": {"properties": {"data": {"items": {"$ref": "#/definitions/uddi:11111111-1111-1111-1111-111111111111_model"}}}},
+    "uddi:11111111-1111-1111-1111-111111111111_model": {"properties": {"역번호": {"type": "integer"}, "합계": {"type": "integer"}}},
+    "uddi:99999999-9999-9999-9999-999999999999_api": {"properties": {"data": {"items": {"$ref": "#/definitions/uddi:99999999-9999-9999-9999-999999999999_model"}}}},
+    "uddi:99999999-9999-9999-9999-999999999999_model": {"properties": {"역번호": {"type": "integer"}, "역명": {"type": "string"}, "년월일": {"type": "string"}, "구분": {"type": "string"}, "합계": {"type": "integer"}, "08시-09시": {"type": "integer"}}}
+  }
+}
