@@ -6,7 +6,7 @@ import hashlib
 import json
 import re
 from collections.abc import Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 
 import httpx
@@ -16,8 +16,12 @@ from westbusan.models import ApiPage
 
 _DOC_URL = "https://infuser.odcloud.kr/oas/docs"
 _API_ROOT = "https://api.odcloud.kr/api"
+_FILE_DETAIL_URL = "https://www.data.go.kr/tcs/dss/selectFileDataDownload.do"
 _UDDI_PATH = re.compile(r"/uddi:([^/]+)$")
 _DATE = re.compile(r"(?<!\d)((?:19|20)\d{2})[^\d]?(\d{2})[^\d]?(\d{2})(?!\d)")
+_PUBLIC_DATA_PATH = re.compile(r"/data/(\d+)/fileData\.do")
+_INPUT_TAG = re.compile(r"<input\b[^>]*>", re.IGNORECASE)
+_ATTRIBUTE = re.compile(r"([:\w-]+)\s*=\s*([\"'])(.*?)\2", re.IGNORECASE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,9 +32,14 @@ class DatasetRevision:
     path: str
     published_at: date | None
     data_as_of: date | None
+    registered_at: date | None
+    modified_at: date | None
     row_count: int | None
     schema_fingerprint: str
     metadata: Mapping[str, object]
+    portal_detail_url: str | None = None
+    portal_detail_request: Mapping[str, object] | None = None
+    portal_detail_raw_body: bytes | None = None
 
 
 def build_odcloud_client(
@@ -46,14 +55,22 @@ def build_odcloud_client(
     )
 
 
-def discover_latest_dataset(namespace: str, client: SafeHttpClient) -> DatasetRevision:
+def discover_latest_dataset(
+    namespace: str,
+    client: SafeHttpClient,
+    *,
+    portal_detail_url: str | None = None,
+) -> DatasetRevision:
     """Read the official namespace Swagger document and choose one endpoint revision."""
     result = client.get(_DOC_URL, {"namespace": _namespace(namespace)})
     try:
         document = json.loads(result.body)
     except (TypeError, ValueError) as error:
         raise SchemaError("ODCloud Swagger document is not valid JSON") from error
-    return select_latest_revision(document)
+    revision = select_latest_revision(document)
+    if portal_detail_url is None:
+        return revision
+    return _with_portal_file_detail(revision, portal_detail_url, client)
 
 
 def select_latest_revision(document: Mapping[str, object]) -> DatasetRevision:
@@ -63,10 +80,8 @@ def select_latest_revision(document: Mapping[str, object]) -> DatasetRevision:
         raise SchemaError("ODCloud Swagger has no paths object")
     definitions = document.get("definitions")
     definition_map = definitions if isinstance(definitions, Mapping) else {}
-    file_details = document.get("x-file-details")
-    detail_map = file_details if isinstance(file_details, Mapping) else {}
     revisions = [
-        _revision(str(path), operation, definition_map, detail_map)
+        _revision(str(path), operation, definition_map)
         for path, methods in paths.items()
         if isinstance(methods, Mapping)
         for operation in (_get_operation(methods),)
@@ -77,7 +92,6 @@ def select_latest_revision(document: Mapping[str, object]) -> DatasetRevision:
     return max(
         revisions,
         key=lambda revision: (
-            revision.published_at or date.min,
             revision.data_as_of or date.min,
             revision.uddi,
         ),
@@ -128,16 +142,15 @@ def _revision(
     path: str,
     operation: Mapping[str, object],
     definitions: Mapping[str, object],
-    file_details: Mapping[str, object],
 ) -> DatasetRevision:
     matched = _UDDI_PATH.search(path)
     if matched is None:
         raise SchemaError("ODCloud path does not end in a UDDI")
     uddi = matched.group(1)
     metadata = dict(operation)
-    published = _publication_date(metadata, file_details.get(uddi))
     data_as_of = _data_as_of(metadata, path)
-    metadata["published_at_quality"] = "portal_metadata" if published else "unknown"
+    metadata["published_at_quality"] = "unknown"
+    metadata["publication_provenance"] = "unknown"
     metadata["data_as_of"] = data_as_of.isoformat() if data_as_of else None
     schema = _model_schema(metadata, definitions)
     fingerprint = hashlib.sha256(
@@ -146,30 +159,124 @@ def _revision(
     return DatasetRevision(
         uddi=uddi,
         path=path,
-        published_at=published,
+        published_at=None,
         data_as_of=data_as_of,
+        registered_at=None,
+        modified_at=None,
         row_count=_row_count(metadata),
         schema_fingerprint=fingerprint,
         metadata=metadata,
     )
 
 
-def _publication_date(metadata: Mapping[str, object], configured_detail: object) -> date | None:
-    for name in ("x-published-at", "publishedAt", "published_at", "dataRegDt"):
-        parsed = _date(metadata.get(name))
-        if parsed is not None:
-            return parsed
-    detail = metadata.get("x-file-detail")
-    if isinstance(detail, Mapping):
-        for name in ("published_at", "publishedAt", "dataRegDt", "modifiedAt"):
-            parsed = _date(detail.get(name))
-            if parsed is not None:
-                return parsed
-    if isinstance(configured_detail, Mapping):
-        for name in ("published_at", "publishedAt", "dataRegDt", "modifiedAt"):
-            parsed = _date(configured_detail.get(name))
-            if parsed is not None:
-                return parsed
+def _with_portal_file_detail(
+    revision: DatasetRevision, portal_detail_url: str, client: SafeHttpClient
+) -> DatasetRevision:
+    """Attach data.go file-detail dates; Swagger revision titles never supply them."""
+    initial = client.get(portal_detail_url, {})
+    detail = _file_detail_mapping(initial.body)
+    request: dict[str, object] = {
+        "url": portal_detail_url,
+        "public_data_pk": _public_data_pk(portal_detail_url, initial.body),
+    }
+    raw_body = initial.body
+    if detail is None:
+        public_data_pk = request["public_data_pk"]
+        public_data_detail_pk = _html_input(initial.body, "publicDataDetailPk")
+        if not isinstance(public_data_pk, str) or not public_data_detail_pk:
+            raise SchemaError("data.go.kr file detail lacks publicDataPk or publicDataDetailPk")
+        request = {
+            "url": _FILE_DETAIL_URL,
+            "public_data_pk": public_data_pk,
+            "public_data_detail_pk": public_data_detail_pk,
+        }
+        result = client.get(
+            _FILE_DETAIL_URL,
+            {
+                "publicDataPk": public_data_pk,
+                "publicDataDetailPk": public_data_detail_pk,
+                "atchFileId": "",
+                "fileDetailSn": 1,
+                "publicDataTyCode": "PR0051",
+            },
+        )
+        raw_body = result.body
+        detail = _file_detail_mapping(raw_body)
+    if detail is None:
+        raise SchemaError("data.go.kr file detail lacks registDt/updtDt metadata")
+
+    registered = _date(detail.get("registDt"))
+    modified = _date(detail.get("updtDt"))
+    published = modified or registered
+    provenance = (
+        "data_go_file_detail.updtDt"
+        if modified is not None
+        else "data_go_file_detail.registDt"
+        if registered is not None
+        else "unknown"
+    )
+    metadata = {
+        **revision.metadata,
+        "registered_at": registered.isoformat() if registered else None,
+        "registered_at_provenance": (
+            "data_go_file_detail.registDt" if registered else "unknown"
+        ),
+        "modified_at": modified.isoformat() if modified else None,
+        "modified_at_provenance": (
+            "data_go_file_detail.updtDt" if modified else "unknown"
+        ),
+        "published_at_quality": "data_go_file_detail" if published else "unknown",
+        "publication_provenance": provenance,
+    }
+    return replace(
+        revision,
+        published_at=published,
+        registered_at=registered,
+        modified_at=modified,
+        metadata=metadata,
+        portal_detail_url=portal_detail_url,
+        portal_detail_request=request,
+        portal_detail_raw_body=raw_body,
+    )
+
+
+def _file_detail_mapping(body: bytes) -> Mapping[str, object] | None:
+    try:
+        decoded = json.loads(body)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(decoded, Mapping):
+        return None
+    candidates = (decoded, decoded.get("dataSetFileDetailInfo"))
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, Mapping)
+            and (
+                candidate.get("registDt") not in (None, "")
+                or candidate.get("updtDt") not in (None, "")
+            )
+        ),
+        None,
+    )
+
+
+def _public_data_pk(portal_detail_url: str, body: bytes) -> str | None:
+    matched = _PUBLIC_DATA_PATH.search(portal_detail_url)
+    if matched is not None:
+        return matched.group(1)
+    return _html_input(body, "publicDataPk")
+
+
+def _html_input(body: bytes, name: str) -> str | None:
+    text = body.decode("utf-8", errors="replace")
+    for tag in _INPUT_TAG.findall(text):
+        attributes = {key.lower(): value for key, _, value in _ATTRIBUTE.findall(tag)}
+        if attributes.get("id") == name or attributes.get("name") == name:
+            value = attributes.get("value")
+            if value:
+                return value
     return None
 
 

@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+from xml.parsers.expat import ExpatError
 
 import httpx
 import xmltodict
@@ -100,13 +101,18 @@ def raise_for_portal_error(body: bytes, content_type: str) -> None:
 
 
 def _result_code(body: bytes, content_type: str) -> str | None:
+    trimmed = body.lstrip()
+    if "html" in content_type.lower() or trimmed.lower().startswith(
+        (b"<html", b"<!doctype html")
+    ):
+        return None
     try:
         decoded: Any
-        if "xml" in content_type.lower() or body.lstrip().startswith(b"<"):
+        if "xml" in content_type.lower() or trimmed.startswith(b"<"):
             decoded = xmltodict.parse(body)
         else:
             decoded = json.loads(body)
-    except (ValueError, TypeError):
+    except (ExpatError, ValueError, TypeError):
         return None
     return _find_result_code(decoded)
 

@@ -60,15 +60,37 @@ _HOUR_FIELD = re.compile(r"^\d{2}시-\d{2}시$")
 _SRT_MONTH_FIELD = re.compile(r"^((?:19|20)\d{2})년(\d{1,2})월$")
 _METRO_SOURCES = {"busan_metro_odcloud_discovery", "busan_metro"}
 _OD_SOURCES = {"public_transport_od_usage"}
+_KORAIL_WIDE_COUNT_FIELDS = {
+    "스마트티켓": "smart_ticket",
+    "일반권": "general_ticket",
+    "정기권": "season_ticket",
+    "홈티켓": "home_ticket",
+    "어른": "adult",
+    "어린이": "child",
+    "강릉선": "gangneung_line",
+    "경부선": "gyeongbu_line",
+    "경전선": "gyeongjeon_line",
+    "동해선": "donghae_line",
+    "전라선": "jeolla_line",
+    "호남선": "honam_line",
+    "기타운행선": "other_service_line",
+    "KTX": "ktx",
+    "새마을": "saemaeul",
+    "무궁화": "mugunghwa",
+    "ITX청춘": "itx_cheongchun",
+    "기타열차종": "other_train_type",
+    "일반실": "standard_class",
+    "특실": "first_class",
+}
 _KORAIL_MEASURES = {
-    "korail_workplace_ticketing_file": {
-        "이용인원": ("korail_workplace_passenger_count", "passengers"),
-        "이용건수": ("korail_workplace_usage_count", "count"),
-    },
-    "korail_residence_ticketing_file": {
-        "이용인원": ("korail_residence_passenger_count", "passengers"),
-        "이용건수": ("korail_residence_usage_count", "count"),
-    },
+    source_id: {
+        field: (f"{prefix}_{metric}_count", "count")
+        for field, metric in _KORAIL_WIDE_COUNT_FIELDS.items()
+    }
+    for source_id, prefix in {
+        "korail_workplace_ticketing_file": "korail_workplace",
+        "korail_residence_ticketing_file": "korail_residence",
+    }.items()
 }
 
 
@@ -239,9 +261,35 @@ def _load_odcloud(
     run: RunContext,
     client: SafeHttpClient,
 ) -> tuple[int, int, bool]:
-    revision = discover_latest_dataset(_namespace(spec.url), client)
+    revision = discover_latest_dataset(
+        _namespace(spec.url), client, portal_detail_url=spec.portal_detail_url
+    )
     source_revision = f"odcloud:{revision.uddi}:{revision.schema_fingerprint}"
     loaded = artifacts = 0
+    if revision.portal_detail_raw_body is not None:
+        metadata_artifact = raw_store.write(
+            run,
+            spec.source_id,
+            {
+                "kind": "portal_file_detail",
+                "portal_detail_url": revision.portal_detail_url,
+                **dict(revision.portal_detail_request or {}),
+                "registered_at": revision.registered_at.isoformat()
+                if revision.registered_at
+                else None,
+                "modified_at": revision.modified_at.isoformat() if revision.modified_at else None,
+                "publication_date": revision.published_at.isoformat()
+                if revision.published_at
+                else None,
+                "publication_provenance": revision.metadata["publication_provenance"],
+                "source_revision": source_revision,
+            },
+            revision.portal_detail_raw_body,
+            ".json",
+            revision.published_at,
+        )
+        db.record_artifact(metadata_artifact)
+        artifacts += 1
     for page in iter_revision_pages(_namespace(spec.url), revision, client, page_size=spec.page_size):
         if revision.row_count is None:
             revision = replace(revision, row_count=page.total_count)
@@ -254,6 +302,11 @@ def _load_odcloud(
                 "path": revision.path,
                 "publication_date": revision.published_at.isoformat() if revision.published_at else None,
                 "published_at_quality": revision.metadata["published_at_quality"],
+                "publication_provenance": revision.metadata["publication_provenance"],
+                "registered_at": revision.registered_at.isoformat()
+                if revision.registered_at
+                else None,
+                "modified_at": revision.modified_at.isoformat() if revision.modified_at else None,
                 "data_as_of": revision.data_as_of.isoformat() if revision.data_as_of else None,
                 "row_count": revision.row_count,
                 "schema_fingerprint": revision.schema_fingerprint,
@@ -280,6 +333,11 @@ def _load_odcloud(
             "uddi": revision.uddi,
             "publication_date": revision.published_at.isoformat() if revision.published_at else None,
             "published_at_quality": revision.metadata["published_at_quality"],
+            "publication_provenance": revision.metadata["publication_provenance"],
+            "registered_at": revision.registered_at.isoformat()
+            if revision.registered_at
+            else None,
+            "modified_at": revision.modified_at.isoformat() if revision.modified_at else None,
             "data_as_of": revision.data_as_of.isoformat() if revision.data_as_of else None,
             "row_count": revision.row_count,
             "schema_fingerprint": revision.schema_fingerprint,
@@ -412,7 +470,15 @@ def _railway_record(source_id: str, row: Mapping[str, object]) -> TransportRecor
     if not measures:
         raise ValueError("railway row has no recognized source-native measure")
     district = _district(
-        _optional_text(row, "district", "구군", "자치구", "근무지시군구명", "거주지시군구명"),
+        _optional_text(
+            row,
+            "district",
+            "구군",
+            "자치구",
+            "시군구명",
+            "근무지시군구명",
+            "거주지시군구명",
+        ),
         station,
     )
     measure_fields = {

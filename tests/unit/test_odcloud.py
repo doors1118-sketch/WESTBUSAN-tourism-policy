@@ -23,13 +23,13 @@ def test_odcloud_client_sends_the_key_in_authorization_header_not_a_query_string
     assert client.get("https://api.odcloud.kr/api/example", {"page": 1}).status_code == 200
 
 
-def test_select_latest_revision_uses_publication_date_then_identifier() -> None:
+def test_select_latest_revision_uses_data_cutoff_then_identifier_when_publication_is_unknown() -> None:
     revisions = json.loads(Path("tests/fixtures/odcloud/swagger.json").read_text(encoding="utf-8"))
 
     revision = select_latest_revision(revisions)
 
     assert revision.uddi == "99999999-9999-9999-9999-999999999999"
-    assert revision.published_at.isoformat() == "2024-08-15"
+    assert revision.published_at is None
     assert revision.data_as_of.isoformat() == "2024-07-31"
     assert revision.path == "/3057229/v1/uddi:99999999-9999-9999-9999-999999999999"
     assert revision.row_count is None
@@ -49,6 +49,39 @@ def test_discover_latest_dataset_reads_metadata_without_assuming_revision_order(
     assert revision.metadata["summary"] == "부산교통공사_시간대별 승하차인원_20240731"
 
 
+def test_discover_latest_dataset_uses_official_file_detail_dates_with_provenance() -> None:
+    swagger = Path("tests/fixtures/odcloud/swagger.json").read_bytes()
+    file_detail = Path("tests/fixtures/odcloud/file_detail.json").read_bytes()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/oas/docs":
+            return httpx.Response(200, content=swagger)
+        if request.url.path == "/data/3057229/fileData.do":
+            return httpx.Response(
+                200,
+                text=(
+                    '<html><body><input id="publicDataDetailPk" '
+                    'value="uddi:99999999-9999-9999-9999-999999999999"></body></html>'
+                ),
+            )
+        if request.url.path == "/tcs/dss/selectFileDataDownload.do":
+            assert request.url.params["publicDataPk"] == "3057229"
+            assert request.url.params["publicDataDetailPk"] == "uddi:99999999-9999-9999-9999-999999999999"
+            return httpx.Response(200, content=file_detail)
+        raise AssertionError(request.url)
+
+    revision = discover_latest_dataset(
+        "3057229/v1",
+        SafeHttpClient(httpx.Client(transport=httpx.MockTransport(handler)), sleeper=lambda _: None),
+        portal_detail_url="https://www.data.go.kr/data/3057229/fileData.do",
+    )
+
+    assert revision.registered_at.isoformat() == "2026-02-20"
+    assert revision.published_at.isoformat() == "2026-07-22"
+    assert revision.modified_at.isoformat() == "2026-07-22"
+    assert revision.metadata["publication_provenance"] == "data_go_file_detail.updtDt"
+
+
 def test_operation_title_cutoff_is_not_used_as_a_publication_date() -> None:
     revision = select_latest_revision(
         {
@@ -66,25 +99,6 @@ def test_operation_title_cutoff_is_not_used_as_a_publication_date() -> None:
     assert revision.published_at is None
     assert revision.data_as_of.isoformat() == "2024-07-31"
     assert revision.metadata["published_at_quality"] == "unknown"
-
-
-def test_official_file_detail_configuration_supplies_publication_date_when_available() -> None:
-    revision = select_latest_revision(
-        {
-            "x-file-details": {"configured": {"dataRegDt": "2024-08-01"}},
-            "paths": {
-                "/3057229/v1/uddi:configured": {
-                    "get": {
-                        "summary": "부산교통공사_시간대별 승하차인원_20240731",
-                        "responses": {"200": {"schema": {"$ref": "#/definitions/configured"}}},
-                    }
-                }
-            },
-        }
-    )
-
-    assert revision.published_at.isoformat() == "2024-08-01"
-    assert revision.metadata["published_at_quality"] == "portal_metadata"
 
 
 def test_revision_pager_keeps_each_selected_uddi_page_at_the_source_grain() -> None:

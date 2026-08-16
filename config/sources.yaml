@@ -165,6 +165,7 @@ sources:
     inspection_required: true
   - source_id: busan_metro_odcloud_discovery
     url: https://api.odcloud.kr/api/3057229/v1
+    portal_detail_url: https://www.data.go.kr/data/3057229/fileData.do
     group: transport
     cadence: monthly
     source_type: discovery

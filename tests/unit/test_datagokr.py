@@ -85,6 +85,23 @@ def test_http_client_retries_retryable_statuses() -> None:
     assert waits == [1, 2]
 
 
+def test_http_client_keeps_portal_detail_html_out_of_xml_error_parsing() -> None:
+    client = SafeHttpClient(
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(
+                    200,
+                    content=b'<html><body><input id="publicDataDetailPk"></body></html>',
+                    headers={"content-type": "text/html"},
+                )
+            )
+        ),
+        sleeper=lambda _: None,
+    )
+
+    assert client.get("https://www.data.go.kr/data/3057229/fileData.do", {}).status_code == 200
+
+
 def test_http_client_classifies_authentication_error_before_retrying_http_500() -> None:
     calls = 0
     body = b"""<OpenAPI_ServiceResponse><cmmMsgHeader><returnReasonCode>30</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>"""

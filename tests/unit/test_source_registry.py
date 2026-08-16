@@ -30,6 +30,14 @@ def test_registry_contains_all_accommodation_sources() -> None:
     assert registry.get("tourist_pensions").additive_facility is False
 
 
+def test_registry_configures_odcloud_file_detail_profile() -> None:
+    source = SourceRegistry.load(Path("config/sources.yaml")).get(
+        "busan_metro_odcloud_discovery"
+    )
+
+    assert source.portal_detail_url == "https://www.data.go.kr/data/3057229/fileData.do"
+
+
 def test_registry_loads_source_metadata_from_fixture() -> None:
     registry = SourceRegistry.load(Path("tests/fixtures/sources.yaml"))
     source = registry.get("ready_source")

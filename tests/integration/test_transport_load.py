@@ -1,10 +1,15 @@
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from westbusan.db import Database
-from westbusan.http import HttpResult
+from westbusan.http import HttpResult, SafeHttpClient
 from westbusan.models import RunContext
+from westbusan.sources.files import read_tabular_rows
+from westbusan.sources.odcloud import discover_latest_dataset
 from westbusan.sources.registry import SourceRegistry, record_inspection
 from westbusan.transport.load import (
     TransportMeasure,
@@ -102,25 +107,32 @@ def test_normalize_wide_srt_boarding_unpivots_month_columns_without_inventing_al
 def test_korail_survey_uses_only_reviewed_measure_fields_and_fixed_context_period() -> None:
     record = normalize_transport_row(
         "korail_workplace_ticketing_file",
-        {
-            "고객등급": "일반",
-            "권종": "일반",
-            "열차종": "KTX",
-            "발매구분": "창구",
-            "근무지시도코드": 26,
-            "근무지시군구코드": 26530,
-            "근무지시군구명": "사상구",
-            "차종": "승용",
-            "이용인원": 100,
-        },
+        read_tabular_rows(Path("tests/fixtures/transport/railway.csv"))[0],
     )
 
     assert record.period == "2022-04..2022-06"
-    assert [(measure.metric_code, measure.value, measure.unit) for measure in record.measures] == [
-        ("korail_workplace_passenger_count", 100, "passengers")
+    assert len(record.measures) == 20
+    assert ("korail_workplace_smart_ticket_count", 100, "count") in [
+        (measure.metric_code, measure.value, measure.unit) for measure in record.measures
     ]
-    assert record.dimensions["근무지시군구코드"] == 26530
-    assert record.dimensions["고객등급"] == "일반"
+    assert all(measure.unit == "count" for measure in record.measures)
+    assert record.dimensions["시군구코드"] == "530"
+    assert not any("시군구코드" in measure.metric_code for measure in record.measures)
+
+
+def test_korail_residence_survey_preserves_legal_dong_codes_as_dimensions() -> None:
+    record = normalize_transport_row(
+        "korail_residence_ticketing_file",
+        read_tabular_rows(Path("tests/fixtures/transport/railway_residence.csv"))[0],
+    )
+
+    assert record.period == "2022-04..2022-06"
+    assert len(record.measures) == 20
+    assert ("korail_residence_ktx_count", 42, "count") in [
+        (measure.metric_code, measure.value, measure.unit) for measure in record.measures
+    ]
+    assert record.dimensions["법정동시도코드"] == "26"
+    assert record.dimensions["법정동시군구코드"] == "380"
 
 
 def test_load_transport_registers_static_korail_file_at_native_grain(tmp_path: Path) -> None:
@@ -135,15 +147,13 @@ def test_load_transport_registers_static_korail_file_at_native_grain(tmp_path: P
 
     result = load_transport(db, SourceRegistry.load(Path("config/sources.yaml")), run)
 
-    assert result.records_loaded == 2
+    assert result.records_loaded == 1
     assert result.artifacts_written == 1
     assert result.sources_ready == ("korail_workplace_ticketing_file",)
+    assert db.query("select count(*) from fact_transport_flow") == [(20,)]
     assert db.query(
-        "select period, metric_code, unit, source_revision from fact_transport_flow order by district"
-    ) == [
-        ("2022-04..2022-06", "korail_workplace_passenger_count", "passengers", db.query("select content_hash from raw_artifact")[0][0]),
-        ("2022-04..2022-06", "korail_workplace_passenger_count", "passengers", db.query("select content_hash from raw_artifact")[0][0]),
-    ]
+        "select period, metric_code, metric_value, unit from fact_transport_flow where metric_code = 'korail_workplace_smart_ticket_count'"
+    ) == [("2022-04..2022-06", "korail_workplace_smart_ticket_count", 100, "count")]
     assert db.query("select source_date from raw_artifact") == [(None,)]
 
 
@@ -163,7 +173,34 @@ def test_repeated_file_hash_is_auditable_without_duplicate_transport_facts(tmp_p
 
     assert result.records_loaded == 0
     assert db.query("select count(*) from raw_artifact") == [(2,)]
-    assert db.query("select count(*) from fact_transport_flow") == [(2,)]
+    assert db.query("select count(*) from fact_transport_flow") == [(20,)]
+
+
+def test_load_transport_preserves_official_residence_codes_without_measure_leakage(tmp_path: Path) -> None:
+    data_dir = tmp_path / "data"
+    inbox = data_dir / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "한국철도공사_거주지별_2022.csv").write_bytes(
+        Path("tests/fixtures/transport/railway_residence.csv").read_bytes()
+    )
+    db = Database(data_dir / "test.duckdb", Path("sql"))
+    db.migrate()
+
+    result = load_transport(
+        db,
+        SourceRegistry.load(Path("config/sources.yaml")),
+        RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == 1
+    assert result.sources_ready == ("korail_residence_ticketing_file",)
+    assert db.query("select count(*) from fact_transport_flow") == [(20,)]
+    assert db.query(
+        "select metric_value, unit from fact_transport_flow where metric_code = 'korail_residence_ktx_count'"
+    ) == [(42, "count")]
+    assert '"법정동시군구코드":"380"' in db.query(
+        "select dimension_json from fact_transport_flow limit 1"
+    )[0][0]
 
 
 def test_unparseable_railway_rows_are_not_marked_ready(tmp_path: Path) -> None:
@@ -205,6 +242,7 @@ def test_live_collectors_store_odcloud_and_data_go_pages_before_transport_facts(
     monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "data-go-secret")
     monkeypatch.setenv("ODCLOUD_API_KEY", "odcloud-secret")
     swagger = Path("tests/fixtures/odcloud/swagger.json").read_bytes()
+    file_detail = Path("tests/fixtures/odcloud/file_detail.json").read_bytes()
     metro_row = json.loads(
         Path("tests/fixtures/transport/metro_rows.json").read_text(encoding="utf-8")
     )[0]
@@ -214,6 +252,18 @@ def test_live_collectors_store_odcloud_and_data_go_pages_before_transport_facts(
         def get(self, url: str, params: dict[str, object]) -> HttpResult:
             if url == "https://infuser.odcloud.kr/oas/docs":
                 return HttpResult(200, swagger, "application/json")
+            if url == "https://www.data.go.kr/data/3057229/fileData.do":
+                return HttpResult(
+                    200,
+                    (
+                        b'<html><body><input id="publicDataDetailPk" '
+                        b'value="uddi:99999999-9999-9999-9999-999999999999"></body></html>'
+                    ),
+                    "text/html",
+                )
+            if url == "https://www.data.go.kr/tcs/dss/selectFileDataDownload.do":
+                assert params["publicDataPk"] == "3057229"
+                return HttpResult(200, file_detail, "application/json")
             if "/3057229/v1/uddi:99999999-9999-9999-9999-999999999999" in url:
                 return HttpResult(
                     200,
@@ -236,17 +286,20 @@ def test_live_collectors_store_odcloud_and_data_go_pages_before_transport_facts(
     )
 
     assert result.records_loaded == 2
-    assert result.artifacts_written == 2
+    assert result.artifacts_written == 3
     assert result.sources_ready == (
         "public_transport_od_usage",
         "busan_metro_odcloud_discovery",
     )
-    assert db.query("select count(*) from raw_artifact") == [(2,)]
+    assert db.query("select count(*) from raw_artifact") == [(3,)]
     assert db.query("select count(*) from fact_transport_flow") == [(4,)]
     assert '"row_count":1' in db.query(
-        "select request_json from raw_artifact where source_id = 'busan_metro_odcloud_discovery'"
+        "select request_json from raw_artifact where source_id = 'busan_metro_odcloud_discovery' and request_json like '%\"page\":1%'"
     )[0][0]
     assert '"row_count": 1' in db.query(
+        "select detail_json from source_status where source_id = 'busan_metro_odcloud_discovery' order by checked_at desc"
+    )[0][0]
+    assert '"publication_date": "2026-07-22"' in db.query(
         "select detail_json from source_status where source_id = 'busan_metro_odcloud_discovery' order by checked_at desc"
     )[0][0]
     assert db.query(
@@ -255,3 +308,19 @@ def test_live_collectors_store_odcloud_and_data_go_pages_before_transport_facts(
     requests = db.query("select request_json from raw_artifact")
     assert all("data-go-secret" not in request[0] for request in requests)
     assert all("odcloud-secret" not in request[0] for request in requests)
+
+
+@pytest.mark.integration
+def test_live_odcloud_file_detail_has_publication_metadata_when_opted_in() -> None:
+    if os.getenv("WESTBUSAN_RUN_LIVE_CHECKS") != "1":
+        pytest.skip("set WESTBUSAN_RUN_LIVE_CHECKS=1 to contact data.go.kr")
+
+    revision = discover_latest_dataset(
+        "3057229/v1",
+        SafeHttpClient(),
+        portal_detail_url="https://www.data.go.kr/data/3057229/fileData.do",
+    )
+
+    assert revision.registered_at is not None
+    assert revision.published_at is not None
+    assert revision.metadata["publication_provenance"] == "data_go_file_detail.updtDt"
