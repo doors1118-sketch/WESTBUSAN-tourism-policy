@@ -612,9 +612,12 @@ def _replace_comparisons(
             else:
                 w = _aggregate([item["values"][key] for item in west]); e = _aggregate([item["values"][key] for item in east])
             for kind, value in (("west_minus_east", w - e if w is not None and e is not None else None), ("west_divided_by_east", w / e if w is not None and e is not None and e > 0 else None)):
-                coverage = min(
-                    [float(item["values"]["coverage"]) for item in west + east if item["values"]["coverage"] is not None],
-                    default=None,
+                participating = west + east
+                coverage = (
+                    None if not participating or any(
+                        item["values"]["coverage"] is None or float(item["values"]["coverage"]) <= 0
+                        for item in participating
+                    ) else min(float(item["values"]["coverage"]) for item in participating)
                 )
                 quality = _comparison_quality([coverage] if coverage is not None and value is not None else [])
                 evidence = {"west": w, "east": e, "source_period": period,

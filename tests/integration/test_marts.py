@@ -81,6 +81,20 @@ def test_build_marts_end_to_end_january_does_not_inherit_august_registrations(tm
     assert db.query("select legal_registration_count, tourism_registration_facility_share, small_facility_share from mart_region_month where district = '사하구' and period = '2026-01'") == [(1, 0.0, 0.0)]
 
 
+def test_build_marts_end_to_end_group_pressure_does_not_sum_district_rates(tmp_path: Path) -> None:
+    """Reviewer regression: two 100-per-100 districts cannot create a 200 signal."""
+    db, run = _built_db(tmp_path, [_license("lodgings", "A", "서부A", "부산광역시 사하구 길 1", 100), _license("lodgings", "B", "서부B", "부산광역시 북구 길 1", 100)])
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+    assert db.query("select count(*) from mart_policy_signal where run_id = ?", [run]) == [(0,)]
+
+
+def test_build_marts_end_to_end_division_none_coverage_is_insufficient(tmp_path: Path) -> None:
+    """Reviewer regression: absent coverage is not silently ignored in a division."""
+    db, run = _built_db(tmp_path, [_license("lodgings", "W", "서부", "부산광역시 사하구 길 1", None), _license("lodgings", "E", "동부", "부산광역시 해운대구 길 1", 10)])
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+    assert db.query("select coverage, quality_band from mart_region_comparison where comparison_type = 'west_divided_by_east' limit 1") == [(None, "insufficient")]
+
+
 def _built_db(tmp_path: Path, records: list[object]) -> tuple[Database, object]:
     db = Database(tmp_path / "case.duckdb", Path("sql")); db.migrate(); run = uuid4()
     load_license_snapshot(db, records, run); build_facilities(db, run)
