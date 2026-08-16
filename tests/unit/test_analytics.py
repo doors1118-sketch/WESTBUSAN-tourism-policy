@@ -5,6 +5,7 @@ from westbusan.analytics.build import (
     RegionMetrics,
     _comparison_quality,
     _group_pressure,
+    _group_distribution,
     _growth_evidence,
     _monthly_native_sum,
     _period_metric_set,
@@ -130,3 +131,12 @@ def test_group_pressure_uses_combined_raw_numerators_and_denominators() -> None:
 def test_division_quality_warns_for_partial_coverage() -> None:
     """Catches reporting a 0.5-covered West/East division as good evidence."""
     assert _comparison_quality([1.0, 0.5]) == "warning"
+
+
+def test_group_distribution_flattens_facility_values_not_district_medians() -> None:
+    """Catches a 1/40 facility being inflated into a 50% regional share."""
+    median_rooms, small_share, age30_share = _group_distribution(
+        [1.0, *([9.0] * 9)], [40.0, *([20.0] * 9)], 1
+    )
+
+    assert (median_rooms, small_share, age30_share) == (9.0, 0.1, 0.1)

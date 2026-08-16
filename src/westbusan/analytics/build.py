@@ -285,6 +285,7 @@ def _district_metrics(rows: list[dict[str, object]], policy: PolicyConfig) -> di
             "permit_count": sum(item["recent_permit"] is True for item in items),
             "license_dates": [value for item in items for value in item["license_dates"]],
             "closure_dates": [value for item in items for value in item["closure_dates"]],
+            "room_values": known, "age_values": ages,
         }
     return result
 
@@ -325,6 +326,7 @@ def _empty_metrics(district: str, group: str) -> dict[str, object]:
         "weighted_age": None, "age20": None, "age30": None, "age20_count": 0,
         "age30_count": 0, "age_known": 0, "permit_share": None, "permit_known": 0,
         "permit_count": 0, "license_dates": [], "closure_dates": [],
+        "room_values": [], "age_values": [],
     }
 
 
@@ -657,16 +659,16 @@ def _replace_signals(
             for row in group_rows
         ):
             continue
-        group_facilities = [item for item in facilities if item["region_group"] == group]
-        rooms = [float(item["room_count"]) for item in group_facilities if item["room_count"] is not None] if period == "current" else [float(row["values"]["room_median"]) for row in group_rows if row["values"]["room_median"] is not None]
-        ages = [float(item["building_age"]) for item in group_facilities if item["building_age"] is not None] if period == "current" else [float(row["values"]["age_median"]) for row in group_rows if row["values"]["age_median"] is not None]
+        rooms = [float(value) for row in group_rows for value in row["values"].get("room_values", [])]
+        ages = [float(value) for row in group_rows for value in row["values"].get("age_values", [])]
         visitor_pairs = [
             (float(item["evidence"]["visitors_per_100_rooms"]["numerator"]), float(item["evidence"]["visitors_per_100_rooms"]["denominator"]))
             for item in group_rows
             if item["evidence"]["visitors_per_100_rooms"]["numerator"] is not None
             and item["evidence"]["visitors_per_100_rooms"]["denominator"] is not None
         ]
-        metrics = RegionMetrics(group, median(rooms) if rooms else None, sum(room <= policy.small_room_threshold for room in rooms) / len(rooms) if rooms else None, sum(age >= 30 for age in ages) / len(ages) if ages else None, _group_pressure(visitor_pairs), _group_band(group_rows, "pressure"), _group_band(group_rows, "supply"))
+        median_rooms, small_share, age30_share = _group_distribution(rooms, ages, policy.small_room_threshold)
+        metrics = RegionMetrics(group, median_rooms, small_share, age30_share, _group_pressure(visitor_pairs), _group_band(group_rows, "pressure"), _group_band(group_rows, "supply"))
         for signal in policy_signals(metrics, small_room_threshold=policy.small_room_threshold):
             db.connection.execute("insert into mart_policy_signal values (?, ?, ?, ?, ?)", [run_id, group, period, signal.code, signal.evidence_json]); count += 1
     return count
@@ -745,6 +747,7 @@ def _period_metric_set(
         "coverage": len(known) / len(rooms) if rooms else None,
         "small": sum(room <= small_room_threshold for room in known) if known else None,
         "small_share": sum(room <= small_room_threshold for room in known) / len(known) if known else None,
+        "room_values": known, "age_values": [],
     }
 
 
@@ -765,6 +768,16 @@ def _growth_evidence(
 def _group_pressure(values: list[tuple[float, float]]) -> float | None:
     numerator, denominator = sum(item[0] for item in values), sum(item[1] for item in values)
     return numerator * 100 / denominator if denominator > 0 else None
+
+
+def _group_distribution(
+    rooms: list[float], ages: list[float], threshold: int
+) -> tuple[float | None, float | None, float | None]:
+    return (
+        median(rooms) if rooms else None,
+        sum(room <= threshold for room in rooms) / len(rooms) if rooms else None,
+        sum(age >= 30 for age in ages) / len(ages) if ages else None,
+    )
 
 
 def _comparison_quality(coverages: list[float]) -> QualityBand:
