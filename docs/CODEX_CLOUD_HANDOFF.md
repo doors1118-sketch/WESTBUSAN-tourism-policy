@@ -113,17 +113,20 @@ git log -5 --oneline
 `task-12-report.md`를 기준으로 확인하십시오. 아직 원격 push나 Cloud 배포가
 완료됐다고 표현하면 안 됩니다.
 
-## 로컬 검증 상태 (2026-08-16)
+## 로컬 검증 상태 (2026-08-17)
 
-- source-contract focused: 157 passed, 1 skipped.
-- 전체 pytest: 240 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
+- 전체 pytest: 359 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
+- 빈 DuckDB: 31개 migration 적용, main schema table 56개 생성.
+- legacy/DB migration focused: 5 passed.
 - Ruff: all checks passed.
-- CLI `--help`: schema 승인 명령을 포함한 운영 명령 표시, exit 0.
-- ignored 임시 DB `init-db`: exit 0.
+- CLI `--help`: `schema-approve`, `migrate-legacy`, `export --rebuild`를 포함한
+  운영 명령과 옵션 표시, 모두 exit 0.
+- 임시 DB `init-db`: exit 0.
 - 데이터 없는 임시 DB `quality`: fail-closed JSON, exit 1.
+- 관측 데이터 없는 임시 DB `schema-approve`: review-required JSON, exit 1.
 - PowerShell parser: 두 스크립트 모두 오류 0.
 - `git diff --check`: exit 0.
-- 변경분 secret-value 패턴: 0건.
+- tracked 파일 conflict marker, 64자리 16진수 값 및 secret assignment 패턴: 0건.
 
 이 수치는 fixture/offline 검증이며 실제 key를 사용한 live probe나 bulk backfill,
 원격 push, Cloud 실행 또는 예약 작업 등록의 증거가 아닙니다.

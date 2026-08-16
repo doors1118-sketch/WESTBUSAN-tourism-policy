@@ -24,8 +24,8 @@ from westbusan.quality.checks import (
     QualityReport,
     _active_facility_count,
     approve_schema_baseline,
-    run_quality_suite as _run_quality_suite,
 )
+from westbusan.quality.checks import run_quality_suite as _run_quality_suite
 from westbusan.quality.publish import current_published_run, publish_if_valid
 from westbusan.sources.datagokr import parse_data_page
 
