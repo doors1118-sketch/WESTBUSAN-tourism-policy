@@ -9,6 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
 from uuid import UUID, uuid4
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +93,10 @@ class RunContext:
 
     @classmethod
     def start(cls, mode: str, now: datetime) -> RunContext:
-        return cls(run_id=uuid4(), mode=mode, started_at=now, business_date=now.date())
+        business_date = now.astimezone(ZoneInfo("Asia/Seoul")).date()
+        return cls(
+            run_id=uuid4(), mode=mode, started_at=now, business_date=business_date
+        )
 
     @property
     def cutoff_date(self) -> date:
@@ -114,6 +118,7 @@ class RawArtifact:
     path: Path
     created_at: datetime
     source_date: date | None = None
+    business_date: date | None = None
 
 
 def _redact_detail(value: object) -> object:

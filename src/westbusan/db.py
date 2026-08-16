@@ -83,7 +83,8 @@ class Database:
             insert into raw_artifact (
                 artifact_id, run_id, source_id, ingest_date, request_json, request_hash,
                 content_hash, path, created_at, source_date
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                , business_date
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict (artifact_id) do nothing
             """,
             [
@@ -97,6 +98,7 @@ class Database:
                 str(artifact.path),
                 artifact.created_at,
                 artifact.source_date,
+                artifact.business_date,
             ],
         )
 

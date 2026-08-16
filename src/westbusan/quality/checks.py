@@ -869,7 +869,7 @@ def _monthly_freshness_checks(
             continue
         latest = max(dates)
         age = (cutoff - latest).days
-        checks.append(CheckResult("monthly_source_freshness", "passed" if age <= 75 else "warning", age, "<=75 days", "warning", source_id, "raw_artifact", evidence={"latest_source_date": latest.isoformat(), "age_days": age}))
+        checks.append(CheckResult("monthly_source_freshness", "passed" if 0 <= age <= 75 else "warning", age, "0..75 days", "warning", source_id, "raw_artifact", evidence={"latest_source_date": latest.isoformat(), "age_days": age}))
     return checks
 
 

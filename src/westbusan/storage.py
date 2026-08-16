@@ -47,7 +47,8 @@ class RawStore:
         )
         request_hash = _sha256(request_json.encode("utf-8"))
         content_hash = _sha256(body)
-        ingest_date = run.cutoff_date
+        written_at = datetime.now(UTC)
+        ingest_date = written_at.date()
         directory = self.raw_dir / source_id / f"ingest_date={ingest_date.isoformat()}"
         path = directory / f"{content_hash}{suffix}"
         directory.mkdir(parents=True, exist_ok=True)
@@ -76,8 +77,9 @@ class RawStore:
             request_hash=request_hash,
             content_hash=content_hash,
             path=path,
-            created_at=run.started_at,
+            created_at=written_at,
             source_date=source_date,
+            business_date=run.cutoff_date,
         )
 
     def write_rows(

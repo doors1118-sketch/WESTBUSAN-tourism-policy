@@ -117,6 +117,44 @@ def test_monthly_freshness_uses_run_business_cutoff_not_wall_clock(
     assert freshness.status == "passed"
 
 
+def test_future_source_date_never_passes_freshness(tmp_path: Path) -> None:
+    """A provider date after the business cutoff is anomalous, not extra fresh."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    cutoff = date(2026, 8, 16)
+    db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date
+           ) values (?, 'daily', ?, 'RUNNING', ?)""",
+        [run_id, datetime(2026, 8, 16, tzinfo=UTC), cutoff],
+    )
+    body = b'{"data":[],"totalCount":0,"pageNo":1,"numOfRows":1}'
+    raw_path = tmp_path / "future-tourism.json"
+    raw_path.write_bytes(body)
+    db.connection.execute(
+        """insert into raw_artifact (
+               artifact_id, run_id, source_id, ingest_date, request_json,
+               request_hash, content_hash, path, created_at, source_date
+           ) values (?, ?, 'tourism_data_lab', ?, '{"operation":"info"}',
+                     'request', ?, ?, ?, ?)""",
+        [
+            uuid4(),
+            run_id,
+            cutoff,
+            hashlib.sha256(body).hexdigest(),
+            str(raw_path),
+            datetime(2026, 8, 16, tzinfo=UTC),
+            date(2026, 8, 17),
+        ],
+    )
+
+    report = run_quality_suite(db, run_id)
+    freshness = _check(report, "monthly_source_freshness", "tourism_data_lab")
+
+    assert freshness.actual == -1
+    assert freshness.status == "warning"
+
+
 def test_publication_rejects_a_manifest_that_omits_canonical_required_checks(
     tmp_path: Path,
 ) -> None:

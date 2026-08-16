@@ -70,3 +70,33 @@ def test_raw_store_rehashes_existing_content_addressed_file_before_reuse(
 
     assert not artifact.path.exists()
     assert list(artifact.path.parent.glob(f"{artifact.path.name}.corrupt-*"))
+
+
+def test_artifact_uses_actual_utc_ingest_time_separate_from_business_date(
+    tmp_path: Path,
+) -> None:
+    """Backfill business dates must not masquerade as physical write timestamps."""
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2020, 1, 2, tzinfo=UTC),
+        business_date=date(2020, 1, 2),
+    )
+    before = datetime.now(UTC)
+
+    artifact = RawStore(tmp_path / "configured").write(
+        run, "lodgings", {"pageNo": 1}, b"{}", ".json", date(2019, 12, 1)
+    )
+
+    assert artifact.created_at >= before
+    assert artifact.ingest_date == datetime.now(UTC).date().isoformat()
+    assert artifact.business_date == date(2020, 1, 2)
+    assert artifact.source_date == date(2019, 12, 1)
+    assert artifact.path.is_relative_to(tmp_path / "configured" / "raw")
+
+
+def test_run_context_start_derives_business_date_in_seoul() -> None:
+    """UTC late afternoon belongs to the following Korean business day."""
+    run = RunContext.start("daily", datetime(2026, 8, 15, 16, 0, tzinfo=UTC))
+
+    assert run.business_date == date(2026, 8, 16)
