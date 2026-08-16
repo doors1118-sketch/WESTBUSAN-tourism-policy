@@ -295,3 +295,57 @@ def test_building_collection_ignores_later_blocked_license(
     )
 
     assert result.parcel_queries == 1
+
+
+def test_multi_title_parcel_is_review_only_and_never_counted_as_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches one parcel fanning every license out to multiple building titles."""
+    db = Database(tmp_path / "ambiguous.duckdb", Path("sql"))
+    db.migrate()
+    load_legal_dong_codes(Path("tests/fixtures/reference/legal_dong_codes.csv"), db)
+    run = RunContext.start("test", datetime.now(UTC))
+    record = normalize_license(
+        "lodgings",
+        {"MNG_NO": "BUSAN-1", "LOTNO_ADDR": "부산광역시 서구 충무동1가 12-3"},
+        run.started_at.date(),
+    )
+    load_license_snapshot(db, [record], run.run_id)
+    first = json.loads(
+        Path("tests/fixtures/buildings/title.json").read_text(encoding="utf-8")
+    )[0]
+    second = {**first, "mgmBldrgstPk": "26140-1002", "newPlatPlc": "부산광역시 서구 충무대로 1 2동"}
+
+    class FakePager:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def iter_url(self, url: str, *_: object, **__: object) -> list[ApiPage]:
+            rows = [first, second] if url.endswith("getBrTitleInfo") else []
+            return [
+                ApiPage(
+                    rows=rows,
+                    total_count=len(rows),
+                    page_no=1,
+                    page_size=max(1, len(rows)),
+                    raw_body=b'{"provider":"fixture"}',
+                    schema_fingerprint="fixture",
+                )
+            ]
+
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(building_load, "DataGoKrPager", FakePager)
+
+    result = collect_buildings_for_licenses(
+        db,
+        SourceRegistry.load(Path("config/sources.yaml")),
+        run,
+        raw_store=RawStore(tmp_path / "data"),
+    )
+
+    assert result.building_rows == 2
+    assert result.bridge_rows == 0
+    assert db.query("select count(*) from bridge_license_building") == [(0,)]
+    assert db.query(
+        "select source_id, source_record_id from building_link_review"
+    ) == [("lodgings", "BUSAN-1")]

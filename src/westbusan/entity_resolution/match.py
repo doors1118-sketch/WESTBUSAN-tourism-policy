@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 from collections import defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
@@ -24,6 +25,7 @@ from westbusan.entity_resolution.normalize import (
 )
 
 DecisionLabel = Literal["auto_merge", "designation_link", "review", "separate"]
+ALGORITHM_VERSION = "entity-resolution-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +36,7 @@ class MatchFeatures:
     official_record_identity: bool
     building_match: bool
     address_match: bool
+    address_unit_match: bool
     coordinate_distance_metres: float | None
     name_similarity: float
     phones_match: bool
@@ -61,6 +64,18 @@ class FacilityBuildResult:
     unmatched_designations: int
 
 
+@dataclass(frozen=True, slots=True)
+class AutoMergeCalibration:
+    """Versioned representative-sample result with sampling uncertainty."""
+
+    sample_version: str
+    algorithm_version: str
+    predicted_positive: int
+    true_positive: int
+    point_precision: float
+    confidence_lower_bound: float
+
+
 def candidate_features(left: LicenseRecord, right: LicenseRecord) -> MatchFeatures:
     """Calculate candidate evidence for two normalized license observations."""
     return _features(_license_mapping(left), _license_mapping(right))
@@ -85,7 +100,7 @@ def classify_pair(left: Mapping[str, object], right: Mapping[str, object]) -> Ma
     if (
         features.address_match
         and features.name_similarity >= 0.94
-        and (features.phones_match or features.one_phone_missing)
+        and (features.phones_match or features.address_unit_match)
     ):
         return MatchDecision("auto_merge", features)
     if features.address_match and not _has_name_or_phone(left, right):
@@ -114,6 +129,68 @@ def evaluate_auto_merge_precision(labeled_pairs: Path, matcher: Callable) -> flo
             "labeled entity-resolution sample must produce at least 10 auto_merge predictions"
         )
     return true_positive / predicted_positive if predicted_positive else 0.0
+
+
+def evaluate_auto_merge_calibration(
+    labeled_pairs: Path,
+    matcher: Callable,
+    *,
+    sample_version: str,
+) -> AutoMergeCalibration:
+    """Evaluate a reviewed sample and retain a conservative Wilson lower bound."""
+    predicted_positive = 0
+    true_positive = 0
+    with Path(labeled_pairs).open(encoding="utf-8", newline="") as handle:
+        for row in csv.DictReader(handle):
+            left, right = _labeled_pair(row)
+            outcome = matcher(left, right)
+            label = outcome.label if isinstance(outcome, MatchDecision) else str(outcome)
+            if label == "auto_merge":
+                predicted_positive += 1
+                true_positive += row["expected"] == "auto_merge"
+    if predicted_positive < 10:
+        raise ValueError(
+            "representative calibration must produce at least 10 auto_merge predictions"
+        )
+    precision = true_positive / predicted_positive
+    z = 1.959963984540054
+    denominator = 1 + z * z / predicted_positive
+    centre = precision + z * z / (2 * predicted_positive)
+    margin = z * math.sqrt(
+        precision * (1 - precision) / predicted_positive
+        + z * z / (4 * predicted_positive * predicted_positive)
+    )
+    return AutoMergeCalibration(
+        sample_version=sample_version,
+        algorithm_version=ALGORITHM_VERSION,
+        predicted_positive=predicted_positive,
+        true_positive=true_positive,
+        point_precision=precision,
+        confidence_lower_bound=(centre - margin) / denominator,
+    )
+
+
+def record_pair_adjudication(
+    db: Database,
+    left_registration_key: str,
+    right_registration_key: str,
+    *,
+    decision: Literal["merge", "separate"],
+    reviewer: str,
+    rationale: str,
+    data_version: str,
+) -> None:
+    """Append an immutable, versioned human adjudication for one stable pair."""
+    left, right = sorted((left_registration_key, right_registration_key))
+    db.connection.execute(
+        """
+        insert into entity_pair_adjudication (
+            left_registration_key, right_registration_key, decision, reviewer,
+            rationale, algorithm_version, data_version
+        ) values (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [left, right, decision, reviewer, rationale, ALGORITHM_VERSION, data_version],
+    )
 
 
 def build_facilities(
@@ -148,6 +225,8 @@ def build_facilities(
     heartbeat()
     records = _latest_records(db, run_id)
     building_ids = _building_ids(db, run_id)
+    adjudications = _adjudications(db)
+    calibrated = _default_calibration_allows_auto_merge()
     for record in records:
         record["building_ids"] = building_ids.get(_registration_key(record), set())
 
@@ -155,7 +234,15 @@ def build_facilities(
     for left, right in combinations(records, 2):
         heartbeat()
         decision = classify_pair(left, right)
-        if not decision.features.is_candidate:
+        pair = tuple(sorted((_registration_key(left), _registration_key(right))))
+        adjudicated = adjudications.get(pair)
+        if adjudicated == "merge":
+            decision = MatchDecision("auto_merge", decision.features)
+        elif adjudicated == "separate":
+            decision = MatchDecision("separate", decision.features)
+        elif decision.label == "auto_merge" and not calibrated:
+            decision = MatchDecision("review", decision.features)
+        if not decision.features.is_candidate and adjudicated is None:
             continue
         decisions.append((left, right, decision))
 
@@ -171,7 +258,7 @@ def build_facilities(
         physical_records, physical_decisions
     )
     physical_components = _components(physical_records, merge_edges)
-    components, unmatched_designations = _attach_designations(
+    components, designation_targets, unmatched_designations = _attach_designations(
         records, decisions, physical_components
     )
 
@@ -248,7 +335,7 @@ def build_facilities(
             },
         )
 
-    records_by_key = {_registration_key(record): record for record in records}
+    records_by_key = {_registration_key(record): record for record in physical_records}
     desired_facilities: set[UUID] = set()
     desired_license_links: set[tuple[UUID, str, str]] = set()
     desired_building_links: set[tuple[UUID, UUID]] = set()
@@ -344,6 +431,40 @@ def build_facilities(
                     [run_id, facility_id, building_id],
                 )
 
+    desired_designation_links: set[tuple[UUID, str, str]] = set()
+    for designation_key, component in designation_targets.items():
+        designation = next(
+            record for record in records if _registration_key(record) == designation_key
+        )
+        facility_id = _facility_id(component)
+        source_id = str(designation["source_id"])
+        source_record_id = str(designation["source_record_id"])
+        desired_designation_links.add((facility_id, source_id, source_record_id))
+        guard()
+        write(
+            """
+            insert into bridge_facility_designation (
+                facility_id, source_id, source_record_id, evidence_json
+            ) values (?, ?, ?, ?)
+            on conflict (facility_id, source_id, source_record_id) do update set
+                evidence_json = excluded.evidence_json
+            """,
+            [
+                facility_id,
+                source_id,
+                source_record_id,
+                json.dumps(
+                    {
+                        "decision": "designation_link",
+                        "registration_key": designation_key,
+                        "physical_component": component,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            ],
+        )
+
     for facility_id, source_id, source_record_id in db.query(
         "select facility_id, source_id, source_record_id from bridge_facility_license"
     ):
@@ -364,6 +485,18 @@ def build_facilities(
             write(
                 "delete from bridge_facility_building where facility_id = ? and building_id = ?",
                 [facility_id, building_id],
+            )
+    for facility_id, source_id, source_record_id in db.query(
+        "select facility_id, source_id, source_record_id from bridge_facility_designation"
+    ):
+        if (facility_id, str(source_id), str(source_record_id)) not in desired_designation_links:
+            guard()
+            write(
+                """
+                delete from bridge_facility_designation
+                where facility_id = ? and source_id = ? and source_record_id = ?
+                """,
+                [facility_id, source_id, source_record_id],
             )
     for (facility_id,) in db.query("select facility_id from dim_facility"):
         if facility_id not in desired_facilities:
@@ -400,7 +533,7 @@ def build_facilities(
     guard()
     return FacilityBuildResult(
         facility_count=len({tuple(keys) for keys in components.values()}),
-        license_links=len(components),
+        license_links=len(physical_components),
         review_pairs=len(review_rows),
         designation_links=sum(_is_tourist_pension(record) for record in records)
         - len(unmatched_designations),
@@ -417,6 +550,7 @@ def _features(left: Mapping[str, object], right: Mapping[str, object]) -> MatchF
     right_buildings = _building_values(right)
     building_match = bool(left_buildings & right_buildings)
     address_match = bool(_address_values(left) & _address_values(right))
+    address_unit_match = bool(_address_unit_values(left) & _address_unit_values(right))
     left_name = _normalized_name(left)
     right_name = _normalized_name(right)
     name_similarity = (
@@ -439,6 +573,7 @@ def _features(left: Mapping[str, object], right: Mapping[str, object]) -> MatchF
         official_record_identity=official_record_identity,
         building_match=building_match,
         address_match=address_match,
+        address_unit_match=address_unit_match,
         coordinate_distance_metres=distance,
         name_similarity=name_similarity,
         phones_match=phones_match,
@@ -545,6 +680,51 @@ def _building_ids(db: Database, run_id: UUID) -> dict[str, set[UUID]]:
     return result
 
 
+def _adjudications(
+    db: Database,
+) -> dict[tuple[str, str], Literal["merge", "separate"]]:
+    rows = db.query(
+        """
+        select left_registration_key, right_registration_key, decision
+        from (
+            select *, row_number() over (
+                partition by left_registration_key, right_registration_key
+                order by created_at desc, data_version desc
+            ) as row_number
+            from entity_pair_adjudication
+            where algorithm_version = ?
+        )
+        where row_number = 1
+        """,
+        [ALGORITHM_VERSION],
+    )
+    return {
+        (str(left), str(right)): decision
+        for left, right, decision in rows
+        if decision in {"merge", "separate"}
+    }
+
+
+def _default_calibration_allows_auto_merge() -> bool:
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "config"
+        / "entity_resolution_labeled_pairs_2026-08.csv"
+    )
+    if not path.exists():
+        return False
+    try:
+        result = evaluate_auto_merge_calibration(
+            path, classify_pair, sample_version="2026-08-initial-reviewed"
+        )
+    except (OSError, ValueError, KeyError):
+        return False
+    return (
+        result.algorithm_version == ALGORITHM_VERSION
+        and result.confidence_lower_bound >= 0.70
+    )
+
+
 def _safe_physical_merge_edges(
     records: list[dict[str, object]],
     decisions: list[tuple[dict[str, object], dict[str, object], MatchDecision]],
@@ -608,7 +788,11 @@ def _attach_designations(
     records: list[dict[str, object]],
     decisions: list[tuple[dict[str, object], dict[str, object], MatchDecision]],
     physical_components: dict[str, tuple[str, ...]],
-) -> tuple[dict[str, tuple[str, ...]], dict[str, str]]:
+) -> tuple[
+    dict[str, tuple[str, ...]],
+    dict[str, tuple[str, ...]],
+    dict[str, str],
+]:
     """Attach only unambiguous tourist-pension overlays to physical components."""
     designation_keys = {
         _registration_key(record) for record in records if _is_tourist_pension(record)
@@ -624,25 +808,20 @@ def _attach_designations(
         if right_key in designation_keys and left_key in physical_components:
             targets[right_key].add(left_key)
 
-    additions: dict[tuple[str, ...], set[str]] = defaultdict(set)
+    designation_targets: dict[str, tuple[str, ...]] = {}
     unmatched: dict[str, str] = {}
     for designation_key in designation_keys:
         target_components = {
             physical_components[target_key] for target_key in targets[designation_key]
         }
         if len(target_components) == 1:
-            additions[next(iter(target_components))].add(designation_key)
+            designation_targets[designation_key] = next(iter(target_components))
         elif not target_components:
             unmatched[designation_key] = "no_confident_physical_facility_match"
         else:
             unmatched[designation_key] = "ambiguous_physical_facility_match"
 
-    components: dict[str, tuple[str, ...]] = {}
-    for physical_component in set(physical_components.values()):
-        component = tuple(sorted((*physical_component, *additions[physical_component])))
-        for key in component:
-            components[key] = component
-    return components, unmatched
+    return physical_components, designation_targets, unmatched
 
 
 def _components(
@@ -727,6 +906,27 @@ def _address_values(record: Mapping[str, object]) -> set[str]:
     }
 
 
+def _address_unit_values(record: Mapping[str, object]) -> set[str]:
+    """Return exact parsed floor/unit tokens; a bare street/parcel is insufficient."""
+    patterns = (
+        re.compile(r"(?<!\d)(\d{1,3})\s*층"),
+        re.compile(r"(?<!\d)(\d{1,5})\s*호"),
+    )
+    units: set[str] = set()
+    for value in (
+        record.get("address"),
+        record.get("road_address"),
+        record.get("lot_address"),
+    ):
+        text = _text(value)
+        if text is None:
+            continue
+        tokens = [match.group(1) for pattern in patterns for match in pattern.finditer(text)]
+        if tokens:
+            units.add("|".join(tokens))
+    return units
+
+
 def _building_values(record: Mapping[str, object]) -> set[str]:
     value = record.get("building_ids", record.get("building_id"))
     if value is None:
@@ -747,6 +947,13 @@ def _coordinate_distance(left: Mapping[str, object], right: Mapping[str, object]
         right_longitude = float(right["longitude"])
         right_latitude = float(right["latitude"])
     except (KeyError, TypeError, ValueError):
+        return None
+    if not (
+        124 <= left_longitude <= 132
+        and 33 <= left_latitude <= 39
+        and 124 <= right_longitude <= 132
+        and 33 <= right_latitude <= 39
+    ):
         return None
     latitude_delta = math.radians(right_latitude - left_latitude)
     longitude_delta = math.radians(right_longitude - left_longitude)

@@ -7,12 +7,12 @@ lodgings,L05,송도인,0512000004,부산광역시 서구 송도해변로 5,B05,t
 lodgings,L06,광안리하우스,0512000005,부산광역시 수영구 광안해변로 6,B06,tourist_accommodations,T06,광안리 하우스,0512000005,부산광역시 수영구 광안해변로 6,B06,auto_merge
 lodgings,L07,명지호텔,0512000006,부산광역시 강서구 명지국제 7,B07,tourist_accommodations,T07,명지 호텔,0512000006,부산광역시 강서구 명지국제 7,B07,auto_merge
 lodgings,L08,사상스테이,0512000007,부산광역시 사상구 광장로 8,B08,tourist_accommodations,T08,사상 스테이,0512000007,부산광역시 사상구 광장로 8,B08,auto_merge
-lodgings,L09,기장바다펜션,0512000008,부산광역시 기장군 해맞이로 9,B09,tourist_accommodations,T09,기장 바다 펜션,,부산광역시 기장군 해맞이로 9,,auto_merge
-lodgings,L10,영도뷰호텔,,부산광역시 영도구 절영로 10,,tourist_accommodations,T10,영도 뷰 호텔,0512000009,부산광역시 영도구 절영로 10,,auto_merge
-lodgings,L11,남포스테이,0512000010,부산광역시 중구 광복로 11,,tourist_accommodations,T11,남포 스테이,,부산광역시 중구 광복로 11,,auto_merge
+lodgings,L09,기장바다펜션,0512000008,부산광역시 기장군 해맞이로 9,B09,tourist_accommodations,T09,기장 바다 펜션,,부산광역시 기장군 해맞이로 9,,review
+lodgings,L10,영도뷰호텔,,부산광역시 영도구 절영로 10,,tourist_accommodations,T10,영도 뷰 호텔,0512000009,부산광역시 영도구 절영로 10,,review
+lodgings,L11,남포스테이,0512000010,부산광역시 중구 광복로 11,,tourist_accommodations,T11,남포 스테이,,부산광역시 중구 광복로 11,,review
 lodgings,L12,동래호텔,,부산광역시 동래구 온천장로 12,,tourist_accommodations,T12,동래 호텔,,부산광역시 동래구 온천장로 12,,review
 lodgings,L13,서면레지던스,0512000012,부산광역시 부산진구 중앙대로 13,,tourist_accommodations,T13,서면 레지던스,0512000012,부산광역시 부산진구 중앙대로 13,,auto_merge
-lodgings,L14,태종대하우스,0512000013,부산광역시 영도구 태종로 14,,tourist_accommodations,T14,태종대 하우스,,부산광역시 영도구 태종로 14,,auto_merge
+lodgings,L14,태종대하우스,0512000013,부산광역시 영도구 태종로 14,,tourist_accommodations,T14,태종대 하우스,,부산광역시 영도구 태종로 14,,review
 lodgings,L15,북구모텔,0512000014,부산광역시 북구 금곡대로 15,,tourist_accommodations,T15,북구 모텔,0512000014,부산광역시 북구 금곡대로 15,,auto_merge
 lodgings,L16,부산바다호텔,0511111111,부산광역시 중구 중앙대로 16,,lodgings,X16,부산바다호텔,0512222222,부산광역시 중구 중앙대로 16,,review
 lodgings,L17,중앙게스트하우스,0511111112,부산광역시 중구 중앙대로 17,,lodgings,X17,중앙호텔,0512222223,부산광역시 중구 중앙대로 17,,separate

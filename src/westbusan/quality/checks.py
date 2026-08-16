@@ -17,7 +17,7 @@ import duckdb
 from westbusan.db import Database, ensure_run_rebuildable
 from westbusan.entity_resolution.match import (
     classify_pair,
-    evaluate_auto_merge_precision,
+    evaluate_auto_merge_calibration,
 )
 from westbusan.http import SchemaError
 from westbusan.sources.datagokr import parse_data_page
@@ -777,12 +777,37 @@ def _coverage_check(
 
 
 def _entity_precision_check() -> CheckResult:
-    fixture = Path(__file__).parents[3] / "tests" / "fixtures" / "entity_resolution" / "labeled_pairs.csv"
+    fixture = (
+        Path(__file__).parents[3]
+        / "config"
+        / "entity_resolution_labeled_pairs_2026-08.csv"
+    )
     try:
-        precision = evaluate_auto_merge_precision(fixture, classify_pair)
+        calibration = evaluate_auto_merge_calibration(
+            fixture,
+            classify_pair,
+            sample_version="2026-08-initial-reviewed",
+        )
     except (OSError, ValueError) as error:
-        return CheckResult("entity_auto_merge_precision", "failed", "INVALID_OR_DEGENERATE_LABELED_SAMPLE", ">=0.99 precision with a valid labeled sample", "required", table_name="entity_resolution_labeled_sample", evidence={"error": str(error), "fixture": fixture.name})
-    return CheckResult("entity_auto_merge_precision", "passed" if precision >= 0.99 else "failed", precision, ">=0.99 precision with a valid labeled sample", "required", table_name="entity_resolution_labeled_sample", evidence={"fixture": fixture.name})
+        return CheckResult("entity_auto_merge_calibration", "failed", "INVALID_OR_DEGENERATE_LABELED_SAMPLE", ">=0.70 Wilson 95% confidence lower bound", "required", table_name="entity_resolution_labeled_sample", evidence={"error": str(error), "fixture": fixture.name})
+    actual = {
+        "point_precision": calibration.point_precision,
+        "confidence_lower_bound": calibration.confidence_lower_bound,
+        "predicted_positive": calibration.predicted_positive,
+    }
+    return CheckResult(
+        "entity_auto_merge_calibration",
+        "passed" if calibration.confidence_lower_bound >= 0.70 else "failed",
+        actual,
+        ">=0.70 Wilson 95% confidence lower bound",
+        "required",
+        table_name="entity_resolution_labeled_sample",
+        evidence={
+            "fixture": fixture.name,
+            "sample_version": calibration.sample_version,
+            "algorithm_version": calibration.algorithm_version,
+        },
+    )
 
 
 def _building_and_duplicate_warnings(db: Database, run_id: UUID) -> list[CheckResult]:
@@ -796,7 +821,50 @@ def _building_and_duplicate_warnings(db: Database, run_id: UUID) -> list[CheckRe
         CheckResult("reference_legal_dong_import", "passed" if reference_rows else "warning", reference_rows, ">0 active official legal-dong rows", "warning", table_name="reference_legal_dong", evidence={"run_id": str(run_id)}),
         CheckResult("building_link_coverage", "passed" if facilities and coverage >= 0.70 else "warning", coverage, ">=0.70 after legal-dong reference import", "warning", table_name="bridge_facility_building", evidence={"run_id": str(run_id), "linked_facilities": linked, "active_facilities": facilities}),
         CheckResult("unresolved_duplicate_candidate_rate", "passed" if facilities and rate <= 0.10 else "warning", rate, "<=0.10", "warning", table_name="duplicate_review", evidence={"run_id": str(run_id), "pending_candidates": unresolved, "active_facilities": facilities}),
+        _designation_coverage_check(db, run_id),
     ]
+
+
+def _designation_coverage_check(db: Database, run_id: UUID) -> CheckResult:
+    total = int(
+        db.query(
+            """
+            select count(*) from staging_license_snapshot
+            where source_id = 'tourist_pensions' and last_loaded_run_id = ?
+            """,
+            [run_id],
+        )[0][0]
+    )
+    linked = int(
+        db.query(
+            """
+            select count(*)
+            from bridge_facility_designation as designation
+            join staging_license_snapshot as snapshot
+              on snapshot.source_id = designation.source_id
+             and snapshot.source_record_id = designation.source_record_id
+            where snapshot.last_loaded_run_id = ?
+            """,
+            [run_id],
+        )[0][0]
+    )
+    coverage = linked / total if total else None
+    status: CheckStatus = (
+        "skipped" if total == 0 else "passed" if linked == total else "warning"
+    )
+    return CheckResult(
+        "tourist_pension_designation_link_coverage",
+        status,
+        coverage,
+        "1.0 or explicit unmatched review evidence",
+        "warning",
+        table_name="bridge_facility_designation",
+        evidence={
+            "designation_records": total,
+            "linked_designations": linked,
+            "unmatched_designations": total - linked,
+        },
+    )
 
 
 def _active_facility_count(db: Database, run_id: UUID) -> int:

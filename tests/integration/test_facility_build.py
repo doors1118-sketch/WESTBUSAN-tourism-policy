@@ -8,7 +8,7 @@ import westbusan.entity_resolution.match as match_module
 from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.db import Database
-from westbusan.entity_resolution.match import build_facilities
+from westbusan.entity_resolution.match import build_facilities, record_pair_adjudication
 
 
 @pytest.mark.parametrize(
@@ -237,18 +237,82 @@ def test_confident_tourist_pension_overlay_links_to_its_physical_facility(tmp_pa
     result = build_facilities(db, run_id)
 
     assert result.facility_count == 1
-    assert result.license_links == 2
+    assert result.license_links == 1
     assert result.designation_links == 1
     assert result.unmatched_designations == 0
     assert db.query(
         """
-        select count(*) from bridge_facility_license
+        select count(*) from bridge_facility_designation
         where facility_id = (
             select facility_id from bridge_facility_license
             where source_id = 'rural_homestays' and source_record_id = 'R1'
         )
         """
-    ) == [(2,)]
+    ) == [(1,)]
+
+
+def test_designation_overlay_never_changes_physical_facility_identity(tmp_path: Path) -> None:
+    """Catches a tourist-pension designation being included in the facility UUID."""
+    db = Database(tmp_path / "test.duckdb", Path("sql"))
+    db.migrate()
+    physical = _license(
+        "rural_homestays", "R1", "농가민박", "부산광역시 기장군 농가로 1", "051-111-1111"
+    )
+    first_run = uuid4()
+    load_license_snapshot(db, [physical], first_run)
+    build_facilities(db, first_run)
+    before = db.query("select facility_id from bridge_facility_license")[0][0]
+
+    designation = _license(
+        "tourist_pensions", "R1", "농가민박", "부산광역시 기장군 농가로 1", None
+    )
+    second_run = uuid4()
+    load_license_snapshot(db, [designation], second_run)
+    build_facilities(db, second_run)
+
+    assert db.query("select facility_id from bridge_facility_license")[0][0] == before
+    assert db.query(
+        "select facility_id, source_id, source_record_id from bridge_facility_designation"
+    ) == [(before, "tourist_pensions", "R1")]
+
+
+def test_immutable_pair_adjudication_overrides_algorithm_and_is_consumed(tmp_path: Path) -> None:
+    """Catches a reviewed separate decision being lost on the next deterministic rebuild."""
+    db = Database(tmp_path / "test.duckdb", Path("sql"))
+    db.migrate()
+    run_id = uuid4()
+    records = [
+        _license("lodgings", "L1", "바다호텔", "부산광역시 사하구 바다로 1", "051-111-1111"),
+        _license("tourist_accommodations", "T1", "바다 호텔", "부산광역시 사하구 바다로 1", "051-111-1111"),
+    ]
+    load_license_snapshot(db, records, run_id)
+    record_pair_adjudication(
+        db,
+        "lodgings:L1",
+        "tourist_accommodations:T1",
+        decision="separate",
+        reviewer="reviewer-1",
+        rationale="distinct entrances confirmed",
+        data_version="2026-08-16",
+    )
+
+    assert build_facilities(db, run_id).facility_count == 2
+    stored = db.query(
+        "select decision, reviewer, rationale, algorithm_version, data_version from entity_pair_adjudication"
+    )
+    assert stored[0][:3] == ("separate", "reviewer-1", "distinct entrances confirmed")
+
+    # Same version is immutable: a contrary overwrite must fail.
+    with pytest.raises(Exception):
+        record_pair_adjudication(
+            db,
+            "lodgings:L1",
+            "tourist_accommodations:T1",
+            decision="merge",
+            reviewer="reviewer-2",
+            rationale="changed mind",
+            data_version="2026-08-16",
+        )
 
 
 def test_transitive_conflicting_phone_chain_does_not_collapse_three_records(tmp_path: Path) -> None:
@@ -265,7 +329,7 @@ def test_transitive_conflicting_phone_chain_does_not_collapse_three_records(tmp_
 
     result = build_facilities(db, run_id)
 
-    assert result.facility_count == 2
+    assert result.facility_count == 3
     assert result.license_links == 3
     assert result.review_pairs >= 1
     assert db.query(

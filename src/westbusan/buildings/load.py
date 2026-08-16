@@ -220,6 +220,10 @@ def collect_buildings_for_licenses(
             not in {"building_register_title", "closed_register_basis_outline"}
             for row in rows
         ]
+        valid_title_ids = [
+            title.building_id for title in titles if title.building_id is not None
+        ]
+        resolved_single_title = len(valid_title_ids) == 1
         for title in titles:
             heartbeat()
             if title.building_id is None:
@@ -229,7 +233,9 @@ def collect_buildings_for_licenses(
                 record = _merge(record, extra)
             _store_building(db, record, parcel_hash, run, responses, heartbeat)
             building_rows += 1
-            for source_id, source_record_id in licenses_by_parcel[parcel_hash]:
+            for source_id, source_record_id in (
+                licenses_by_parcel[parcel_hash] if resolved_single_title else []
+            ):
                 heartbeat()
                 if _link_license(
                     db,
@@ -241,6 +247,14 @@ def collect_buildings_for_licenses(
                     heartbeat,
                 ):
                     bridge_rows += 1
+        if len(valid_title_ids) > 1:
+            _store_ambiguous_building_candidates(
+                db,
+                parcel_hash,
+                licenses_by_parcel[parcel_hash],
+                valid_title_ids,
+                heartbeat,
+            )
     for source_id, source_record_id in captured_licenses:
         heartbeat()
         db.connection.execute(
@@ -250,6 +264,44 @@ def collect_buildings_for_licenses(
             [run.run_id, source_id, source_record_id],
         )
     return BuildingCollectionResult(len(queries), building_rows, bridge_rows)
+
+
+def _store_ambiguous_building_candidates(
+    db: Database,
+    parcel_hash: str,
+    licenses: list[tuple[str, str]],
+    building_ids: list[str],
+    progress: ProgressCallback,
+) -> None:
+    """Persist parcel fan-out as review evidence, never as a resolved bridge."""
+    candidates = json.dumps(sorted(building_ids), ensure_ascii=False)
+    for source_id, source_record_id in licenses:
+        review_id = uuid5(
+            NAMESPACE_URL,
+            f"building-link-review:{source_id}:{source_record_id}:{parcel_hash}",
+        )
+        evidence = json.dumps(
+            {
+                "decision": "ambiguous_parcel_multi_title",
+                "candidate_count": len(building_ids),
+                "resolved": False,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        progress()
+        db.connection.execute(
+            """
+            insert into building_link_review (
+                review_id, source_id, source_record_id, parcel_hash,
+                candidate_building_ids_json, evidence_json
+            ) values (?, ?, ?, ?, ?, ?)
+            on conflict (review_id) do update set
+                candidate_building_ids_json = excluded.candidate_building_ids_json,
+                evidence_json = excluded.evidence_json
+            """,
+            [review_id, source_id, source_record_id, parcel_hash, candidates, evidence],
+        )
 
 
 def _parcel_responses(

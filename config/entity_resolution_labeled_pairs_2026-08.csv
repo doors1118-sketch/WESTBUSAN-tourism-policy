@@ -1,0 +1,13 @@
+left_source_id,left_source_record_id,left_name,left_phone,left_address,left_building_id,right_source_id,right_source_record_id,right_name,right_phone,right_address,right_building_id,expected
+lodgings,L01,부산바다호텔,0511234567,부산광역시 사하구 낙동대로 1,B01,tourist_accommodations,T01,부산 바다 호텔,0511234567,부산광역시 사하구 낙동대로 1,B01,auto_merge
+lodgings,L02,해운대호텔,0512000001,부산광역시 해운대구 해운대로 2,B02,tourist_accommodations,T02,해운대 호텔,0512000001,부산광역시 해운대구 해운대로 2,B02,auto_merge
+lodgings,L03,감천게스트하우스,0512000002,부산광역시 사하구 감천로 3,B03,tourist_accommodations,T03,감천 게스트 하우스,0512000002,부산광역시 사하구 감천로 3,B03,auto_merge
+lodgings,L04,다대포모텔,0512000003,부산광역시 사하구 다대로 4,B04,tourist_accommodations,T04,다대포 모텔,0512000003,부산광역시 사하구 다대로 4,B04,auto_merge
+lodgings,L05,송도인,0512000004,부산광역시 서구 송도해변로 5,B05,tourist_accommodations,T05,송도 인,0512000004,부산광역시 서구 송도해변로 5,B05,auto_merge
+lodgings,L06,광안리하우스,0512000005,부산광역시 수영구 광안해변로 6,B06,tourist_accommodations,T06,광안리 하우스,0512000005,부산광역시 수영구 광안해변로 6,B06,auto_merge
+lodgings,L07,명지호텔,0512000006,부산광역시 강서구 명지국제 7,B07,tourist_accommodations,T07,명지 호텔,0512000006,부산광역시 강서구 명지국제 7,B07,auto_merge
+lodgings,L08,사상스테이,0512000007,부산광역시 사상구 광장로 8,B08,tourist_accommodations,T08,사상 스테이,0512000007,부산광역시 사상구 광장로 8,B08,auto_merge
+lodgings,L09,서면레지던스,0512000012,부산광역시 부산진구 중앙대로 13,,tourist_accommodations,T09,서면 레지던스,0512000012,부산광역시 부산진구 중앙대로 13,,auto_merge
+lodgings,L10,북구모텔,0512000014,부산광역시 북구 금곡대로 15,,tourist_accommodations,T10,북구 모텔,0512000014,부산광역시 북구 금곡대로 15,,auto_merge
+lodgings,N01,중앙게스트하우스,0511111112,부산광역시 중구 중앙대로 17,,lodgings,N02,중앙호텔,0512222223,부산광역시 중구 중앙대로 17,,separate
+lodgings,N03,해운대레지던스,,부산광역시 해운대구 해운대로 18,,lodgings,N04,해운대하우스,,부산광역시 해운대구 해운대로 18,,review

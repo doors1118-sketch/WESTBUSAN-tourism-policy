@@ -5,6 +5,7 @@ import pytest
 
 from westbusan.entity_resolution.match import (
     classify_pair,
+    evaluate_auto_merge_calibration,
     evaluate_auto_merge_precision,
 )
 
@@ -63,6 +64,58 @@ def test_same_address_without_name_or_phone_support_is_reviewed() -> None:
     assert decision.label == "review"
 
 
+def test_same_address_and_name_with_one_missing_phone_requires_review() -> None:
+    """Catches address/name similarity becoming an automatic merge without independent evidence."""
+    decision = classify_pair(
+        {
+            "source_id": "lodgings",
+            "source_record_id": "A1",
+            "name": "바다호텔",
+            "phone": "0511111111",
+            "address": "부산광역시 사하구 바다로 1",
+        },
+        {
+            "source_id": "tourist_accommodations",
+            "source_record_id": "B1",
+            "name": "바다 호텔",
+            "address": "부산광역시 사하구 바다로 1",
+        },
+    )
+
+    assert decision.label == "review"
+
+
+def test_same_address_unit_and_name_can_auto_merge_without_phone() -> None:
+    """Catches discarding parsed unit/floor evidence that identifies one premises."""
+    decision = classify_pair(
+        {
+            "source_id": "lodgings",
+            "source_record_id": "A1",
+            "name": "바다호텔",
+            "address": "부산광역시 사하구 바다로 1 3층 301호",
+        },
+        {
+            "source_id": "tourist_accommodations",
+            "source_record_id": "B1",
+            "name": "바다 호텔",
+            "address": "부산광역시 사하구 바다로 1 3층 301호",
+        },
+    )
+
+    assert decision.label == "auto_merge"
+    assert decision.features.address_unit_match is True
+
+
+def test_projected_coordinates_are_never_interpreted_as_decimal_degrees() -> None:
+    """Catches EPSG:5174 X/Y values producing a fictitious metre-distance candidate."""
+    decision = classify_pair(
+        {"source_id": "lodgings", "source_record_id": "A", "longitude": 953100, "latitude": 1945200},
+        {"source_id": "lodgings", "source_record_id": "B", "longitude": 953101, "latitude": 1945201},
+    )
+
+    assert decision.features.coordinate_distance_metres is None
+
+
 def test_tourist_pension_is_an_attribute_not_a_new_facility() -> None:
     """Catches classifying a same-management tourist-pension overlay as independent."""
     decision = classify_pair(
@@ -74,13 +127,17 @@ def test_tourist_pension_is_an_attribute_not_a_new_facility() -> None:
 
 
 def test_labeled_fixture_has_perfect_auto_merge_precision() -> None:
-    """Catches a false automatic merge in the representative labeled sample."""
-    precision = evaluate_auto_merge_precision(
-        Path("tests/fixtures/entity_resolution/labeled_pairs.csv"), classify_pair
+    """Catches publishing an unsupported point-precision claim without uncertainty."""
+    calibration = evaluate_auto_merge_calibration(
+        Path("tests/fixtures/entity_resolution/labeled_pairs.csv"),
+        classify_pair,
+        sample_version="fixture-2026-08",
     )
 
-    assert precision == 1.0
-    assert precision >= 0.99
+    assert calibration.point_precision == 1.0
+    assert 0.70 < calibration.confidence_lower_bound < 1.0
+    assert calibration.sample_version == "fixture-2026-08"
+    assert calibration.algorithm_version
 
 
 def test_labeled_fixture_validates_each_representative_decision() -> None:
