@@ -8,7 +8,7 @@ import os
 from calendar import monthrange
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
@@ -213,6 +213,8 @@ def iter_collection_months(
 
 
 def normalize_demand_row(source_id: str, row: dict[str, object]) -> DemandRecord:
+    if source_id == "tourism_data_lab":
+        _validate_datalab_jurisdiction(row)
     period, period_fields = _period(source_id, row)
     district = str(_required_field(row, _DISTRICT_FIELDS)).strip()
     try:
@@ -238,6 +240,21 @@ def normalize_demand_row(source_id: str, row: dict[str, object]) -> DemandRecord
     )
 
 
+class _OutOfScopeRow(ValueError):
+    """A valid nationwide DataLab row that is not in Busan."""
+
+
+def _validate_datalab_jurisdiction(row: Mapping[str, object]) -> None:
+    value = _required_field(row, ("signguCode",))
+    if not isinstance(value, str):
+        raise TypeError("DataLab signguCode must be a five-digit string")
+    signgu_code = value.strip()
+    if len(signgu_code) != 5 or not signgu_code.isdigit():
+        raise ValueError("DataLab signguCode must be a five-digit string")
+    if not signgu_code.startswith("26"):
+        raise _OutOfScopeRow("DataLab row is outside Busan")
+
+
 def load_tourism_demand(
     db: Database,
     registry: SourceRegistry,
@@ -247,14 +264,15 @@ def load_tourism_demand(
 ) -> LoadResult:
     """Collect inspected KTO series month by month, persisting each raw page first."""
     service_key = os.getenv("DATA_GO_KR_SERVICE_KEY", "")
+    end = min(end, _latest_complete_month_end(run.started_at.date()))
     raw_store = RawStore(db.path.parent)
     loaded = 0
     artifacts = 0
     ready: list[str] = []
     skipped: list[str] = []
     for source_id in registry.ids(group="tourism"):
-        source_loaded = 0
         specs = _resolved_specs(registry.get(source_id), db)
+        source_succeeded = bool(specs)
         for spec in specs:
             if not service_key:
                 _record_status(
@@ -263,6 +281,7 @@ def load_tourism_demand(
                     "AUTH_FAILED",
                     {"reason": "DATA_GO_KR_SERVICE_KEY is not configured"},
                 )
+                source_succeeded = False
                 continue
             if not _collectable(spec):
                 _record_status(
@@ -271,11 +290,12 @@ def load_tourism_demand(
                     "SPEC_UNRESOLVED",
                     {"reason": _skip_reason(spec, service_key)},
                 )
+                source_succeeded = False
                 continue
             months, backfill_phase = _planned_months(
                 source_id, spec, start, end, run, db
             )
-            page_statuses: dict[int, list[str]] = {}
+            page_statuses: dict[int, dict[int, list[str]]] = {}
             for month in months:
                 parameters = _month_parameters(spec.required_parameters, month)
                 pager_spec = replace(spec, url=spec.endpoint_url, operation=None)
@@ -300,28 +320,34 @@ def load_tourism_demand(
                     db.record_artifact(artifact)
                     raw_store.write_rows(artifact, page.rows)
                     artifacts += 1
-                    page_loaded = 0
+                    out_of_scope_rows = 0
+                    invalid_rows = 0
                     for row in page.rows:
                         try:
                             record = normalize_demand_row(source_id, row)
-                        except (KeyError, ValueError):
+                        except _OutOfScopeRow:
+                            out_of_scope_rows += 1
+                            continue
+                        except (KeyError, TypeError, ValueError):
+                            invalid_rows += 1
                             continue
                         if not _matches_selected_operation(record, spec.operation):
+                            invalid_rows += 1
                             continue
                         _persist_record(
                             db, record, artifact.content_hash, artifact.artifact_id, run
                         )
                         loaded += 1
-                        source_loaded += 1
-                        page_loaded += 1
                     page_status = (
                         "EMPTY"
                         if not page.rows
                         else "READY"
-                        if page_loaded == len(page.rows)
+                        if invalid_rows == 0
                         else "SCHEMA_CHANGED"
                     )
-                    page_statuses.setdefault(month.year, []).append(page_status)
+                    page_statuses.setdefault(month.year, {}).setdefault(
+                        month.month, []
+                    ).append(page_status)
                     _record_status(
                         db,
                         spec,
@@ -332,6 +358,8 @@ def load_tourism_demand(
                             "observed_field_names": sorted(
                                 {key for row in page.rows for key in row}
                             ),
+                            "out_of_scope_rows": out_of_scope_rows,
+                            "invalid_rows": invalid_rows,
                             "page_no": page.page_no,
                             "schema_fingerprint": page.schema_fingerprint,
                             "source_revision": artifact.content_hash,
@@ -341,7 +369,9 @@ def load_tourism_demand(
                 _record_backfill_checkpoint(
                     db, source_id, spec.operation, backfill_phase, months, page_statuses
                 )
-        if source_loaded:
+            if not _operation_succeeded(page_statuses):
+                source_succeeded = False
+        if source_succeeded:
             ready.append(source_id)
         else:
             skipped.append(source_id)
@@ -400,9 +430,12 @@ def _number(value: object) -> int | float:
 
 
 def _collectable(spec: SourceSpec) -> bool:
-    return spec.operation in _REVIEWED_OPERATIONS.get(spec.source_id, set()) and any(
-        str(value)
-        in {"{baseYm}", "{baseYmd}", "{yearMonth}", "{startYmd}", "{endYmd}"}
+    if spec.operation not in _REVIEWED_OPERATIONS.get(spec.source_id, set()):
+        return False
+    if spec.source_id == "tourism_concentration_rate":
+        return {"areaCd", "signguCd"}.issubset(spec.required_parameters)
+    return any(
+        str(value) in {"{baseYm}", "{yearMonth}", "{startYmd}", "{endYmd}"}
         for value in spec.required_parameters.values()
     )
 
@@ -439,7 +472,6 @@ def _month_parameters(
 ) -> dict[str, object]:
     values = {
         "{baseYm}": f"{month.year:04d}{month.month:02d}",
-        "{baseYmd}": f"{month.year:04d}{month.month:02d}{monthrange(month.year, month.month)[1]:02d}",
         "{yearMonth}": str(month),
         "{startYmd}": f"{month.year:04d}{month.month:02d}01",
         "{endYmd}": (
@@ -447,6 +479,21 @@ def _month_parameters(
         ),
     }
     return {key: values.get(str(value), value) for key, value in parameters.items()}
+
+
+def _latest_complete_month_end(as_of: date) -> date:
+    return date(as_of.year, as_of.month, 1) - timedelta(days=1)
+
+
+def _operation_succeeded(
+    page_statuses: Mapping[int, Mapping[int, list[str]]]
+) -> bool:
+    return bool(page_statuses) and all(
+        status in {"READY", "EMPTY"}
+        for months in page_statuses.values()
+        for statuses in months.values()
+        for status in statuses
+    )
 
 
 def _matches_selected_operation(record: DemandRecord, operation: str | None) -> bool:
@@ -464,10 +511,16 @@ def _planned_months(
     db: Database,
 ) -> tuple[tuple[YearMonth, ...], str | None]:
     """Return one persisted historical window without inventing bounded history."""
+    if source_id == "tourism_concentration_rate":
+        return (YearMonth(end.year, end.month),), None
+    if end < start:
+        return (), None
     if run.mode != "backfill" or source_id not in _HISTORICAL_SOURCE_IDS:
         return tuple(iter_collection_months(source_id, start, end)), None
     checkpoint = _backfill_checkpoint(db, source_id, spec.operation)
     if checkpoint is None:
+        if end < _INITIAL_BACKFILL_MONTH.first_day:
+            return (), None
         return (
             tuple(
                 iter_collection_months(
@@ -481,10 +534,12 @@ def _planned_months(
     next_year = checkpoint.get("next_year")
     if not isinstance(next_year, int):
         return (), None
+    if date(next_year, 1, 1) > end:
+        return (), None
     return (
         tuple(
             iter_collection_months(
-                source_id, date(next_year, 1, 1), date(next_year, 12, 31)
+                source_id, date(next_year, 1, 1), min(date(next_year, 12, 31), end)
             )
         ),
         "older_yearly",
@@ -515,7 +570,7 @@ def _record_backfill_checkpoint(
     operation: str | None,
     phase: str,
     months: tuple[YearMonth, ...],
-    page_statuses: Mapping[int, list[str]],
+    page_statuses: Mapping[int, Mapping[int, list[str]]],
 ) -> None:
     if operation is None or not months:
         return
@@ -572,10 +627,13 @@ def _record_backfill_checkpoint(
 
 
 def _is_explicitly_empty_year(
-    page_statuses: Mapping[int, list[str]], year: int
+    page_statuses: Mapping[int, Mapping[int, list[str]]], year: int
 ) -> bool:
-    statuses = page_statuses.get(year, [])
-    return bool(statuses) and all(status == "EMPTY" for status in statuses)
+    months = page_statuses.get(year, {})
+    return set(months) == set(range(1, 13)) and all(
+        statuses and all(status == "EMPTY" for status in statuses)
+        for statuses in months.values()
+    )
 
 
 def _skip_reason(spec: SourceSpec, service_key: str) -> str:

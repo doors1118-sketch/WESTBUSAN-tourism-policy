@@ -72,6 +72,143 @@ def test_resource_demand_keeps_provider_submetric_identity() -> None:
     assert record.metric_value == 430000
 
 
+def test_datalab_filters_non_busan_duplicate_district_names_without_schema_change(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The nationwide DataLab feed must use the jurisdiction code, not a duplicate name."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="tourism_data_lab",
+                url="https://example.test/DataLabService",
+                operation="locgoRegnVisitrDDList",
+                group="tourism",
+                required_parameters={"startYmd": "{startYmd}", "endYmd": "{endYmd}"},
+            ),
+        )
+    )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            rows = [
+                {
+                    "baseYmd": "20260115",
+                    "signguCode": "26320",
+                    "daywkDivCd": "1",
+                    "signguNm": "북구",
+                    "touDivCd": "1",
+                    "touDivNm": "외지인",
+                    "touNum": "1200",
+                    "daywkDivNm": "월",
+                },
+                {
+                    "baseYmd": "20260115",
+                    "signguCode": "27200",
+                    "daywkDivCd": "1",
+                    "signguNm": "북구",
+                    "touDivCd": "1",
+                    "touDivNm": "외지인",
+                    "touNum": "9800",
+                    "daywkDivNm": "월",
+                },
+                {
+                    "baseYmd": "20260115",
+                    "signguCode": "27110",
+                    "daywkDivCd": "1",
+                    "signguNm": "중구",
+                    "touDivCd": "1",
+                    "touDivNm": "외지인",
+                    "touNum": "9700",
+                    "daywkDivNm": "월",
+                },
+            ]
+            yield ApiPage(
+                rows=rows,
+                total_count=len(rows),
+                page_no=1,
+                page_size=len(rows),
+                raw_body=json.dumps({"data": rows}, ensure_ascii=False).encode(),
+                schema_fingerprint="locgo-regn-visitr-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    result = load_tourism_demand(
+        db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == 1
+    assert result.sources_ready == ("tourism_data_lab",)
+    assert db.query("select district, region_group, metric_value from fact_tourism_demand") == [
+        ("북구", "west", 1200.0)
+    ]
+    assert db.query("select status from source_status") == [("READY",)]
+
+
+def test_datalab_missing_jurisdiction_code_is_schema_evidence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A name cannot substitute for the documented DataLab jurisdiction code."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="tourism_data_lab",
+                url="https://example.test/DataLabService",
+                operation="locgoRegnVisitrDDList",
+                group="tourism",
+                required_parameters={"startYmd": "{startYmd}", "endYmd": "{endYmd}"},
+            ),
+        )
+    )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            row = {
+                "baseYmd": "20260115",
+                "signguNm": "중구",
+                "touNum": "1200",
+            }
+            yield ApiPage(
+                rows=[row],
+                total_count=1,
+                page_no=1,
+                page_size=1,
+                raw_body=json.dumps({"data": [row]}, ensure_ascii=False).encode(),
+                schema_fingerprint="missing-jurisdiction-code",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    result = load_tourism_demand(
+        db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert result.sources_skipped == ("tourism_data_lab",)
+    assert db.query("select status from source_status") == [("SCHEMA_CHANGED",)]
+
+
 @pytest.mark.parametrize(
     "source_id,row,metric_code,unit,period,dimensions",
     [
@@ -526,10 +663,10 @@ def test_loader_collects_each_reviewed_operation_for_one_source(
     ]
 
 
-def test_concentration_uses_documented_base_ymd_request_and_returned_period(
+def test_concentration_uses_reviewed_area_parameters_and_returned_base_ymd(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Concentration has a current base date, not an invented forecast date."""
+    """Concentration is a current area call; ``baseYmd`` exists only in its rows."""
     monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
     db = Database(tmp_path / "tourism.duckdb", Path("sql"))
     db.migrate()
@@ -541,7 +678,6 @@ def test_concentration_uses_documented_base_ymd_request_and_returned_period(
                 operation="tatsCnctrRatedList",
                 group="tourism",
                 required_parameters={
-                    "baseYmd": "{baseYmd}",
                     "areaCd": "26",
                     "signguCd": "26380",
                 },
@@ -558,7 +694,6 @@ def test_concentration_uses_documented_base_ymd_request_and_returned_period(
         ):
             assert spec.url.endswith("/tatsCnctrRatedList")
             assert parameters == {
-                "baseYmd": "20260131",
                 "areaCd": "26",
                 "signguCd": "26380",
             }
@@ -589,6 +724,57 @@ def test_concentration_uses_documented_base_ymd_request_and_returned_period(
     assert db.query("select metric_code, unit, period from fact_tourism_demand") == [
         ("tats_cnctr_rated_list.visitor_concentration_rate", "percent", "2026-01-31")
     ]
+
+
+def test_concentration_still_issues_one_current_call_when_the_requested_dates_are_future(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The current bounded profile has no request date and must not be filtered as history."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="tourism_concentration_rate",
+                url="https://example.test/TatsCnctrRateService",
+                operation="tatsCnctrRatedList",
+                group="tourism",
+                required_parameters={"areaCd": "26", "signguCd": "26380"},
+            ),
+        )
+    )
+    calls = 0
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            nonlocal calls
+            calls += 1
+            assert parameters == {"areaCd": "26", "signguCd": "26380"}
+            yield ApiPage(
+                rows=[],
+                total_count=0,
+                page_no=1,
+                page_size=1,
+                raw_body=b'{"data":[]}',
+                schema_fingerprint="tats-cnctr-rate-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    load_tourism_demand(
+        db,
+        registry,
+        date(2026, 12, 1),
+        date(2026, 12, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert calls == 1
 
 
 def test_mixed_rows_from_a_different_reviewed_operation_are_schema_changed(
@@ -752,7 +938,7 @@ def test_backfill_starts_at_2022_and_persists_two_empty_year_stop_state(
             "tourism_concentration_rate",
             date(2026, 1, 1),
             date(2026, 1, 31),
-            {"baseYmd": "{baseYmd}"},
+            {"areaCd": "26", "signguCd": "26380"},
         ),
         (
             "area_tourism_destination_division",
@@ -820,7 +1006,7 @@ def test_loader_collects_every_documented_operation_from_reviewed_inspections(
             expected_parameters = (
                 {"startYmd": "20260101", "endYmd": "20260131"}
                 if source_id == "tourism_data_lab"
-                else {"baseYmd": "20260131"}
+                else {"areaCd": "26", "signguCd": "26380"}
                 if source_id == "tourism_concentration_rate"
                 else {"baseYm": f"{start.year:04d}{start.month:02d}"}
             )
@@ -852,3 +1038,172 @@ def test_loader_collects_every_documented_operation_from_reviewed_inspections(
     assert set(db.query("select metric_code, unit from fact_tourism_demand")) == {
         (item["metric_code"], item["unit"]) for item in official_rows
     }
+
+
+def test_source_is_not_ready_when_any_required_reviewed_operation_is_schema_changed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """One successful subseries cannot conceal a failed required operation."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    source = SourceSpec(
+        source_id="area_tourism_demand",
+        url="https://example.test/AreaTarDemDsService",
+        group="tourism",
+        inspection_required=True,
+    )
+    registry = SourceRegistry((source,))
+    for operation in ("areaTarSjrnDsList", "areaTarExpDsList"):
+        record_inspection(
+            source,
+            db,
+            operation=operation,
+            required_parameters={"baseYm": "{baseYm}", "areaCd": "26"},
+            response_row_path="response.body.items.item",
+            portal_detail_url="https://www.data.go.kr/data/15151868/openapi.do",
+        )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            row = (
+                {
+                    "baseYm": "202601",
+                    "signguNm": "사하구",
+                    "tarSjrnDsIxVal": "0.31",
+                    "tarSjrnDsIxCd": "2102",
+                    "tarSjrnDsIxNm": "숙박 비중",
+                }
+                if spec.url.endswith("/areaTarSjrnDsList")
+                else {"baseYm": "202601", "signguNm": "사하구", "unknown": "2"}
+            )
+            yield ApiPage(
+                rows=[row],
+                total_count=1,
+                page_no=1,
+                page_size=1,
+                raw_body=json.dumps({"data": [row]}, ensure_ascii=False).encode(),
+                schema_fingerprint="reviewed-operation-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    result = load_tourism_demand(
+        db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == 1
+    assert result.sources_ready == ()
+    assert result.sources_skipped == ("area_tourism_demand",)
+
+
+def test_backfill_caps_future_end_at_the_injected_latest_complete_month(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Future and in-progress months must not enter artifacts or checkpoint completion."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="area_tourism_demand",
+                url="https://example.test/AreaTarDemDsService",
+                operation="areaTarSjrnDsList",
+                group="tourism",
+                required_parameters={"baseYm": "{baseYm}", "areaCd": "26"},
+            ),
+        )
+    )
+    calls: list[str] = []
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            calls.append(str(parameters["baseYm"]))
+            yield ApiPage(
+                rows=[],
+                total_count=0,
+                page_no=1,
+                page_size=1,
+                raw_body=b'{"data":[]}',
+                schema_fingerprint="empty-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    load_tourism_demand(
+        db,
+        registry,
+        date(2025, 1, 1),
+        date(2026, 12, 31),
+        RunContext(uuid4(), "backfill", datetime(2026, 2, 15, tzinfo=UTC)),
+    )
+
+    assert calls[0] == "202201"
+    assert calls[-1] == "202601"
+    checkpoint = json.loads(
+        db.query("select checkpoint_json from collection_checkpoint")[0][0]
+    )
+    assert checkpoint["initial_complete_through"] == "2026-01"
+
+
+def test_partial_empty_initial_year_does_not_count_toward_the_two_year_stop(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An explicit empty year requires all twelve monthly observations."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="area_tourism_demand",
+                url="https://example.test/AreaTarDemDsService",
+                operation="areaTarSjrnDsList",
+                group="tourism",
+                required_parameters={"baseYm": "{baseYm}", "areaCd": "26"},
+            ),
+        )
+    )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            yield ApiPage(
+                rows=[],
+                total_count=0,
+                page_no=1,
+                page_size=1,
+                raw_body=b'{"data":[]}',
+                schema_fingerprint="empty-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    load_tourism_demand(
+        db,
+        registry,
+        date(2022, 1, 1),
+        date(2022, 1, 31),
+        RunContext(uuid4(), "backfill", datetime(2022, 2, 1, tzinfo=UTC)),
+    )
+
+    checkpoint = json.loads(
+        db.query("select checkpoint_json from collection_checkpoint")[0][0]
+    )
+    assert checkpoint["consecutive_explicitly_empty_years"] == 0
