@@ -289,3 +289,32 @@ def test_migrate_legacy_command_approves_only_backfilled_self_lineage(
 
     assert result.exit_code == 0
     assert build_facilities(pipeline.db, run_id).facility_count == 1
+
+
+def test_export_requires_explicit_rebuild_for_mismatched_same_date_bundle(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The CLI never silently replaces a corrupted same-date export directory."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.daily(date(2026, 8, 16))
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+    runner = CliRunner()
+    arguments = [
+        "export",
+        "--date",
+        "2026-08-16",
+        "--root",
+        str(Path.cwd()),
+    ]
+    assert runner.invoke(app, arguments).exit_code == 0
+    exported = pipeline.settings.data_dir / "exports" / "export_date=2026-08-16"
+    (exported / "facility_current.csv").write_bytes(b"tampered")
+
+    rejected = runner.invoke(app, arguments)
+    rebuilt = runner.invoke(app, [*arguments, "--rebuild"])
+
+    assert rejected.exit_code == 1
+    assert rebuilt.exit_code == 0
+    assert (exported / "facility_current.csv").read_bytes() != b"tampered"

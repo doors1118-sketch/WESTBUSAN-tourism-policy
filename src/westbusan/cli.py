@@ -226,6 +226,13 @@ def export(
         str | None,
         typer.Option("--date", help="Export partition date (YYYY-MM-DD)."),
     ] = None,
+    rebuild: Annotated[
+        bool,
+        typer.Option(
+            "--rebuild",
+            help="Replace a same-date bundle only after manifest verification fails.",
+        ),
+    ] = False,
     root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
 ) -> None:
     """Export all four current operator datasets as CSV and Parquet."""
@@ -236,8 +243,13 @@ def export(
         else datetime.now(ZoneInfo("Asia/Seoul")).date()
     )
     try:
-        paths = export_current(pipeline.db, pipeline.settings.data_dir, selected_date)
-    except ValueError as error:
+        paths = export_current(
+            pipeline.db,
+            pipeline.settings.data_dir,
+            selected_date,
+            rebuild=rebuild,
+        )
+    except (RuntimeError, ValueError) as error:
         _print_json({"status": "BLOCKED", "reason": str(error)})
         raise typer.Exit(1) from error
     _print_json({"status": "exported", "paths": [str(path) for path in paths]})
