@@ -361,6 +361,145 @@ def test_building_reconciliation_uses_the_raw_operation_and_parcel_target(
     assert _check(report, "raw_total_matches_staging", source_id).status == "passed"
 
 
+def test_building_reconciliation_matches_each_raw_page_to_its_stage_row(
+    tmp_path: Path,
+) -> None:
+    """Catches losing per-page identity when two raw building pages are correct."""
+    db, run_id, source_id, operation, parcel_hash, pages = _building_pages(
+        tmp_path, (1, 1)
+    )
+    for artifact_id, page_no, row_count, fingerprint in pages:
+        _record_building_stage(
+            db,
+            run_id,
+            source_id,
+            operation,
+            parcel_hash,
+            artifact_id,
+            page_no,
+            row_count,
+            2,
+            fingerprint,
+        )
+
+    report = run_quality_suite(db, run_id)
+
+    assert _check(report, "raw_total_matches_staging", source_id).status == "passed"
+
+
+def test_building_reconciliation_rejects_a_missing_raw_page_stage_row(
+    tmp_path: Path,
+) -> None:
+    """Catches page-one staging evidence standing in for a missing page two."""
+    db, run_id, source_id, operation, parcel_hash, pages = _building_pages(
+        tmp_path, (1, 1)
+    )
+    artifact_id, page_no, row_count, fingerprint = pages[0]
+    _record_building_stage(
+        db,
+        run_id,
+        source_id,
+        operation,
+        parcel_hash,
+        artifact_id,
+        page_no,
+        row_count,
+        2,
+        fingerprint,
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    assert _check(report, "raw_total_matches_staging", source_id).status == "failed"
+
+
+def test_building_reconciliation_rejects_a_wrong_artifact_and_page_row(
+    tmp_path: Path,
+) -> None:
+    """Catches aggregate row totals accepting unrelated page-99 staging evidence."""
+    db, run_id, source_id, operation, parcel_hash, pages = _building_pages(
+        tmp_path, (1, 1)
+    )
+    _record_building_stage(
+        db,
+        run_id,
+        source_id,
+        operation,
+        parcel_hash,
+        uuid4(),
+        99,
+        2,
+        2,
+        pages[0][3],
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    assert _check(report, "raw_total_matches_staging", source_id).status == "failed"
+
+
+def test_building_reconciliation_rejects_an_extra_zero_row_stage_page(
+    tmp_path: Path,
+) -> None:
+    """Catches an extra staging page even when its row count leaves totals unchanged."""
+    db, run_id, source_id, operation, parcel_hash, pages = _building_pages(
+        tmp_path, (1, 1)
+    )
+    for artifact_id, page_no, row_count, fingerprint in pages:
+        _record_building_stage(
+            db,
+            run_id,
+            source_id,
+            operation,
+            parcel_hash,
+            artifact_id,
+            page_no,
+            row_count,
+            2,
+            fingerprint,
+        )
+    _record_building_stage(
+        db,
+        run_id,
+        source_id,
+        operation,
+        "unrelated-parcel",
+        uuid4(),
+        99,
+        0,
+        2,
+        pages[0][3],
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    assert _check(report, "raw_total_matches_staging", source_id).status == "failed"
+
+
+def test_building_reconciliation_allows_a_matched_empty_page(
+    tmp_path: Path,
+) -> None:
+    """Catches treating a retained, explicitly empty building page as missing evidence."""
+    db, run_id, source_id, operation, parcel_hash, pages = _building_pages(tmp_path, (0,))
+    artifact_id, page_no, row_count, fingerprint = pages[0]
+    _record_building_stage(
+        db,
+        run_id,
+        source_id,
+        operation,
+        parcel_hash,
+        artifact_id,
+        page_no,
+        row_count,
+        0,
+        fingerprint,
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    assert _check(report, "raw_total_matches_staging", source_id).status == "passed"
+
+
 def test_rerun_replaces_obsolete_evidence_and_redacts_nested_credentials(
     tmp_path: Path,
 ) -> None:
@@ -564,6 +703,86 @@ def _record_raw_page(
             str(path),
             datetime(2026, 8, 16, tzinfo=UTC),
             source_date,
+        ],
+    )
+
+
+def _building_pages(tmp_path: Path, row_counts: tuple[int, ...]):
+    db = _db(tmp_path)
+    run_id = uuid4()
+    source_id = "building_register_title"
+    operation = "getBrTitleInfo"
+    parcel_hash = "parcel-pages"
+    total_count = sum(row_counts)
+    pages = []
+    for page_no, row_count in enumerate(row_counts, start=1):
+        body = json.dumps(
+            {
+                "data": [{"id": f"building-{page_no}-{index}"} for index in range(row_count)],
+                "totalCount": total_count,
+                "pageNo": page_no,
+                "numOfRows": 1,
+            }
+        ).encode()
+        page = parse_data_page(body, "application/json")
+        artifact_id = uuid4()
+        path = tmp_path / f"building-page-{page_no}.json"
+        path.write_bytes(body)
+        _record_raw_page(
+            db,
+            run_id,
+            source_id,
+            path,
+            body,
+            operation,
+            date(2026, 8, 16),
+            artifact_id=artifact_id,
+            quality_partition=parcel_hash,
+        )
+        approve_schema_baseline(db, source_id, operation, page.schema_fingerprint)
+        pages.append((artifact_id, page_no, row_count, page.schema_fingerprint))
+    db.record_source_status(
+        SourceStatus(
+            source_id,
+            datetime(2026, 8, 16, tzinfo=UTC),
+            "READY" if total_count else "EMPTY",
+            {},
+            run_id,
+        )
+    )
+    return db, run_id, source_id, operation, parcel_hash, pages
+
+
+def _record_building_stage(
+    db: Database,
+    run_id,
+    source_id: str,
+    operation: str,
+    parcel_hash: str,
+    artifact_id,
+    page_no: int,
+    row_count: int,
+    total_count: int,
+    schema_fingerprint: str,
+) -> None:
+    db.connection.execute(
+        """
+        insert into staging_building_response (
+            run_id, source_id, operation, parcel_hash, source_date, page_no,
+            total_count, row_count, schema_fingerprint, artifact_id
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            run_id,
+            source_id,
+            operation,
+            parcel_hash,
+            date(2026, 8, 16),
+            page_no,
+            total_count,
+            row_count,
+            schema_fingerprint,
+            artifact_id,
         ],
     )
 

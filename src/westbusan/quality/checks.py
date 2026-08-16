@@ -75,6 +75,7 @@ class QualityReport:
 
 @dataclass(frozen=True, slots=True)
 class _ArtifactPage:
+    artifact_id: UUID
     source_id: str
     operation: str
     partition: str | None
@@ -168,10 +169,20 @@ def _run_statuses(db: Database, run_id: UUID) -> dict[str, list[tuple[str, dict[
     return result
 
 
-def _run_artifacts(db: Database, run_id: UUID) -> dict[str, list[tuple[str, date | None, dict[str, object]]]]:
-    result: dict[str, list[tuple[str, date | None, dict[str, object]]]] = defaultdict(list)
-    for source_id, path, source_date, request_json in db.query("select source_id, path, source_date, request_json from raw_artifact where run_id = ? order by source_id, path", [run_id]):
-        result[str(source_id)].append((str(path), source_date, _json_object(request_json)))
+def _run_artifacts(
+    db: Database, run_id: UUID
+) -> dict[str, list[tuple[UUID, str, date | None, dict[str, object]]]]:
+    result: dict[str, list[tuple[UUID, str, date | None, dict[str, object]]]] = defaultdict(list)
+    for artifact_id, source_id, path, source_date, request_json in db.query(
+        """
+        select artifact_id, source_id, path, source_date, request_json
+        from raw_artifact where run_id = ? order by source_id, path, artifact_id
+        """,
+        [run_id],
+    ):
+        result[str(source_id)].append(
+            (artifact_id, str(path), source_date, _json_object(request_json))
+        )
     return result
 
 
@@ -212,9 +223,11 @@ def _readiness_check(source_id: str, statuses: list[tuple[str, dict[str, object]
     return CheckResult("source_readiness", "failed" if required and failed else "passed" if required else "skipped", status, "READY or explicit EMPTY", severity, source_id, "source_status", {"required_contract": required, "readiness_detail": detail})
 
 
-def _parse_artifacts(source_id: str, artifacts: list[tuple[str, date | None, dict[str, object]]]) -> list[_ArtifactPage]:
+def _parse_artifacts(
+    source_id: str, artifacts: list[tuple[UUID, str, date | None, dict[str, object]]]
+) -> list[_ArtifactPage]:
     pages: list[_ArtifactPage] = []
-    for path_text, source_date, metadata in artifacts:
+    for artifact_id, path_text, source_date, metadata in artifacts:
         operation = str(metadata.get("operation") or "unknown")
         partition = (
             _metadata_partition(metadata) or _partition(source_date)
@@ -224,9 +237,9 @@ def _parse_artifacts(source_id: str, artifacts: list[tuple[str, date | None, dic
         try:
             page = parse_data_page(Path(path_text).read_bytes(), "application/json")
         except (OSError, ValueError, TypeError) as error:
-            pages.append(_ArtifactPage(source_id, operation, partition, source_date, None, None, None, None, None, str(error)))
+            pages.append(_ArtifactPage(artifact_id, source_id, operation, partition, source_date, None, None, None, None, None, str(error)))
         else:
-            pages.append(_ArtifactPage(source_id, operation, partition, source_date, page.page_no, page.page_size, page.total_count, page.schema_fingerprint, page.rows, None))
+            pages.append(_ArtifactPage(artifact_id, source_id, operation, partition, source_date, page.page_no, page.page_size, page.total_count, page.schema_fingerprint, page.rows, None))
     return pages
 
 
@@ -301,6 +314,8 @@ def _schema_baseline(
 def _reconciliation_check(db: Database, run_id: UUID, source_id: str, pages: list[_ArtifactPage], severity: Severity) -> CheckResult:
     if any(page.error or page.total_count is None or page.page_no is None for page in pages):
         return CheckResult("raw_total_matches_staging", "failed", "MISSING_PAGE_TOTAL_OR_PAGE_NUMBER", "complete raw page set reconciled to target", severity, source_id, _target_table(source_id), {})
+    if source_id in _BUILDING_SOURCES:
+        return _building_reconciliation_check(db, run_id, source_id, pages, severity)
     groups: dict[tuple[str, str | None], list[_ArtifactPage]] = defaultdict(list)
     for page in pages:
         groups[(page.operation, page.partition)].append(page)
@@ -315,6 +330,107 @@ def _reconciliation_check(db: Database, run_id: UUID, source_id: str, pages: lis
         outcomes.append({"operation": operation, "partition": partition, "raw_total": expected, "page_numbers": page_numbers, "expected_pages": expected_pages, "target_rows": actual, "target_table": _target_table(source_id)})
     passed = all(item["raw_total"] is not None and item["page_numbers"] == item["expected_pages"] and item["target_rows"] == item["raw_total"] for item in outcomes)
     return CheckResult("raw_total_matches_staging", "passed" if passed else "failed", outcomes, "raw total equals run-scoped target rows for each source/operation/partition", severity, source_id, _target_table(source_id), {"partitions": outcomes})
+
+
+def _building_reconciliation_check(
+    db: Database,
+    run_id: UUID,
+    source_id: str,
+    pages: list[_ArtifactPage],
+    severity: Severity,
+) -> CheckResult:
+    """Reconcile every raw building artifact/page with exactly one staged response."""
+    groups: dict[tuple[str, str | None], list[_ArtifactPage]] = defaultdict(list)
+    for page in pages:
+        groups[(page.operation, page.partition)].append(page)
+    staged_by_contract: dict[tuple[str, str], dict[tuple[str, int], int]] = defaultdict(dict)
+    for operation, parcel_hash, artifact_id, page_no, row_count in db.query(
+        """
+        select operation, parcel_hash, artifact_id, page_no, row_count
+        from staging_building_response
+        where run_id = ? and source_id = ?
+        order by operation, parcel_hash, page_no, artifact_id
+        """,
+        [run_id, source_id],
+    ):
+        staged_by_contract[(str(operation), str(parcel_hash))][
+            (str(artifact_id), int(page_no))
+        ] = int(row_count)
+    outcomes: list[dict[str, object]] = []
+    for (operation, partition), grouped in sorted(
+        groups.items(), key=lambda item: (item[0][0], item[0][1] or "")
+    ):
+        totals = {page.total_count for page in grouped}
+        raw_pages = sorted(grouped, key=lambda page: (page.page_no or 0, str(page.artifact_id)))
+        raw_page_numbers = [page.page_no for page in raw_pages]
+        expected_total = next(iter(totals)) if len(totals) == 1 else None
+        expected_pages = (
+            list(range(1, _expected_page_count(expected_total, raw_pages[0].page_size) + 1))
+            if expected_total is not None
+            else []
+        )
+        staged = staged_by_contract.get((operation, partition or ""), {})
+        expected = {
+            (str(page.artifact_id), page.page_no): len(page.rows or []) for page in raw_pages
+        }
+        missing_or_mismatched = [
+            {
+                "artifact_id": artifact_id,
+                "page_no": page_no,
+                "raw_row_count": raw_count,
+                "staged_row_count": staged.get((artifact_id, page_no)),
+            }
+            for (artifact_id, page_no), raw_count in expected.items()
+            if staged.get((artifact_id, page_no)) != raw_count
+        ]
+        extras = [
+            {"artifact_id": artifact_id, "page_no": page_no, "staged_row_count": row_count}
+            for (artifact_id, page_no), row_count in staged.items()
+            if (artifact_id, page_no) not in expected
+        ]
+        outcomes.append(
+            {
+                "operation": operation,
+                "partition": partition,
+                "raw_total": expected_total,
+                "page_numbers": raw_page_numbers,
+                "expected_pages": expected_pages,
+                "raw_page_count": len(expected),
+                "staged_page_count": len(staged),
+                "missing_or_mismatched": missing_or_mismatched,
+                "extra_staged_pages": extras,
+                "target_table": _target_table(source_id),
+            }
+        )
+    unmapped_staged_pages = [
+        {
+            "operation": operation,
+            "partition": partition,
+            "artifact_id": artifact_id,
+            "page_no": page_no,
+            "staged_row_count": row_count,
+        }
+        for (operation, partition), staged in staged_by_contract.items()
+        if (operation, partition) not in groups
+        for (artifact_id, page_no), row_count in staged.items()
+    ]
+    passed = all(
+        item["raw_total"] is not None
+        and item["page_numbers"] == item["expected_pages"]
+        and not item["missing_or_mismatched"]
+        and not item["extra_staged_pages"]
+        for item in outcomes
+    ) and not unmapped_staged_pages
+    return CheckResult(
+        "raw_total_matches_staging",
+        "passed" if passed else "failed",
+        outcomes,
+        "every raw building artifact/page has one matching run-scoped staged response",
+        severity,
+        source_id,
+        _target_table(source_id),
+        {"partitions": outcomes, "unmapped_staged_pages": unmapped_staged_pages},
+    )
 
 
 def _target_count(db: Database, run_id: UUID, source_id: str, operation: str, partition: str | None) -> int | None:
@@ -335,18 +451,6 @@ def _target_count(db: Database, run_id: UUID, source_id: str, operation: str, pa
                   and period like ?
                 """,
                 [source_id, run_id, f"{prefix}%", f"{period_prefix}%"],
-            )[0][0]
-        )
-    if source_id in _BUILDING_SOURCES:
-        if partition is None:
-            return None
-        return int(
-            db.query(
-                """
-                select coalesce(sum(row_count), 0) from staging_building_response
-                where run_id = ? and source_id = ? and operation = ? and parcel_hash = ?
-                """,
-                [run_id, source_id, operation, partition],
             )[0][0]
         )
     return None

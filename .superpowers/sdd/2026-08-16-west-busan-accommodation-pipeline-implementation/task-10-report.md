@@ -10,8 +10,8 @@
 
 ## Validation
 
-- `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest tests/unit/test_quality_checks.py tests/unit/test_quality_hardening.py tests/unit/test_storage.py tests/integration/test_publication_gate.py tests/integration/test_building_load.py -q`: 22 passed.
-- `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest -q`: 121 passed, 2 skipped.
+- `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest tests/unit/test_quality_checks.py tests/unit/test_quality_hardening.py tests/unit/test_storage.py tests/integration/test_publication_gate.py tests/integration/test_building_load.py -q`: 27 passed.
+- `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m pytest -q`: 126 passed, 2 skipped.
 - `C:\Users\User\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m ruff check src tests`: passed.
 
 ## Constraint audit
@@ -38,3 +38,8 @@
 - Raw artifact identity now includes the run ID while retaining content-addressed files, so same-day identical reruns retain evidence for both runs.
 - Publication retries only transaction conflicts. It rereads the pointer after a conflict, treats an already-published identical run as idempotent success without touching its timestamp, and propagates unrelated storage errors.
 - Added reproductions for optional-only runs, schema-change masking, two-month tourism backfills, per-parcel building operations, same-day duplicated raw content, and concurrent publishers.
+
+## Review hardening round 3
+
+- Building reconciliation now compares each raw artifact and page to exactly one staged response using the run, source, operation, parcel partition, artifact ID, and page number. It checks each page's row count and rejects missing, substituted, and extra staged pages, including zero-row extras. Tourism partition reconciliation is unchanged.
+- Added regressions for a correct two-page building response, a missing stage page, a random artifact/page-99 aggregate substitute, an extra zero-row stage page, and a matched retained empty page.
