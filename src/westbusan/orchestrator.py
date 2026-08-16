@@ -534,7 +534,7 @@ class Pipeline:
                                 f"pipeline run {prior_run_id} has an active lease"
                             )
                         writer_epoch = self._acquire_global_writer(
-                            prior_run_id, now, lease_expires, allow_takeover=True
+                            prior_run_id, now, lease_expires
                         )
                         self.db.connection.execute(
                             "update pipeline_run set writer_fence_epoch = ? where run_id = ?",
@@ -616,6 +616,10 @@ class Pipeline:
                     self.db.connection.execute("rollback")
                 if transaction_attempt == 2:
                     raise
+            except Exception:
+                if began:
+                    self.db.connection.execute("rollback")
+                raise
         raise AssertionError("run lease transaction retries exhausted")
 
     def _persist_summary(self, summary: RunSummary) -> None:
@@ -825,11 +829,9 @@ class Pipeline:
         run_id: UUID,
         now: datetime,
         lease_expires: datetime,
-        *,
-        allow_takeover: bool = False,
     ) -> int:
         rows = self.db.query(
-            """select owner_token, fence_epoch, lease_expires_at::varchar
+            """select run_id, fence_epoch, lease_expires_at::varchar
                from pipeline_writer_lease where lease_key = 'writer'"""
         )
         if not rows:
@@ -842,15 +844,11 @@ class Pipeline:
                 [self._lease_owner_token, run_id, epoch, now, lease_expires],
             )
             return epoch
-        owner, prior_epoch, expires_text = rows[0]
+        active_run_id, prior_epoch, expires_text = rows[0]
         expires = datetime.fromisoformat(str(expires_text))
-        if (
-            owner not in (None, self._lease_owner_token)
-            and expires > now
-            and not allow_takeover
-        ):
+        if active_run_id is not None and active_run_id != run_id and expires > now:
             raise RuntimeError("database global writer lease is active")
-        epoch = int(prior_epoch) if owner == self._lease_owner_token else int(prior_epoch) + 1
+        epoch = int(prior_epoch) if active_run_id == run_id else int(prior_epoch) + 1
         self.db.connection.execute(
             """update pipeline_writer_lease
                set owner_token = ?, run_id = ?, fence_epoch = ?,

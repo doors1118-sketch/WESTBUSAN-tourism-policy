@@ -98,6 +98,47 @@ def test_global_writer_lease_blocks_a_different_logical_run(
         )
 
 
+def test_same_process_cannot_replace_unexpired_writer_with_different_run(
+    tmp_path: Path,
+) -> None:
+    """An owner token is not authority to replace another active logical run."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    first, _ = pipeline._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "same-owner-a"
+    )
+    assert first is not None
+
+    with pytest.raises(RuntimeError, match="global writer lease"):
+        pipeline._prepare_run(
+            "fixture", "daily", date(2026, 8, 17), "same-owner-b"
+        )
+
+    assert pipeline.db.scalar(
+        "select run_id from pipeline_writer_lease where lease_key = 'writer'"
+    ) == first.run_id
+
+
+def test_prepare_run_rolls_back_after_active_writer_error(tmp_path: Path) -> None:
+    """A rejected writer must not leave its DuckDB connection in a transaction."""
+    first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    first.db.migrate()
+    active, _ = first._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "rollback-owner-a"
+    )
+    assert active is not None
+    second = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    second.db.migrate()
+
+    with pytest.raises(RuntimeError, match="global writer lease"):
+        second._prepare_run(
+            "fixture", "daily", date(2026, 8, 17), "rollback-owner-b"
+        )
+
+    second.db.connection.execute("begin transaction")
+    second.db.connection.execute("rollback")
+
+
 def test_terminal_source_status_and_completed_checkpoint_commit_atomically(
     tmp_path: Path, monkeypatch
 ) -> None:
