@@ -1,0 +1,8 @@
+[
+  {"source_id":"tourism_data_lab","row":{"baseYmd":"20260115","signguNm":"사하구","visitorCnt":"1200","touDivCd":"1","touDivNm":"외지인"},"metric_code":"visitor_count","unit":"person_day","period":"2026-01-15","dimensions":{"touDivCd":"1","touDivNm":"외지인"}},
+  {"source_id":"area_tourism_demand","row":{"baseYm":"202601","signguNm":"사하구","sjrnDsValue":"1.25","stayType":"overnight"},"metric_code":"stay_intensity_index","unit":"index","period":"2026-01","dimensions":{"stayType":"overnight"}},
+  {"source_id":"area_tourism_consumption","row":{"baseYm":"202601","signguNm":"사하구","svcDemValue":"73.5","resourceType":"tourism_service"},"metric_code":"tourism_service_demand_index","unit":"index","period":"2026-01","dimensions":{"resourceType":"tourism_service"}},
+  {"source_id":"tourism_concentration_rate","row":{"baseYmd":"20260115","signguNm":"사하구","tAtsNm":"다대포","cnctrRate":"67.2","forecastYmd":"20260116"},"metric_code":"visitor_concentration_rate","unit":"relative_index_max_100","period":"2026-01-16","dimensions":{"tAtsNm":"다대포"}},
+  {"source_id":"area_tourism_destination_division","row":{"baseYm":"202601","signguNm":"사하구","touDivValue":"42.0","ageGroup":"20s"},"metric_code":"visitor_diversity_index","unit":"index","period":"2026-01","dimensions":{"ageGroup":"20s"}},
+  {"source_id":"related_tourism_destinations","row":{"baseYm":"202503","signguNm":"사하구","hubTatsNm":"다대포","rlteTatsNm":"감천문화마을","rlteTatsType":"tourism","rlteTatsRank":"4"},"metric_code":"related_destination_rank","unit":"rank","period":"2025-03","dimensions":{"hubTatsNm":"다대포","rlteTatsNm":"감천문화마을","rlteTatsType":"tourism"}}
+]

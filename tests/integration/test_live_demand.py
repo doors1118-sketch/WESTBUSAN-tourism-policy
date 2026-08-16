@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -11,7 +11,7 @@ import pytest
 from westbusan.db import Database
 from westbusan.demand.load import load_tourism_demand
 from westbusan.models import RunContext
-from westbusan.sources.registry import SourceRegistry
+from westbusan.sources.registry import SourceRegistry, record_inspection
 
 pytestmark = pytest.mark.integration
 
@@ -21,25 +21,36 @@ pytestmark = pytest.mark.integration
     reason="DATA_GO_KR_SERVICE_KEY is not configured",
 )
 def test_live_demand_load_requires_a_reviewed_operation(tmp_path: Path) -> None:
-    """A live pull is deliberately unavailable until its KTO contract is recorded."""
+    """A manual opt-in verifies that the loader consumes reviewed status metadata."""
+    if os.getenv("WESTBUSAN_RUN_LIVE_DEMAND") != "1":
+        pytest.skip("set WESTBUSAN_RUN_LIVE_DEMAND=1 to enable live KTO demand checks")
     registry = SourceRegistry.load(Path("config/sources.yaml"))
-    if not any(
-        registry.get(source_id).operation is not None
-        for source_id in registry.ids(group="tourism")
-    ):
-        pytest.skip("no tourism source has a portal-reviewed operation recorded")
-
     db = Database(tmp_path / "live-demand.duckdb", Path("sql"))
     db.migrate()
+    record_inspection(
+        registry.get("area_tourism_demand"),
+        db,
+        operation="areaTarSjrnDsList",
+        required_parameters={
+            "MobileOS": "ETC",
+            "MobileApp": "westbusan",
+            "baseYm": "{baseYm}",
+            "areaCd": "26",
+            "signguCd": "26380",
+        },
+        response_row_path="response.body.items.item",
+        portal_detail_url="https://www.data.go.kr/data/15151868/openapi.do",
+    )
+    latest_complete = datetime.now(UTC).date().replace(day=1) - timedelta(days=1)
     result = load_tourism_demand(
         db,
         registry,
-        date(2026, 1, 1),
-        date(2026, 1, 31),
+        latest_complete.replace(day=1),
+        latest_complete,
         RunContext.start("live-demand-test", datetime.now(UTC)),
     )
 
-    assert result.sources_ready or result.sources_skipped
+    assert "area_tourism_demand" in {*result.sources_ready, *result.sources_skipped}
     statuses = db.query(
         "select status, detail_json from source_status order by checked_at desc"
     )

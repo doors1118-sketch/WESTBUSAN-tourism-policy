@@ -2,6 +2,7 @@
   {
     "baseYm": "202601",
     "signguNm": "사하구",
-    "lodgingAmt": "430000"
+    "svcDemValue": "430000",
+    "resourceType": "tourism_service"
   }
 ]
