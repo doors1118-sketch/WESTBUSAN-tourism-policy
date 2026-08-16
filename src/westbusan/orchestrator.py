@@ -498,7 +498,11 @@ class Pipeline:
                         ensure_run_rebuildable(self.db, prior_run_id)
                         if (
                             str(prior_status)
-                            not in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}
+                            not in {
+                                "PUBLISHED",
+                                "PUBLISHED_WITH_WARNINGS",
+                                "RUNNING",
+                            }
                             or prior_business_date is None
                             or prior_business_date > as_of
                         ):
@@ -587,7 +591,7 @@ class Pipeline:
                     if (
                         not inherited_rows
                         or inherited_rows[0][0]
-                        not in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}
+                        not in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS", "RUNNING"}
                         or inherited_rows[0][1] is None
                         or inherited_rows[0][1] > as_of
                     ):

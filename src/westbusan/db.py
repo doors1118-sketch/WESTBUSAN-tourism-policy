@@ -137,6 +137,11 @@ def ensure_run_rebuildable(db: Database, run_id: UUID) -> None:
         )
     visited: set[UUID] = set()
     active: set[UUID] = set()
+    publication_rows = db.query(
+        """select published_run_id from publication_state
+           where publication_key = 'current'"""
+    )
+    current_publication = publication_rows[0][0] if publication_rows else None
 
     def validate(parent_run_id: UUID) -> None:
         if parent_run_id in active:
@@ -163,7 +168,13 @@ def ensure_run_rebuildable(db: Database, run_id: UUID) -> None:
                     f"input lineage for run {run_id} contains non-rebuildable "
                     f"run {input_run_id}"
                 )
-            if input_status not in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}:
+            approved_status = input_status in {
+                "PUBLISHED",
+                "PUBLISHED_WITH_WARNINGS",
+            } or (
+                input_status == "RUNNING" and input_run_id == current_publication
+            )
+            if not approved_status:
                 raise RuntimeError(
                     f"input lineage for run {run_id} contains unapproved "
                     f"{input_status or 'missing'} run {input_run_id}"
@@ -523,7 +534,16 @@ def _legacy_evidence_counts(db: Database, run_id: UUID) -> dict[str, int]:
                    join pipeline_run as target on target.run_id = ?
                    where lineage.run_id = ? and lineage.input_run_id <> ? and (
                      input.rebuildable is not true
-                     or input.status not in ('PUBLISHED', 'PUBLISHED_WITH_WARNINGS')
+                     or (
+                       input.status not in ('PUBLISHED', 'PUBLISHED_WITH_WARNINGS')
+                       and not (
+                         input.status = 'RUNNING' and exists (
+                           select 1 from publication_state as publication
+                           where publication.publication_key = 'current'
+                             and publication.published_run_id = input.run_id
+                         )
+                       )
+                     )
                      or input.business_date is null
                      or input.business_date > target.business_date
                    )""",
