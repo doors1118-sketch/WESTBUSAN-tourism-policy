@@ -10,9 +10,11 @@ from westbusan.analytics.build import (
     _monthly_native_sum,
     _period_metric_set,
     _replace_group_regions,
+    _replace_signals,
     _visible_run_ids,
     policy_signals,
 )
+from westbusan.config import PolicyConfig
 from westbusan.db import Database
 
 
@@ -341,6 +343,52 @@ def test_partial_group_stock_and_rooms_are_unavailable(tmp_path: Path) -> None:
                   physical_facility_count, room_sum, room_known_facility_count
              from mart_region_group_month"""
     ) == [(4, 1, None, None, 0)]
+
+
+def test_partial_group_cannot_trigger_any_policy_rule(tmp_path: Path) -> None:
+    db = Database(tmp_path / "partial-policy.duckdb", Path("sql")); db.migrate()
+    run_id = uuid4()
+    rows = [
+        {
+            "district": "사하구",
+            "group": "west",
+            "period": "current",
+            "values": {
+                "facilities": 1,
+                "coverage": 1.0,
+                "room_values": [5.0],
+                "age_values": [40.0],
+                "tourism_room_coverage": 1.0,
+                "tourism_rooms": 0.0,
+            },
+            "evidence": {
+                "visitor_person_days_per_100_rooms": {
+                    "numerator": 1000.0,
+                    "denominator": 5.0,
+                    "coverage": 1.0,
+                }
+            },
+            "openings": 0,
+            "closures": 10,
+            "growth_gap": 1.0,
+            "stock_band": "low",
+            "pressure": "high",
+            "supply": "low",
+        }
+    ]
+
+    _replace_signals(
+        db,
+        run_id,
+        rows,
+        [],
+        PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+    )
+
+    assert db.query(
+        "select distinct evaluation_status from mart_policy_signal"
+    ) == [("unavailable",)]
+    assert db.query("select count(*) from mart_policy_signal") == [(5,)]
 
 
 def test_period_metric_set_retains_known_room_total_for_tourism_denominator() -> None:

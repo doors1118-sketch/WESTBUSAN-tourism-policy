@@ -788,6 +788,16 @@ def _region_rows(
                     "tourism_room_coverage"
                 ],
             }
+            age_known_coverage = (
+                period_values["age_known"] / period_values["facilities"]
+                if period_values["facilities"]
+                else None
+            )
+            for metric_name in ("building_20y_share", "building_30y_share"):
+                evidence[metric_name]["coverage_components"] = {
+                    "age_known_facility": age_known_coverage,
+                    "age_basis": "building_register.use_approval_date",
+                }
             evidence["physical_facility_count"]["stock_observed"] = bool(
                 period_values.get("stock_observed")
             )
@@ -1482,6 +1492,9 @@ def _replace_signals(
             if tourism_rooms is not None and total_rooms and total_rooms > 0
             else None
         )
+        tourism_metric_coverage = _minimum_coverage(
+            room_coverage, tourism_coverage
+        )
         openings = sum(int(row["openings"]) for row in group_rows)
         closures = sum(int(row["closures"]) for row in group_rows)
         group_pressure = _group_pressure(visitor_pairs)
@@ -1509,6 +1522,13 @@ def _replace_signals(
                 sum(age >= max(policy.old_building_years) for age in ages),
                 len(ages),
                 age_coverage,
+                components={
+                    "age_known_facility": age_coverage,
+                    "configured_old_threshold_years": max(
+                        policy.old_building_years
+                    ),
+                    "group_membership_complete": membership_complete,
+                },
             ),
             "visitor_person_days_per_100_rooms": _policy_evidence_metric(
                 group_pressure,
@@ -1521,6 +1541,16 @@ def _replace_signals(
                     ),
                     default=0.0,
                 ),
+                components={
+                    "district_metric_coverages": [
+                        row["evidence"]["visitor_person_days_per_100_rooms"].get(
+                            "coverage"
+                        )
+                        for row in group_rows
+                    ],
+                    "group_membership_complete": membership_complete,
+                    "provider_compatible_group_aggregate": False,
+                },
             ),
             "supply_stock_band": _policy_evidence_metric(
                 facility_count,
@@ -1535,7 +1565,12 @@ def _replace_signals(
             "tourism_registration_room_share": _policy_evidence_metric(
                 tourism_rooms,
                 total_rooms,
-                tourism_coverage,
+                tourism_metric_coverage,
+                components={
+                    "total_room": room_coverage,
+                    "tourism_subgroup_room": tourism_coverage,
+                    "group_membership_complete": membership_complete,
+                },
             ),
             "openings": _policy_evidence_metric(
                 openings, max(1, facility_count or 0), 1.0 if facility_count is not None else None
@@ -1574,13 +1609,20 @@ def _replace_signals(
 
 
 def _policy_evidence_metric(
-    numerator: object, denominator: object, coverage: object
+    numerator: object,
+    denominator: object,
+    coverage: object,
+    *,
+    components: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    return {
+    evidence = {
         "numerator": numerator,
         "denominator": denominator,
         "coverage": coverage,
     }
+    if components is not None:
+        evidence["coverage_components"] = components
+    return evidence
 
 
 def _quantile(values: list[float], fraction: float) -> float | None:
