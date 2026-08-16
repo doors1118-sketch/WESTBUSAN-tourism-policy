@@ -230,3 +230,18 @@ def test_schema_approval_accepts_exact_observation_with_operator_audit(
             "reviewed official fields",
         )
     ]
+    assert db.query(
+        """select source_id, operation, partition_key, approved_schema_fingerprint,
+                  approval_method, approver, rationale
+           from quality_schema_approval_event"""
+    ) == [
+        (
+            "lodgings",
+            "info",
+            "2026-08-16",
+            fingerprint,
+            "operator_cli",
+            "operator-1",
+            "reviewed official fields",
+        )
+    ]

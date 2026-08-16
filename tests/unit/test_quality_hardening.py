@@ -202,6 +202,102 @@ def test_schema_changed_then_ready_cannot_be_approved_by_its_later_status(
     assert check.evidence["schema_changed_in_run"] is True
 
 
+def test_schema_approvals_append_events_and_project_the_latest_review(
+    tmp_path: Path,
+) -> None:
+    """Catches a reapproval overwriting the only surviving operator audit."""
+    db = _db(tmp_path)
+
+    approve_schema_baseline(
+        db,
+        "lodgings",
+        "info",
+        "first-fingerprint",
+        partition="2026-08-16",
+        approval_method="operator_cli",
+        approver="operator-1",
+        rationale="initial official contract review",
+    )
+    approve_schema_baseline(
+        db,
+        "lodgings",
+        "info",
+        "second-fingerprint",
+        partition="2026-08-16",
+        approval_method="operator_cli",
+        approver="operator-2",
+        rationale="reviewed provider schema change",
+    )
+
+    assert db.query(
+        """select approved_schema_fingerprint, approval_method, approver, rationale
+           from quality_schema_approval_event
+           order by approved_schema_fingerprint"""
+    ) == [
+        (
+            "first-fingerprint",
+            "operator_cli",
+            "operator-1",
+            "initial official contract review",
+        ),
+        (
+            "second-fingerprint",
+            "operator_cli",
+            "operator-2",
+            "reviewed provider schema change",
+        ),
+    ]
+    assert db.query(
+        """select baseline.approved_schema_fingerprint, event.approver, event.rationale
+           from quality_schema_baseline as baseline
+           join quality_schema_approval_event as event
+             on event.approval_event_id = baseline.approval_event_id"""
+    ) == [
+        (
+            "second-fingerprint",
+            "operator-2",
+            "reviewed provider schema change",
+        )
+    ]
+
+
+def test_legacy_schema_baseline_without_an_approval_event_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """Catches an unaudited pre-migration baseline certifying production data."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    body = json.dumps(
+        {"data": [{"MNG_NO": "L1"}], "totalCount": 1, "pageNo": 1, "numOfRows": 1}
+    ).encode()
+    page = parse_data_page(body, "application/json")
+    path = tmp_path / "legacy-baseline.json"
+    path.write_bytes(body)
+    _record_raw_page(db, run_id, "lodgings", path, body, "info", date(2026, 8, 16))
+    db.connection.execute(
+        """insert into quality_schema_baseline (
+               source_id, operation, partition_key, approved_schema_fingerprint,
+               approval_method, approver, rationale
+           ) values ('lodgings', 'info', '*', ?, 'legacy', null, null)""",
+        [page.schema_fingerprint],
+    )
+    db.record_source_status(
+        SourceStatus(
+            "lodgings",
+            datetime(2026, 8, 16, tzinfo=UTC),
+            "READY",
+            {"required": True},
+            run_id,
+        )
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    check = _check(report, "schema_fingerprint_approved", "lodgings")
+    assert check.status == "failed"
+    assert check.actual[0]["approved_baseline"] is None
+
+
 def test_reconciliation_rejects_a_missing_page_even_when_target_count_matches(
     tmp_path: Path,
 ) -> None:

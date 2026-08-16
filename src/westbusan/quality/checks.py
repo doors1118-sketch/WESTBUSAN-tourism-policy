@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Literal
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import duckdb
 
@@ -149,32 +149,60 @@ def approve_schema_baseline(
     approver: str | None = None,
     rationale: str | None = None,
 ) -> None:
-    """Record an explicit contract approval; collection evidence never self-approves."""
+    """Append an approval event and update its latest-baseline projection."""
     if not source_id or not operation or not schema_fingerprint:
         raise ValueError("schema approval requires source_id, operation, and fingerprint")
-    db.connection.execute(
-        """
-        insert into quality_schema_baseline (
-            source_id, operation, partition_key, approved_schema_fingerprint,
-            approval_method, approver, rationale
-        ) values (?, ?, ?, ?, ?, ?, ?)
-        on conflict (source_id, operation, partition_key) do update set
-            approved_schema_fingerprint = excluded.approved_schema_fingerprint,
-            approval_method = excluded.approval_method,
-            approver = excluded.approver,
-            rationale = excluded.rationale,
-            approved_at = now()
-        """,
-        [
-            source_id,
-            operation,
-            partition or "*",
-            schema_fingerprint,
-            approval_method,
-            approver,
-            rationale,
-        ],
-    )
+    partition_key = partition or "*"
+    approval_event_id = uuid4()
+    db.connection.execute("begin transaction")
+    try:
+        db.connection.execute(
+            """
+            insert into quality_schema_approval_event (
+                approval_event_id, source_id, operation, partition_key,
+                approved_schema_fingerprint, approval_method, approver, rationale
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                approval_event_id,
+                source_id,
+                operation,
+                partition_key,
+                schema_fingerprint,
+                approval_method,
+                approver,
+                rationale,
+            ],
+        )
+        db.connection.execute(
+            """
+            insert into quality_schema_baseline (
+                source_id, operation, partition_key, approved_schema_fingerprint,
+                approval_method, approver, rationale, approval_event_id
+            ) values (?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict (source_id, operation, partition_key) do update set
+                approved_schema_fingerprint = excluded.approved_schema_fingerprint,
+                approval_method = excluded.approval_method,
+                approver = excluded.approver,
+                rationale = excluded.rationale,
+                approval_event_id = excluded.approval_event_id,
+                approved_at = now()
+            """,
+            [
+                source_id,
+                operation,
+                partition_key,
+                schema_fingerprint,
+                approval_method,
+                approver,
+                rationale,
+                approval_event_id,
+            ],
+        )
+    except Exception:
+        db.connection.execute("rollback")
+        raise
+    db.connection.execute("commit")
 
 
 def observed_schema_contracts(db: Database) -> list[dict[str, str]]:
@@ -348,9 +376,18 @@ def _schema_baseline(
 ) -> str | None:
     rows = db.query(
         """
-        select approved_schema_fingerprint from quality_schema_baseline
-        where source_id = ? and operation = ? and partition_key in (?, '*')
-        order by case when partition_key = ? then 0 else 1 end
+        select baseline.approved_schema_fingerprint
+        from quality_schema_baseline as baseline
+        join quality_schema_approval_event as event
+          on event.approval_event_id = baseline.approval_event_id
+         and event.source_id = baseline.source_id
+         and event.operation = baseline.operation
+         and event.partition_key = baseline.partition_key
+         and event.approved_schema_fingerprint = baseline.approved_schema_fingerprint
+         and event.approval_method = baseline.approval_method
+        where baseline.source_id = ? and baseline.operation = ?
+          and baseline.partition_key in (?, '*')
+        order by case when baseline.partition_key = ? then 0 else 1 end
         limit 1
         """,
         [source_id, operation, partition or "*", partition or "*"],
