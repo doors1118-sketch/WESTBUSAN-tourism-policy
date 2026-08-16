@@ -73,7 +73,7 @@ class DataGoKrPager:
         """Fetch all pages for a source specification."""
         yield from self.iter_url(
             spec.url,
-            {**base_params, **dict(spec.required_parameters)},
+            {**dict(spec.required_parameters), **base_params},
             page_size=spec.page_size,
             format_parameter=spec.format_parameter,
             format_value=spec.format_value,
