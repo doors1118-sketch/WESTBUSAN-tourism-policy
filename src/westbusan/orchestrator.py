@@ -8,9 +8,10 @@ from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from time import monotonic
 from typing import Any, Literal
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from zoneinfo import ZoneInfo
 
+import duckdb
 from pyarrow import csv as arrow_csv
 from pyarrow import parquet
 
@@ -38,6 +39,7 @@ from westbusan.storage import RawStore
 from westbusan.transport.load import load_transport
 
 _SEOUL = ZoneInfo("Asia/Seoul")
+_LEASE_DURATION = timedelta(minutes=15)
 _FIXTURE_SOURCES = (
     "lodgings",
     "tourist_accommodations",
@@ -93,6 +95,7 @@ class Pipeline:
         self.db = Database(settings.db_path, self.root / "sql")
         self.registry = SourceRegistry.load(self.root / "config" / "sources.yaml")
         self.raw_store = RawStore(settings.data_dir)
+        self._lease_owner_token = uuid4()
 
     @classmethod
     def for_fixtures(cls, data_root: Path, fixture_dir: Path) -> Pipeline:
@@ -291,6 +294,7 @@ class Pipeline:
     def _finish_run(
         self, run: RunContext, total_rows: int, logger: _JsonlLogger
     ) -> RunSummary:
+        self._refresh_lease(run.run_id)
         build_facilities(self.db, run.run_id)
         report = run_quality_suite(self.db, run.run_id)
         failed = sum(
@@ -362,54 +366,108 @@ class Pipeline:
                 f"westbusan:{scope}:{self.db.path.resolve()}:{identity}",
             )
         )
-        rows = self.db.query(
-            """select run_id, status, attempt, started_at::varchar
-               from pipeline_run where logical_run_key = ?
-               order by attempt desc limit 1""",
-            [logical_key],
-        )
-        if rows:
-            prior_run_id, prior_status, prior_attempt, prior_started_at = rows[0]
-            if current_published_run(self.db) == prior_run_id:
-                return None, self._recover_current_publication(
-                    prior_run_id,
+        for transaction_attempt in range(3):
+            began = False
+            try:
+                now = datetime.now(UTC)
+                lease_expires = now + _LEASE_DURATION
+                self.db.connection.execute("begin transaction")
+                began = True
+                rows = self.db.query(
+                    """select run_id, status, attempt, started_at::varchar
+                       from pipeline_run where logical_run_key = ?
+                       order by attempt desc limit 1""",
+                    [logical_key],
+                )
+                if rows:
+                    prior_run_id, prior_status, prior_attempt, prior_started_at = rows[0]
+                    started_at = datetime.fromisoformat(str(prior_started_at))
+                    if current_published_run(self.db) == prior_run_id:
+                        self.db.connection.execute("commit")
+                        began = False
+                        return None, self._recover_current_publication(
+                            prior_run_id, mode, started_at
+                        )
+                    if str(prior_status) in {
+                        "PUBLISHED",
+                        "PUBLISHED_WITH_WARNINGS",
+                    }:
+                        self.db.connection.execute("commit")
+                        began = False
+                        return None, self._load_summary(prior_run_id)
+                    if str(prior_status) == "RUNNING":
+                        acquired = self.db.query(
+                            """update pipeline_run
+                               set lease_owner_token = ?, heartbeat_at = ?,
+                                   lease_expires_at = ?
+                               where run_id = ? and status = 'RUNNING'
+                                 and (
+                                   lease_owner_token is null
+                                   or lease_owner_token = ?
+                                   or lease_expires_at is null
+                                   or lease_expires_at <= ?
+                                 )
+                               returning run_id""",
+                            [
+                                self._lease_owner_token,
+                                now,
+                                lease_expires,
+                                prior_run_id,
+                                self._lease_owner_token,
+                                now,
+                            ],
+                        )
+                        if not acquired:
+                            self.db.connection.execute("rollback")
+                            began = False
+                            raise RuntimeError(
+                                f"pipeline run {prior_run_id} has an active lease"
+                            )
+                        self.db.connection.execute("commit")
+                        began = False
+                        return (
+                            RunContext(prior_run_id, mode, started_at, "RUNNING"),
+                            None,
+                        )
+                    attempt = int(prior_attempt) + 1
+                else:
+                    attempt = 1
+                started = datetime.combine(as_of, time.min, tzinfo=_SEOUL)
+                run = RunContext(
+                    uuid5(NAMESPACE_URL, f"{logical_key}:attempt:{attempt}"),
                     mode,
-                    datetime.fromisoformat(str(prior_started_at)),
+                    started,
                 )
-            if str(prior_status) in {"PUBLISHED", "PUBLISHED_WITH_WARNINGS"}:
-                return None, self._load_summary(prior_run_id)
-            if str(prior_status) == "RUNNING":
-                return (
-                    RunContext(
-                        prior_run_id,
-                        mode,
-                        datetime.combine(as_of, time.min, tzinfo=_SEOUL),
-                        "RUNNING",
-                    ),
-                    None,
+                inserted = self.db.query(
+                    """insert into pipeline_run (
+                           run_id, mode, started_at, status, logical_run_key, attempt,
+                           lease_owner_token, lease_expires_at, heartbeat_at
+                       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       on conflict (run_id) do nothing
+                       returning run_id""",
+                    [
+                        run.run_id,
+                        run.mode,
+                        run.started_at,
+                        run.status,
+                        logical_key,
+                        attempt,
+                        self._lease_owner_token,
+                        lease_expires,
+                        now,
+                    ],
                 )
-            attempt = int(prior_attempt) + 1
-        else:
-            attempt = 1
-        started = datetime.combine(as_of, time.min, tzinfo=_SEOUL)
-        run = RunContext(
-            uuid5(NAMESPACE_URL, f"{logical_key}:attempt:{attempt}"),
-            mode,
-            started,
-        )
-        self._start_run(run, logical_key, attempt)
-        return run, None
-
-    def _start_run(self, run: RunContext, logical_key: str, attempt: int) -> None:
-        self.db.connection.execute(
-            """
-            insert into pipeline_run (
-                run_id, mode, started_at, status, logical_run_key, attempt
-            ) values (?, ?, ?, ?, ?, ?)
-            on conflict (run_id) do nothing
-            """,
-            [run.run_id, run.mode, run.started_at, run.status, logical_key, attempt],
-        )
+                if not inserted:
+                    raise duckdb.TransactionException("run attempt insertion conflicted")
+                self.db.connection.execute("commit")
+                began = False
+                return run, None
+            except duckdb.TransactionException:
+                if began:
+                    self.db.connection.execute("rollback")
+                if transaction_attempt == 2:
+                    raise
+        raise AssertionError("run lease transaction retries exhausted")
 
     def _persist_summary(self, summary: RunSummary) -> None:
         self.db.connection.execute(
@@ -444,11 +502,27 @@ class Pipeline:
             raise RuntimeError(f"pipeline run {summary.run_id} is missing")
         current_status = str(rows[0][0])
         if current_status == "RUNNING":
-            self.db.connection.execute(
-                """update pipeline_run set status = ?, finished_at = ?
-                   where run_id = ? and status = 'RUNNING'""",
-                [summary.status, summary.finished_at, summary.run_id],
+            if not recovery:
+                self._refresh_lease(summary.run_id)
+            updated = self.db.query(
+                """update pipeline_run
+                   set status = ?, finished_at = ?, lease_owner_token = null,
+                       lease_expires_at = null
+                   where run_id = ? and status = 'RUNNING'
+                     and (? or lease_owner_token = ?)
+                   returning run_id""",
+                [
+                    summary.status,
+                    summary.finished_at,
+                    summary.run_id,
+                    recovery,
+                    self._lease_owner_token,
+                ],
             )
+            if not updated:
+                raise RuntimeError(
+                    f"pipeline run {summary.run_id} lease ownership was lost"
+                )
         elif not recovery or current_status != summary.status:
             raise RuntimeError(
                 f"pipeline run {summary.run_id} cannot finalize from {current_status}"
@@ -462,6 +536,10 @@ class Pipeline:
         try:
             self.db.connection.execute("begin transaction")
             began = True
+            if recovery and current_published_run(self.db) != summary.run_id:
+                raise RuntimeError(
+                    f"pipeline run {summary.run_id} is no longer current"
+                )
             self._write_terminal_summary(summary, recovery=recovery)
             self.db.connection.execute("commit")
             began = False
@@ -524,6 +602,19 @@ class Pipeline:
             )
         self._commit_terminal_summary(summary, recovery=True)
         return summary
+
+    def _refresh_lease(self, run_id: UUID) -> None:
+        now = datetime.now(UTC)
+        refreshed = self.db.query(
+            """update pipeline_run
+               set heartbeat_at = ?, lease_expires_at = ?
+               where run_id = ? and status = 'RUNNING'
+                 and lease_owner_token = ?
+               returning run_id""",
+            [now, now + _LEASE_DURATION, run_id, self._lease_owner_token],
+        )
+        if not refreshed:
+            raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
 
     def _load_summary(self, run_id: UUID) -> RunSummary:
         rows = self.db.query(
@@ -719,6 +810,7 @@ class Pipeline:
         next_page: int,
         run_id: UUID,
     ) -> None:
+        self._refresh_lease(run_id)
         value = json.dumps(
             {"status": status, "next_page": next_page, "run_id": str(run_id)},
             sort_keys=True,

@@ -55,6 +55,90 @@ def test_current_only_backfill_uses_one_restartable_snapshot(tmp_path: Path) -> 
     assert json.loads(checkpoint)["run_id"] == str(second.run_id)
 
 
+def test_second_pipeline_cannot_acquire_an_active_run_attempt_lease(
+    tmp_path: Path,
+) -> None:
+    """Catches two processes receiving write access to the same RUNNING attempt."""
+    first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    first.db.migrate()
+    first_run, _ = first._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "lease-contention"
+    )
+    assert first_run is not None
+    second = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    second.db.migrate()
+
+    with pytest.raises(RuntimeError, match="active lease"):
+        second._prepare_run(
+            "fixture", "daily", date(2026, 8, 16), "lease-contention"
+        )
+
+
+def test_expired_lease_takeover_revokes_the_previous_owner(
+    tmp_path: Path,
+) -> None:
+    """Catches a stale owner continuing checkpoints or finalization after takeover."""
+    first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    first.db.migrate()
+    first_run, _ = first._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "stale-takeover"
+    )
+    assert first_run is not None
+    first._checkpoint("lodgings", "2026-08", "completed", 2, first_run.run_id)
+    first_owner = first.db.scalar(
+        "select lease_owner_token from pipeline_run where run_id = ?",
+        [first_run.run_id],
+    )
+    first.db.connection.execute(
+        """update pipeline_run set lease_expires_at = now() - interval '1 second'
+           where run_id = ?""",
+        [first_run.run_id],
+    )
+    second = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    second.db.migrate()
+
+    second_run, _ = second._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "stale-takeover"
+    )
+
+    assert second_run is not None
+    assert second_run.run_id == first_run.run_id
+    second_owner, heartbeat, lease_expires = second.db.query(
+        """select lease_owner_token, heartbeat_at::varchar, lease_expires_at::varchar
+           from pipeline_run where run_id = ?""",
+        [first_run.run_id],
+    )[0]
+    assert second_owner != first_owner
+    assert heartbeat is not None
+    assert datetime.fromisoformat(str(lease_expires)) > datetime.fromisoformat(
+        str(heartbeat)
+    )
+    with pytest.raises(RuntimeError, match="lease ownership"):
+        first._checkpoint("lodgings", "2026-08", "completed", 3, first_run.run_id)
+    with pytest.raises(RuntimeError, match="lease ownership"):
+        first._commit_terminal_summary(
+            orchestrator_module.RunSummary(
+                first_run.run_id,
+                "daily",
+                "BLOCKED",
+                False,
+                0,
+                0,
+                0,
+                1,
+                first_run.started_at,
+                datetime.now(UTC),
+            )
+        )
+    second._checkpoint("lodgings", "2026-08", "completed", 4, second_run.run_id)
+    assert json.loads(
+        second.db.scalar(
+            """select checkpoint_json from collection_checkpoint
+               where source_id = 'lodgings' and partition_key = '2026-08'"""
+        )
+    )["next_page"] == 4
+
+
 def test_fixture_backfill_defaults_to_the_complete_required_fixture_set(
     tmp_path: Path,
 ) -> None:
