@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from uuid import uuid4
@@ -80,6 +81,15 @@ def test_build_marts_end_to_end_january_does_not_inherit_august_registrations(tm
     build_facilities(db, run); build_marts(db, run, PolicyConfig(small_room_threshold=5, old_building_years=[20, 30]))
     assert db.query("select legal_registration_count, tourism_registration_facility_share, small_facility_share from mart_region_month where district = '사하구' and period = '2026-01'") == [(1, 0.0, 0.0)]
     assert db.query("select numerator, denominator from mart_metric_evidence where district = '사하구' and period = '2026-01' and metric_name = 'tourism_registration_facility_share'") == [(0.0, 1.0)]
+
+
+def test_build_marts_excludes_facility_closed_on_its_historical_observation(tmp_path: Path) -> None:
+    """A facility closed on the observed date cannot contribute historical supply."""
+    db = Database(tmp_path / "closed.duckdb", Path("sql")); db.migrate(); run = uuid4()
+    closed = replace(_license("lodgings", "closed", "폐업", "부산광역시 사하구 길 1", 10, date(2026, 1, 15)), closure_date=date(2026, 1, 15))
+    load_license_snapshot(db, [closed], run); build_facilities(db, run)
+    build_marts(db, run, PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]))
+    assert db.query("select physical_facility_count from mart_region_month where district = '사하구' and period = '2026-01'") == [(0,)]
 
 
 def test_build_marts_end_to_end_group_pressure_does_not_sum_district_rates(tmp_path: Path) -> None:

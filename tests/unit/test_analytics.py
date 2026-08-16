@@ -4,8 +4,8 @@ from uuid import uuid4
 from westbusan.analytics.build import (
     RegionMetrics,
     _comparison_quality,
-    _group_pressure,
     _group_distribution,
+    _group_pressure,
     _growth_evidence,
     _monthly_native_sum,
     _period_metric_set,
