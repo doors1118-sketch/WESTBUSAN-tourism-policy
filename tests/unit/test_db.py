@@ -41,6 +41,41 @@ def test_empty_database_migration_creates_spatial_schema_tables(tmp_path: Path) 
         """select lease_key, spatial_run_id, owner, lease_expires_at, fence_epoch
            from spatial_writer_lease"""
     ) == [("writer", None, None, None, 0)]
+    exception_columns = {
+        row[0]
+        for row in db.query(
+            """select column_name from information_schema.columns
+               where table_schema = 'main' and table_name = 'mart_spatial_exception'"""
+        )
+    }
+    assert "base_published_run_id" in exception_columns
+
+
+def test_spatial_migration_upgrades_pre_spatial_database_with_exception_lineage(
+    tmp_path: Path,
+) -> None:
+    """Catches an upgrade that omits the base published-run lineage on exceptions."""
+    old_migrations = tmp_path / "pre-spatial-migrations"
+    old_migrations.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name < "027_spatial_reference.sql":
+            copy2(migration, old_migrations / migration.name)
+    path = tmp_path / "pre-spatial.duckdb"
+    legacy = Database(path, old_migrations)
+    legacy.migrate()
+    legacy.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+    exception_columns = {
+        row[0]
+        for row in upgraded.query(
+            """select column_name from information_schema.columns
+               where table_schema = 'main' and table_name = 'mart_spatial_exception'"""
+        )
+    }
+
+    assert "base_published_run_id" in exception_columns
 
 
 def test_migrations_are_idempotent(tmp_path: Path) -> None:

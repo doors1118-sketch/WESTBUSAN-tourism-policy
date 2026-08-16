@@ -84,6 +84,7 @@ create table if not exists mart_spatial_evidence (
 
 create table if not exists mart_spatial_exception (
     spatial_run_id uuid not null,
+    base_published_run_id uuid not null,
     subject_type varchar not null,
     subject_id varchar not null,
     exception_code varchar not null,
