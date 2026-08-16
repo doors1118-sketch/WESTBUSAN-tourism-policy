@@ -1025,16 +1025,61 @@ def _same_period_inventory(
     completed = latest_complete_snapshot_runs(db, run_id, period=period)
     completed_run_ids = tuple(completed.values())
     completed_placeholders = ",".join("?" for _ in completed_run_ids)
-    observed_snapshot_rows = bool(rows) or bool(
-        completed_run_ids
-        and db.query(
+    raw_snapshot_rows = (
+        db.query(
             f"""select 1 from staging_license_revision
                 where district = ? and observed_on::varchar like ?
                   and version_run_id in ({completed_placeholders})
-                limit 1""",
+                """,
             [district, f"{period}%", *completed_run_ids],
         )
+        if completed_run_ids
+        else []
     )
+    raw_active = any(
+        is_active_status(code, name, closure, observed)
+        for _, code, name, closure, observed in db.query(
+            f"""select source_record_id, status_code, status_name,
+                       closure_date, observed_on
+                from staging_license_revision
+                where district = ? and observed_on::varchar like ?
+                  and version_run_id in ({completed_placeholders})""",
+            [district, f"{period}%", *completed_run_ids],
+        )
+    ) if completed_run_ids else False
+    selected_statuses = [
+        str(
+            db.query(
+                """select status from source_status
+                   where source_id = ? and run_id = ?
+                   order by checked_at desc limit 1""",
+                [source_id, selected_run],
+            )[0][0]
+        )
+        for source_id, selected_run in completed.items()
+    ]
+    all_selected_empty = bool(selected_statuses) and all(
+        status == "EMPTY" for status in selected_statuses
+    )
+    history_period_evidence = bool(
+        history_exists
+        and completed_run_ids
+        and db.query(
+            f"""select 1
+                from facility_component_history as link
+                join staging_license_revision as snapshot
+                  on snapshot.source_id = link.source_id
+                 and snapshot.source_record_id = link.source_record_id
+                 and snapshot.version_run_id = link.source_snapshot_run_id
+                where link.run_id in ({placeholders})
+                  and link.source_snapshot_run_id in ({completed_placeholders})
+                  and snapshot.observed_on::varchar like ? limit 1""",
+            [*visible_runs, *completed_run_ids, f"{period}%"],
+        )
+    )
+    observed_snapshot_rows = bool(rows) or all_selected_empty or bool(
+        raw_snapshot_rows and not raw_active
+    ) or history_period_evidence
     rows = [
         row
         for row in rows

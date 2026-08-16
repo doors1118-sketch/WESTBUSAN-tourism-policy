@@ -245,6 +245,37 @@ def test_two_successive_full_snapshots_preserve_each_months_membership(
     ) == [("2026-01", 2, 30.0), ("2026-02", 1, 10.0)]
 
 
+def test_missing_run_dated_component_evidence_never_becomes_false_zero(
+    tmp_path: Path,
+) -> None:
+    """An active raw record without its run entity snapshot is unavailable, not zero."""
+    db = Database(tmp_path / "missing-components.duckdb", Path("sql")); db.migrate()
+    run = uuid4()
+    db.connection.execute(
+        "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', '2026-01-31', 'DONE')",
+        [run],
+    )
+    load_license_snapshot(
+        db,
+        [_license("lodgings", "A", "호텔A", "부산광역시 사하구 길 1", 10, date(2026, 1, 31))],
+        run,
+    )
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 1, 31, tzinfo=UTC), "READY", {}, run)
+    )
+
+    build_marts(
+        db,
+        run,
+        PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+    )
+
+    assert db.query(
+        """select physical_facility_count from mart_region_month
+           where district = '사하구' and period = '2026-01'"""
+    ) == [(None,)]
+
+
 def test_stock_before_first_observed_full_snapshot_is_null_not_zero(
     tmp_path: Path,
 ) -> None:
