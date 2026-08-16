@@ -54,6 +54,26 @@
   unexpected family failures into run-scoped source evidence and always reach a
   structured terminal `BLOCKED` summary. CLI `quality` defaults to the latest
   attempted run, including a blocked attempt behind a prior publication.
+- Every loader-family exception also emits an out-of-registry
+  `orchestration:<family>` status whose dynamic readiness contract is required.
+  Thus an optional tourism/transport source cannot turn an orchestration crash
+  into a publishable warning; the actual source failure remains independently
+  visible and the previous publication remains current.
+- Publication now finalizes its pointer, duplicate-review snapshot, pipeline
+  terminal status, and immutable run summary in one transaction. A callback
+  failure rolls all four back, blocked status/summary use a separate atomic
+  transaction, and a legacy current pointer still marked `RUNNING` is recovered
+  without recollection.
+- Added exclusive run-attempt leases with owner UUID, heartbeat, and expiry.
+  Atomic compare-and-set acquisition rejects a second active owner, permits a
+  safe stale-lease takeover of the same attempt, and makes checkpoints and
+  terminal finalization validate/refresh ownership.
+- `load_transport` now accepts an inclusive date range, schedules every OD
+  source month, filters snapshot/file records before fact persistence, and
+  returns explicit source-month evidence. Orchestration plans monthly transport
+  partitions, targets the previous complete month in daily mode, resumes only
+  same-attempt evidence-backed checkpoints, and never blanket-completes missing
+  months.
 - Documented `WESTBUSAN_ENABLE_LIVE_TRANSPORT=false` as the safe default in the
   environment example, README, and Cloud handoff; only an explicitly reviewed
   opt-in enables live transport collection.
@@ -75,13 +95,18 @@
   mutable duplicate-review export, and unhandled family loader crashes. Each
   regression was first observed failing and then passed against the hardened
   implementation.
+- Rereview REDs reproduced optional-family crash publication, partially committed
+  publication finalization, blocked terminal-without-summary, legacy published
+  RUNNING recollection, dual ownership of one attempt, out-of-range transport
+  facts, reused OD request months, and blanket/repeated transport checkpoints.
+  Each test failed for the named behavior before the corresponding minimal fix.
 - Final focused command:
-  `python -m pytest tests/integration/test_end_to_end.py tests/unit/test_orchestrator.py tests/unit/test_cli.py -v`
-  — 17 passed.
+  `python -m pytest tests/integration/test_transport_load.py tests/integration/test_end_to_end.py tests/unit/test_orchestrator.py tests/unit/test_cli.py -v`
+  — 40 passed, 1 skipped (opt-in live transport check).
 
 ## Final verification
 
-- Full `python -m pytest -v`: 175 passed, 3 skipped (opt-in live tests), exit 0.
+- Full `python -m pytest -v`: 185 passed, 3 skipped (opt-in live tests), exit 0.
 - `python -m ruff check .`: all checks passed, exit 0.
 - `python -m westbusan.cli --help`: six commands listed, exit 0.
 - Ignored-path `python -m westbusan.cli init-db --root .`: structured initialized

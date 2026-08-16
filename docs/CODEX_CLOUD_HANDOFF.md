@@ -89,8 +89,8 @@ git log -5 --oneline
 
 ## 로컬 검증 상태 (2026-08-16)
 
-- Task 12 focused: 17 passed.
-- 전체 pytest: 175 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
+- Task 12 focused (transport 포함): 40 passed, 1 skipped.
+- 전체 pytest: 185 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
 - Ruff: all checks passed.
 - CLI `--help`: 여섯 명령 표시, exit 0.
 - ignored 임시 DB `init-db`: exit 0.

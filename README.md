@@ -56,7 +56,10 @@ backfill 날짜는 양 끝을 포함합니다. 월 원천은 월별 partition, �
 `collection_checkpoint` 완료 상태는 해당 원천·partition의 raw/fact 또는 명시적
 empty 증거가 있을 때만 기록합니다. 관광 원천은 관광 loader가 보존한 backfill
 상태를 그대로 기준으로 삼습니다. 이후 원천 실패가 이미 저장된 성공 데이터를
-삭제하지 않습니다.
+삭제하지 않습니다. 교통 loader는 요청 월 범위 밖의 정규화 record를 fact에
+넣지 않고 실제 record 또는 공급자의 명시적 empty가 확인된 source-month만
+checkpoint로 반환합니다. 일일 관광·교통 수집 대상은 실행일이 속한 달이 아니라
+직전의 완결된 달입니다.
 
 ## 품질, 중복 검토, export
 
