@@ -43,7 +43,7 @@ class FileSource:
             {
                 "kind": "file",
                 "filename": path.name,
-                "content_hash": file_fingerprint(path),
+                "content_hash": hashlib.sha256(body).hexdigest(),
                 "source_date_quality": source_date_quality,
                 "source_date_granularity": source_date_granularity,
                 "source_date_value": source_date_value,

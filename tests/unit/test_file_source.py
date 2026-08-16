@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from openpyxl import Workbook
 
 from westbusan.models import RunContext
@@ -58,6 +59,26 @@ def test_manual_ingestion_parses_the_immutable_copy_not_the_mutable_inbox(
     inbox.write_text("station,count\n부산,999\n", encoding="utf-8")
 
     assert read_tabular_rows(artifact.path) == [{"station": "부산", "count": "10"}]
+
+
+def test_manual_ingestion_hashes_the_single_captured_byte_buffer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches reopening a mutable inbox file merely to calculate its hash."""
+    inbox = tmp_path / "KORAIL_근무지_2022.csv"
+    inbox.write_text("station,count\n부산,10\n", encoding="utf-8")
+    run = RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC))
+
+    def forbidden_second_read(_path: Path) -> str:
+        raise AssertionError("ingest reopened the mutable inbox")
+
+    monkeypatch.setattr("westbusan.sources.files.file_fingerprint", forbidden_second_read)
+
+    artifact = FileSource(tmp_path / "data").ingest(
+        inbox, "korail_workplace_ticketing_file", run
+    )
+
+    assert artifact.content_hash == file_fingerprint(artifact.path)
 
 
 def test_tabular_reader_preserves_xlsx_cell_positions_and_cp949_csv(tmp_path: Path) -> None:
