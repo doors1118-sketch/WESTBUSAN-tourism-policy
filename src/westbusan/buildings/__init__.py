@@ -7,7 +7,11 @@ from westbusan.buildings.load import (
     load_legal_dong_codes,
     parcel_query,
 )
-from westbusan.buildings.normalize import BuildingRecord, building_age, normalize_building_title
+from westbusan.buildings.normalize import (
+    BuildingRecord,
+    building_age,
+    normalize_building_title,
+)
 
 __all__ = [
     "BuildingCollectionResult",
