@@ -595,18 +595,26 @@ def _transport_fact_reconciliation(
     source_id: str,
     expectations: list[TransportFactExpectation],
     malformed: list[_ArtifactPage],
+    *,
+    allow_empty: bool = False,
 ) -> tuple[bool, dict[str, object]]:
     actual_rows = db.query(
         """select fact.observation_key, fact.metric_code, fact.period,
                   fact.district, fact.region_group, fact.dimension_json,
                   fact.dimension_json_hash, fact.source_revision,
-                  fact.metric_value, fact.unit, fact.source_payload_json
+                  fact.metric_value, fact.unit, fact.source_payload_json,
+                  membership.observation_key is not null as is_membered
            from fact_transport_flow as fact
-           join run_fact_observation as membership
-             on membership.family = 'transport'
+           left join run_fact_observation as membership
+             on membership.run_id = ?
+            and membership.family = 'transport'
             and membership.observation_key = fact.observation_key
-           where membership.run_id = ? and fact.source_id = ?""",
-        [run_id, source_id],
+           where fact.source_id = ?
+             and (
+                 fact.loaded_run_id = ?
+                 or membership.observation_key is not null
+             )""",
+        [run_id, source_id, run_id],
     )
     expected_by_key = {
         expectation.observation_key: (
@@ -623,7 +631,8 @@ def _transport_fact_reconciliation(
         )
         for expectation in expectations
     }
-    actual_by_key = {str(row[0]): tuple(row[1:]) for row in actual_rows}
+    actual_by_key = {str(row[0]): tuple(row[1:11]) for row in actual_rows}
+    unmembered = sorted(str(row[0]) for row in actual_rows if not row[11])
     missing = sorted(expected_by_key.keys() - actual_by_key.keys())
     extra = sorted(actual_by_key.keys() - expected_by_key.keys())
     mismatched = sorted(
@@ -631,7 +640,14 @@ def _transport_fact_reconciliation(
         for key in expected_by_key.keys() & actual_by_key.keys()
         if expected_by_key[key] != actual_by_key[key]
     )
-    passed = bool(expected_by_key) and not malformed and not missing and not extra and not mismatched
+    passed = (
+        (allow_empty or bool(expected_by_key))
+        and not malformed
+        and not missing
+        and not extra
+        and not mismatched
+        and not unmembered
+    )
     evidence = {
         "expected_facts": len(expected_by_key),
         "target_facts": len(actual_by_key),
@@ -639,6 +655,7 @@ def _transport_fact_reconciliation(
         "missing_observation_keys": missing,
         "extra_observation_keys": extra,
         "mismatched_observation_keys": mismatched,
+        "unmembered_target_keys": unmembered,
     }
     return passed, evidence
 
@@ -729,10 +746,13 @@ def _transport_page_reconciliation_check(
             page.page_no for page in grouped if page.page_no is not None
         )
         raw_total = next(iter(totals)) if len(totals) == 1 else None
-        page_size = grouped[0].page_size
+        page_sizes = sorted(
+            {page.page_size for page in grouped if page.page_size is not None}
+        )
+        page_size = page_sizes[0] if len(page_sizes) == 1 else None
         expected_pages = (
             list(range(1, _expected_page_count(raw_total, page_size) + 1))
-            if raw_total is not None
+            if raw_total is not None and page_size is not None
             else []
         )
         page_outcomes.append(
@@ -744,6 +764,7 @@ def _transport_page_reconciliation_check(
                 "raw_total": raw_total,
                 "raw_rows": sum(len(page.rows or []) for page in grouped),
                 "page_numbers": page_numbers,
+                "page_sizes": page_sizes,
                 "expected_pages": expected_pages,
             }
         )
@@ -759,13 +780,20 @@ def _transport_page_reconciliation_check(
         )
     ]
     facts_passed, fact_evidence = _transport_fact_reconciliation(
-        db, run_id, source_id, expectations, malformed
+        db,
+        run_id,
+        source_id,
+        expectations,
+        malformed,
+        allow_empty=bool(pages)
+        and all(page.total_count == 0 and page.rows == [] for page in pages),
     )
     paging_passed = (
         bool(pages)
         and not malformed
         and all(
             outcome["raw_total"] is not None
+            and len(outcome["page_sizes"]) == 1
             and outcome["page_numbers"] == outcome["expected_pages"]
             and outcome["raw_rows"] == outcome["raw_total"]
             for outcome in page_outcomes

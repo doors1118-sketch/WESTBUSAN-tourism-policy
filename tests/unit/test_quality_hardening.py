@@ -31,6 +31,7 @@ from westbusan.quality.checks import run_quality_suite as _run_quality_suite
 from westbusan.quality.publish import current_published_run, publish_if_valid
 from westbusan.sources.datagokr import parse_data_page
 from westbusan.sources.registry import SourceRegistry
+from westbusan.storage import RawStore
 from westbusan.transport.load import load_transport
 
 
@@ -475,6 +476,169 @@ def test_odcloud_provenance_metadata_is_hashed_but_not_counted_as_a_data_page(
         check.status == "failed" and check.severity == "required"
         for check in checks.values()
     ) is (metadata_tamper != "none")
+
+
+def test_odcloud_quality_rejects_inconsistent_per_page_across_complete_pages(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A complete-looking page set cannot change provider perPage mid-stream."""
+    db = _db(tmp_path)
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 16, tzinfo=UTC),
+        business_date=date(2024, 7, 31),
+    )
+    ensure_integrity_run(db, run.run_id, business_date=run.cutoff_date)
+    registry = SourceRegistry.load(Path("config/sources.yaml"))
+    selected = SourceRegistry((registry.get("busan_metro_odcloud_discovery"),))
+    swagger = Path("tests/fixtures/odcloud/swagger.json").read_bytes()
+    file_detail = Path("tests/fixtures/odcloud/file_detail.json").read_bytes()
+    first = json.loads(
+        Path("tests/fixtures/transport/metro_rows.json").read_text(encoding="utf-8")
+    )[0]
+    second = {
+        **first,
+        "역번호": 228,
+        "구분": "하차",
+        "합계": 900,
+        "08시-09시": 140,
+        "09시-10시": 70,
+    }
+    monkeypatch.setenv("WESTBUSAN_ENABLE_LIVE_TRANSPORT", "true")
+    monkeypatch.setenv("ODCLOUD_API_KEY", "test-only-key")
+
+    class FixtureClient:
+        def get(self, url: str, params: dict[str, object]) -> HttpResult:
+            if url == "https://infuser.odcloud.kr/oas/docs":
+                return HttpResult(200, swagger, "application/json")
+            if url == "https://www.data.go.kr/data/3057229/fileData.do":
+                return HttpResult(
+                    200,
+                    (
+                        b'<html><body><input id="publicDataDetailPk" '
+                        b'value="uddi:99999999-9999-9999-9999-999999999999"></body></html>'
+                    ),
+                    "text/html",
+                )
+            if url == "https://www.data.go.kr/tcs/dss/selectFileDataDownload.do":
+                return HttpResult(200, file_detail, "application/json")
+            if "/3057229/v1/uddi:99999999-9999-9999-9999-999999999999" in url:
+                page_no = int(params["page"])
+                return HttpResult(
+                    200,
+                    json.dumps(
+                        {
+                            "data": [first if page_no == 1 else second],
+                            "totalCount": 2,
+                            "page": page_no,
+                            "perPage": 1 if page_no == 1 else 2,
+                        }
+                    ).encode(),
+                    "application/json",
+                )
+            raise AssertionError(url)
+
+    result = load_transport(
+        db,
+        selected,
+        date(2024, 7, 1),
+        date(2024, 7, 31),
+        run,
+        client=FixtureClient(),
+    )
+    report = _run_quality_suite(db, run.run_id)
+    checks = {
+        check.name: check
+        for check in report.checks
+        if check.source_id == "busan_metro_odcloud_discovery"
+    }
+
+    assert result.records_loaded == 2
+    assert checks["required_record_structure"].status == "passed"
+    assert checks["schema_fingerprint_approved"].status == "passed"
+    assert checks["raw_total_matches_staging"].status == "failed"
+    assert checks["raw_total_matches_staging"].severity == "required"
+
+
+@pytest.mark.parametrize("stray_kind", ("none", "unmembered", "membered"))
+def test_odcloud_explicit_empty_reconciles_only_without_any_target_facts(
+    tmp_path: Path,
+    stray_kind: str,
+) -> None:
+    """Explicit provider zero is valid only when the run has no target fact residue."""
+    db = _db(tmp_path)
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 16, tzinfo=UTC),
+        business_date=date(2024, 7, 31),
+    )
+    ensure_integrity_run(db, run.run_id, business_date=run.cutoff_date)
+    source_id = "busan_metro_odcloud_discovery"
+    declared_schema = "reviewed-empty-schema"
+    source_revision = f"odcloud:empty:{declared_schema}"
+    artifact = RawStore(tmp_path).write(
+        run,
+        source_id,
+        {
+            "schema_fingerprint": declared_schema,
+            "source_revision": source_revision,
+            "requested_start": "2024-07-01",
+            "requested_end": "2024-07-31",
+            "page": 1,
+            "perPage": 1000,
+        },
+        b'{"data":[],"totalCount":0}',
+        ".json",
+        date(2024, 7, 31),
+    )
+    db.record_artifact(artifact)
+    db.record_source_status(
+        SourceStatus(
+            source_id,
+            datetime(2026, 8, 16, tzinfo=UTC),
+            "EMPTY",
+            {"reason": "explicit provider zero"},
+            run.run_id,
+        )
+    )
+    if stray_kind != "none":
+        db.connection.execute(
+            """insert into fact_transport_flow (
+                   source_id, metric_code, period, district, region_group,
+                   dimension_json, dimension_json_hash, source_revision,
+                   metric_value, unit, source_payload_json, artifact_id,
+                   loaded_run_id, observation_key
+               ) values (?, 'metro_boarding', '2024-07-31', '사상구', 'west',
+                         '{}', 'stray-dimension', ?, 1, 'passengers', '{}',
+                         ?, ?, 'stray-empty-target')""",
+            [source_id, source_revision, artifact.artifact_id, run.run_id],
+        )
+        if stray_kind == "membered":
+            db.connection.execute(
+                """insert into run_fact_observation (
+                       run_id, family, observation_key
+                   ) values (?, 'transport', 'stray-empty-target')""",
+                [run.run_id],
+            )
+
+    report = _run_quality_suite(db, run.run_id)
+    checks = {
+        check.name: check
+        for check in report.checks
+        if check.source_id == source_id
+    }
+    reconciliation = checks["raw_total_matches_staging"]
+
+    assert checks["required_record_structure"].status == "passed"
+    assert checks["schema_fingerprint_approved"].status == "passed"
+    assert reconciliation.status == ("passed" if stray_kind == "none" else "failed")
+    assert reconciliation.actual["expected_facts"] == 0
+    assert reconciliation.actual["target_facts"] == (
+        0 if stray_kind == "none" else 1
+    )
 
 
 def test_monthly_freshness_uses_run_business_cutoff_not_wall_clock(

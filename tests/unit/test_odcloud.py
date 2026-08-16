@@ -195,3 +195,19 @@ def test_quality_parser_requires_paging_metadata_only_for_nonempty_odcloud_pages
             '{"data":[{"station":"사상역"}],"totalCount":1}'.encode(),
             require_paging_metadata=True,
         )
+
+
+def test_odcloud_parser_rejects_missing_data_as_malformed_not_empty() -> None:
+    """An arbitrary JSON object is not provider evidence of an empty dataset."""
+    with pytest.raises(SchemaError, match="data array"):
+        parse_odcloud_page(b"{}", require_paging_metadata=True)
+
+
+@pytest.mark.parametrize(
+    "body",
+    (b'{"data":[]}', b'{"data":[],"totalCount":1}'),
+)
+def test_odcloud_parser_requires_explicit_zero_total_for_empty_data(body: bytes) -> None:
+    """An empty row array is evidence only when its declared total is exactly zero."""
+    with pytest.raises(SchemaError, match="empty.*totalCount"):
+        parse_odcloud_page(body, require_paging_metadata=True)

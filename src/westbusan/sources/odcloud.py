@@ -385,12 +385,17 @@ def parse_odcloud_page(
         raise SchemaError("ODCloud page is not valid JSON") from error
     if not isinstance(decoded, Mapping):
         raise SchemaError("ODCloud page root is not an object")
-    raw_rows = decoded.get("data")
-    if raw_rows in (None, ""):
-        raw_rows = []
+    if "data" not in decoded:
+        raise SchemaError("ODCloud page has no object data array")
+    raw_rows = decoded["data"]
     if not isinstance(raw_rows, list) or not all(isinstance(row, Mapping) for row in raw_rows):
         raise SchemaError("ODCloud page has no object data array")
     rows = [dict(row) for row in raw_rows]
+    if not rows and (
+        decoded.get("totalCount") in (None, "")
+        or _page_integer(decoded, ("totalCount",), -1) != 0
+    ):
+        raise SchemaError("empty ODCloud data requires explicit totalCount=0")
     if require_paging_metadata and rows and any(
         decoded.get(name) in (None, "") for name in ("totalCount", "page", "perPage")
     ):
