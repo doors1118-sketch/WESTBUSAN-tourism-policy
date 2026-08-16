@@ -1,11 +1,11 @@
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import westbusan.orchestrator as orchestrator_module
-from westbusan.models import SourceSpec
+from westbusan.models import SourceSpec, SourceStatus
 from westbusan.orchestrator import (
     Pipeline,
     export_current,
@@ -288,6 +288,73 @@ def test_family_loader_failures_finalize_a_run_scoped_blocked_summary(
                order by checked_at desc limit 1""",
             [summary.run_id, spec.source_id],
         ) == "HTTP_FAILED"
+
+
+def test_optional_family_crash_is_a_required_failure_and_preserves_lkg(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches an optional tourism contract allowing an orchestration crash to publish."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    prior = pipeline.daily(date(2026, 8, 15))
+    fixture_dir = pipeline.fixture_dir
+    pipeline.fixture_dir = None
+    accommodation = tuple(
+        pipeline.registry.get(source_id)
+        for source_id in pipeline.registry.ids(group="accommodation")
+    )
+    tourism = SourceSpec(
+        "tourism_data_lab",
+        "https://example.test/tourism",
+        operation="reviewed",
+        group="tourism",
+        cadence="monthly",
+    )
+    pipeline.registry = SourceRegistry((*accommodation, tourism))
+
+    def fixture_collect(run, source_id, as_of, logger):
+        pipeline.fixture_dir = fixture_dir
+        try:
+            return pipeline._collect_fixture_source(run, source_id, as_of, logger)
+        finally:
+            pipeline.fixture_dir = None
+
+    def ready_probe(spec, client, db):
+        status = SourceStatus(
+            spec.source_id,
+            datetime.now(UTC),
+            "READY",
+            {"operation": spec.operation or "reviewed"},
+        )
+        db.record_source_status(status)
+        return status
+
+    monkeypatch.setattr(pipeline, "_collect_accommodation", fixture_collect)
+    monkeypatch.setattr(orchestrator_module, "probe_source", ready_probe)
+    monkeypatch.setattr(
+        orchestrator_module,
+        "load_tourism_demand",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("tourism crashed")),
+    )
+
+    failed = pipeline.daily(date(2026, 8, 16))
+
+    assert failed.status == "BLOCKED"
+    assert failed.published is False
+    assert pipeline.db.scalar(
+        "select published_run_id from publication_state where is_current"
+    ) == prior.run_id
+    assert pipeline.db.scalar(
+        """select count(*) from fact_data_quality
+           where run_id = ? and source_id = 'orchestration:tourism'
+             and status = 'failed' and severity = 'required'""",
+        [failed.run_id],
+    ) >= 1
+    assert pipeline.db.scalar(
+        """select status from source_status
+           where run_id = ? and source_id = 'tourism_data_lab'
+           order by checked_at desc limit 1""",
+        [failed.run_id],
+    ) == "HTTP_FAILED"
 
 
 def test_log_redaction_covers_nested_credential_names() -> None:

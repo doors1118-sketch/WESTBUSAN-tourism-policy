@@ -251,6 +251,7 @@ class Pipeline:
                 for source_id in selected:
                     if self.registry.get(source_id).group == "building":
                         self._record_failure(run, source_id, error, logger)
+                self._record_orchestration_failure(run, "building", error, logger)
             else:
                 total_rows += result.building_rows
         if any(self.registry.get(item).group == "tourism" for item in selected):
@@ -266,6 +267,7 @@ class Pipeline:
                 for source_id in selected:
                     if self.registry.get(source_id).group == "tourism":
                         self._record_failure(run, source_id, error, logger)
+                self._record_orchestration_failure(run, "tourism", error, logger)
             else:
                 total_rows += result.records_loaded
         if any(self.registry.get(item).group == "transport" for item in selected):
@@ -276,6 +278,7 @@ class Pipeline:
                 for source_id in selected:
                     if self.registry.get(source_id).group == "transport":
                         self._record_failure(run, source_id, error, logger)
+                self._record_orchestration_failure(run, "transport", error, logger)
             else:
                 self.db.connection.execute(
                     """update source_status set run_id = ?
@@ -663,6 +666,38 @@ class Pipeline:
             duration=0.0,
             row_count=0,
             status=status,
+        )
+
+    def _record_orchestration_failure(
+        self,
+        run: RunContext,
+        family: str,
+        error: Exception,
+        logger: _JsonlLogger,
+    ) -> None:
+        """Persist a required synthetic contract for a failed loader boundary."""
+        source_id = f"orchestration:{family}"
+        self.db.record_source_status(
+            SourceStatus(
+                source_id,
+                datetime.now(UTC),
+                "HTTP_FAILED",
+                {
+                    "family": family,
+                    "error": str(error),
+                    "readiness_contract": {"required_for_publication": True},
+                },
+                run.run_id,
+            )
+        )
+        logger.write(
+            "source_failed",
+            run_id=run.run_id,
+            source_id=source_id,
+            partition=None,
+            duration=0.0,
+            row_count=0,
+            status="HTTP_FAILED",
         )
 
 class _JsonlLogger:
