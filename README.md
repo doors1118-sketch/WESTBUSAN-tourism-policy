@@ -3,7 +3,10 @@
 공공 원천의 요청·응답 증거를 보존하고 숙박 인허가를 물리 시설로 보수적으로
 중복 해소한 뒤, 서부산·동부산·기타 부산 비교 마트를 품질 게이트를 통과한
 run에 한해서만 게시하는 Windows 로컬 파이프라인입니다. 건물 연령은 리모델링
-상태가 아니며 방문객·교통 압력은 객실 점유율이 아닙니다. 관광펜션은 시설을
+상태가 아니며 오직 사용승인일로 계산합니다. 허가일·일반 승인일·용도변경·
+보수 이력은 연령 근거와 분리합니다. 방문객 지표는 관측 일별 추정치를 더한
+`visitor-person-days` 압력이며 월 순방문객, 숙박객 또는 객실 점유율이 아닙니다.
+관광펜션은 시설을
 추가하는 등록이 아니라 지정 overlay입니다. 지역 정의는 `config/regions.yaml`이
 유일한 기준이고 모든 필수 품질 게이트는 fail-closed입니다.
 
@@ -93,8 +96,20 @@ append-only 승인 사건으로 남고 최신 baseline은 그 사건을 참조�
 종료 코드는 게시 성공 0, 경고를 포함해 게시 완료 2, 필수 게이트 차단 1입니다.
 필수 실패 시 이전 last-known-good `publication_state`가 유지됩니다. 현재 분석
 테이블은 `mart_facility_current`, `mart_region_month`, `mart_metric_evidence`,
-`mart_region_comparison`, `mart_policy_signal`입니다. `duplicate_review`의 pending
+`mart_region_group_month`, `mart_region_comparison`, `mart_policy_signal`입니다.
+지역월 마트는 부산 16개 구·군을 항상 명시하고, 관측 전 역사 재고는 0이 아니라
+NULL/insufficient로 표시합니다. 현행 재고는 원천별 마지막 완결 full snapshot에
+실제로 존재하면서 영업상태 01 또는 검토된 정상 영업명인 등록만 포함합니다.
+정책 매트릭스의 다섯 규칙은 `triggered`, `not_triggered`, `unavailable` 중 하나와
+각 지표의 분자·분모·coverage를 함께 저장합니다. `duplicate_review`의 pending
 후보와 `fact_data_quality` 증거를 새 게시 전 반드시 검토하십시오.
+
+물리 시설 자동 병합은 버전이 고정된 대표 표본의 95% Wilson 신뢰하한 게이트를
+통과할 때만 허용합니다. 사람의 merge/separate 판단은 알고리즘·데이터 버전,
+검토자, 근거와 함께 불변 이력으로 보존됩니다. 관광펜션 지정은
+`bridge_facility_designation`에 별도 연결되며 시설 ID나 법적 공급량을 바꾸지
+않습니다. 한 필지에 여러 건축물대장 표제가 조회되면 자동 fan-out하지 않고
+`building_link_review` 후보로 남깁니다.
 
 현재 시설·지역월·품질·중복검토 export는 각각 CSV와 Parquet로
 `data/exports/export_date=YYYY-MM-DD` 아래 생성됩니다. 원문·Parquet는

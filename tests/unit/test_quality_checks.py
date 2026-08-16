@@ -7,6 +7,7 @@ from westbusan.models import SourceStatus
 from westbusan.quality.checks import (
     CheckResult,
     QualityReport,
+    _active_facility_count,
     _designation_coverage_check,
     _entity_precision_check,
     run_quality_suite,
@@ -76,6 +77,35 @@ def test_unmatched_tourist_pension_designation_has_explicit_coverage_gate(
         "linked_designations": 0,
         "unmatched_designations": 1,
     }
+
+
+def test_quality_active_facility_count_uses_status_and_snapshot_membership(
+    tmp_path: Path,
+) -> None:
+    """Catches quality counts disagreeing with the status-aware analytical inventory."""
+    db = Database(tmp_path / "active-count.duckdb", Path("sql")); db.migrate()
+    run_id, facility_id = uuid4(), uuid4()
+    db.connection.execute(
+        "insert into dim_facility (facility_id, district, region_group) values (?, '사하구', 'west')",
+        [facility_id],
+    )
+    db.connection.execute(
+        """
+        insert into staging_license_snapshot (
+            source_id, source_record_id, observed_on, first_loaded_run_id,
+            last_loaded_run_id, status_code, status_name, region_quality,
+            room_count_quality, source_payload_json, record_hash
+        ) values ('lodgings', 'L1', '2026-08-16', ?, ?, '02', '폐업',
+                  'resolved', 'missing', '{}', 'L1')
+        """,
+        [run_id, run_id],
+    )
+    db.connection.execute(
+        "insert into bridge_facility_license (facility_id, source_id, source_record_id) values (?, 'lodgings', 'L1')",
+        [facility_id],
+    )
+
+    assert _active_facility_count(db, run_id) == 0
 
 
 def test_ready_accommodation_source_with_no_run_snapshot_fails_and_is_persisted(

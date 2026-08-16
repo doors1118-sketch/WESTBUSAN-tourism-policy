@@ -20,6 +20,7 @@ from westbusan.entity_resolution.match import (
     evaluate_auto_merge_calibration,
 )
 from westbusan.http import SchemaError
+from westbusan.inventory import is_active_status
 from westbusan.sources.datagokr import parse_data_page
 
 CheckStatus = Literal["passed", "failed", "warning", "skipped"]
@@ -869,22 +870,25 @@ def _designation_coverage_check(db: Database, run_id: UUID) -> CheckResult:
 
 def _active_facility_count(db: Database, run_id: UUID) -> int:
     ensure_run_rebuildable(db, run_id)
-    cutoff = _run_cutoff(db, run_id)
-    return int(
-        db.query(
-            """select count(distinct link.facility_id)
-                from run_facility_license as link
-                join staging_license_revision as snapshot
-                  on snapshot.version_run_id = link.selected_version_run_id
-                 and snapshot.source_id = link.source_id
-                 and snapshot.source_record_id = link.source_record_id
-                 and snapshot.observed_on = link.selected_observed_on
-                 and snapshot.revision_sequence = link.selected_revision_sequence
-                where link.run_id = ?
-                  and (snapshot.closure_date is null
-                       or snapshot.closure_date > ?)""",
-            [run_id, cutoff],
-        )[0][0]
+    rows = db.query(
+        """select link.facility_id, snapshot.status_code, snapshot.status_name,
+                  snapshot.closure_date, snapshot.observed_on
+           from run_facility_license as link
+           join staging_license_revision as snapshot
+             on snapshot.version_run_id = link.selected_version_run_id
+            and snapshot.source_id = link.source_id
+            and snapshot.source_record_id = link.source_record_id
+            and snapshot.observed_on = link.selected_observed_on
+            and snapshot.revision_sequence = link.selected_revision_sequence
+           where link.run_id = ?""",
+        [run_id],
+    )
+    return len(
+        {
+            facility_id
+            for facility_id, code, name, closure, observed in rows
+            if is_active_status(code, name, closure, observed)
+        }
     )
 
 
