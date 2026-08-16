@@ -278,17 +278,149 @@ def test_migrate_legacy_command_approves_only_backfilled_self_lineage(
         ],
         run_id,
     )
+    facility_id = uuid4()
+    building_id = uuid4()
+    pipeline.db.connection.execute(
+        "insert into run_facility values (?, ?, '레거시호텔', '사하구', 'west')",
+        [run_id, facility_id],
+    )
+    pipeline.db.connection.execute(
+        """insert into run_facility_license
+           values (?, ?, 'lodgings', 'legacy', '{}')""",
+        [run_id, facility_id],
+    )
+    pipeline.db.connection.execute(
+        """insert into dim_building (building_id, building_key)
+           values (?, 'legacy-building')""",
+        [building_id],
+    )
+    pipeline.db.connection.execute(
+        "insert into run_facility_building values (?, ?, ?)",
+        [run_id, facility_id, building_id],
+    )
+    for family, table in (
+        ("tourism", "fact_tourism_demand"),
+        ("transport", "fact_transport_flow"),
+    ):
+        pipeline.db.connection.execute(
+            f"""insert into {table} (
+                   source_id, metric_code, period, district, region_group,
+                   dimension_json, dimension_json_hash, source_revision,
+                   metric_value, unit, source_payload_json, artifact_id,
+                   loaded_run_id, observation_key
+               ) values (?, 'visitor', '2026-08', '사하구', 'west',
+                         '{{}}', ?, 'revision', 1, 'count', '{{}}', ?, ?, ?)""",
+            [
+                f"legacy_{family}",
+                f"dimension-{family}",
+                uuid4(),
+                run_id,
+                f"legacy-{family}-observation",
+            ],
+        )
     monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
     monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
     monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
 
     result = CliRunner().invoke(
         app,
-        ["migrate-legacy", "--run-id", str(run_id), "--root", str(Path.cwd())],
+        [
+            "migrate-legacy",
+            "--run-id",
+            str(run_id),
+            "--operator",
+            "tester",
+            "--reason",
+            "verified fixture migration",
+            "--root",
+            str(Path.cwd()),
+        ],
     )
 
     assert result.exit_code == 0
     assert build_facilities(pipeline.db, run_id).facility_count == 1
+    assert pipeline.db.query(
+        """select operator_identity, reason, decision
+           from legacy_migration_audit where run_id = ?""",
+        [run_id],
+    ) == [("tester", "verified fixture migration", "approved")]
+    assert pipeline.db.query(
+        """select family, observation_key from run_fact_observation
+           where run_id = ? order by family""",
+        [run_id],
+    ) == [
+        ("tourism", "legacy-tourism-observation"),
+        ("transport", "legacy-transport-observation"),
+    ]
+    assert pipeline.db.scalar(
+        "select count(*) from run_license_building_observation where run_id = ?",
+        [run_id],
+    ) == 1
+    audit_evidence = json.loads(
+        pipeline.db.scalar(
+            "select evidence_json from legacy_migration_audit where run_id = ?",
+            [run_id],
+        )
+    )
+    assert all(
+        count == 0
+        for name, count in audit_evidence.items()
+        if name.startswith("missing_")
+    )
+
+
+def test_migrate_legacy_rejects_null_tourism_key_without_membership(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Legacy demand rows without immutable identity cannot be reconstructed safely."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    run_id = uuid4()
+    pipeline.db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'legacy', now(), 'BLOCKED', '2026-08-16', false)""",
+        [run_id],
+    )
+    pipeline.db.connection.execute(
+        """insert into fact_tourism_demand (
+               source_id, metric_code, period, district, region_group,
+               dimension_json, dimension_json_hash, source_revision, metric_value,
+               unit, source_payload_json, artifact_id, loaded_run_id, observation_key
+           ) values (
+               'tourism_data_lab', 'visitor', '2026-08', '사하구', 'west',
+               '{}', 'dimension', 'revision', 1, 'count', '{}', ?, ?, null
+           )""",
+        [uuid4(), run_id],
+    )
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "migrate-legacy",
+            "--run-id",
+            str(run_id),
+            "--operator",
+            "tester",
+            "--reason",
+            "legacy audit",
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert pipeline.db.scalar(
+        "select rebuildable from pipeline_run where run_id = ?", [run_id]
+    ) is False
+    assert pipeline.db.query(
+        """select operator_identity, reason, decision
+           from legacy_migration_audit where run_id = ?""",
+        [run_id],
+    ) == [("tester", "legacy audit", "rejected")]
 
 
 def test_export_requires_explicit_rebuild_for_mismatched_same_date_bundle(

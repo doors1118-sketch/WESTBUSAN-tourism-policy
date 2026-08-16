@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import duckdb
 
@@ -130,32 +131,174 @@ def ensure_run_rebuildable(db: Database, run_id: UUID) -> None:
         )
 
 
-def migrate_legacy_run(db: Database, run_id: UUID) -> None:
-    """Approve self-lineage only when every mutable legacy row has a revision copy."""
+def migrate_legacy_run(
+    db: Database,
+    run_id: UUID,
+    *,
+    operator_identity: str,
+    reason: str,
+) -> None:
+    """Reconstruct provable lineage and append an approval or rejection audit."""
+    operator = operator_identity.strip()
+    justification = reason.strip()
+    if not operator or not justification:
+        raise ValueError("legacy migration requires operator identity and reason")
+    evidence: dict[str, int] = {}
     began = False
     try:
         db.connection.execute("begin transaction")
         began = True
         if not db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
             raise RuntimeError(f"pipeline run {run_id} does not exist")
-        missing_license = int(
+        db.connection.execute(
+            "update pipeline_run set rebuildable = false where run_id = ?", [run_id]
+        )
+        db.connection.execute(
+            """insert into staging_license_revision (
+                   version_run_id, source_id, source_record_id, observed_on,
+                   revision_sequence, source_name, normalized_name, road_address,
+                   lot_address, district, region_group, region_quality, license_date,
+                   closure_date, status_code, status_name, room_count,
+                   room_count_quality, normalized_phone, longitude, latitude,
+                   source_updated_at, source_payload_json, record_hash, recorded_at
+               )
+               select version_run_id, source_id, source_record_id, observed_on, 1,
+                      source_name, normalized_name, road_address, lot_address,
+                      district, region_group, region_quality, license_date,
+                      closure_date, status_code, status_name, room_count,
+                      room_count_quality, normalized_phone, longitude, latitude,
+                      source_updated_at, source_payload_json, record_hash, recorded_at
+               from staging_license_snapshot_version where version_run_id = ?
+               on conflict do nothing""",
+            [run_id],
+        )
+        db.connection.execute(
+            """insert into staging_building_revision (
+                   version_run_id, building_id, observed_on, revision_sequence,
+                   parcel_hash, sigungu_cd, bjdong_cd, plat_gb_cd, bun, ji,
+                   road_address, lot_address, approval_date, use_approval_date,
+                   permit_date, main_use, total_area, ground_floor_count,
+                   underground_floor_count, closed_indicator, is_closed,
+                   source_payload_json, record_hash, recorded_at
+               )
+               select version_run_id, building_id, observed_on, 1, parcel_hash,
+                      sigungu_cd, bjdong_cd, plat_gb_cd, bun, ji, road_address,
+                      lot_address, approval_date, use_approval_date, permit_date,
+                      main_use, total_area, ground_floor_count,
+                      underground_floor_count, closed_indicator, is_closed,
+                      source_payload_json,
+                      sha256(concat_ws('|', building_id, observed_on::varchar,
+                                       source_payload_json)), recorded_at
+               from staging_building_snapshot_version where version_run_id = ?
+               on conflict do nothing""",
+            [run_id],
+        )
+        db.connection.execute(
+            """insert into run_license_building_observation (
+                   run_id, source_id, source_record_id, building_id, parcel_hash
+               )
+               select ?, license.source_id, license.source_record_id,
+                      building.building_id, 'legacy-run-facility-snapshot'
+               from run_facility_license as license
+               join run_facility_building as building
+                 on building.run_id = license.run_id
+                and building.facility_id = license.facility_id
+               where license.run_id = ?
+               on conflict do nothing""",
+            [run_id, run_id],
+        )
+        for family, table in (
+            ("tourism", "fact_tourism_demand"),
+            ("transport", "fact_transport_flow"),
+        ):
+            db.connection.execute(
+                f"""insert into run_fact_observation (
+                        run_id, family, observation_key
+                    )
+                    select ?, ?, observation_key from {table}
+                    where loaded_run_id = ? and observation_key is not null
+                    on conflict do nothing""",
+                [run_id, family, run_id],
+            )
+        db.connection.execute(
+            """insert into pipeline_run_input (run_id, input_run_id)
+               values (?, ?) on conflict do nothing""",
+            [run_id, run_id],
+        )
+        evidence = _legacy_evidence_counts(db, run_id)
+        missing = {
+            name: count
+            for name, count in evidence.items()
+            if name.startswith("missing_") and count
+        }
+        if missing:
+            raise RuntimeError(
+                "legacy run reconstruction is incomplete: "
+                + ", ".join(f"{name}={count}" for name, count in sorted(missing.items()))
+            )
+        db.connection.execute(
+            "update pipeline_run set rebuildable = true where run_id = ?", [run_id]
+        )
+        _record_legacy_audit(
+            db, run_id, operator, justification, evidence, "approved"
+        )
+        db.connection.execute("commit")
+        began = False
+    except Exception as error:
+        if began:
+            db.connection.execute("rollback")
+        if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
+            db.connection.execute(
+                "update pipeline_run set rebuildable = false where run_id = ?", [run_id]
+            )
+            rejected_evidence = evidence or _legacy_evidence_counts(db, run_id)
+            rejected_evidence["error"] = 1
+            _record_legacy_audit(
+                db,
+                run_id,
+                operator,
+                justification,
+                rejected_evidence,
+                "rejected",
+            )
+        raise
+
+
+def _legacy_evidence_counts(db: Database, run_id: UUID) -> dict[str, int]:
+    return {
+        "license_revisions": int(
             db.scalar(
-                """select count(*) from staging_license_snapshot as legacy
-                   where (legacy.first_loaded_run_id = ? or legacy.last_loaded_run_id = ?)
+                "select count(*) from staging_license_revision where version_run_id = ?",
+                [run_id],
+            )
+        ),
+        "missing_license_revisions": int(
+            db.scalar(
+                """select count(*)
+                   from staging_license_snapshot_version as legacy
+                   where legacy.version_run_id = ?
                      and not exists (
                        select 1 from staging_license_revision as revision
                        where revision.version_run_id = ?
                          and revision.source_id = legacy.source_id
                          and revision.source_record_id = legacy.source_record_id
                          and revision.observed_on = legacy.observed_on
+                         and revision.record_hash = legacy.record_hash
                      )""",
-                [run_id, run_id, run_id],
+                [run_id, run_id],
             )
-        )
-        missing_building = int(
+        ),
+        "building_revisions": int(
             db.scalar(
-                """select count(*) from staging_building_snapshot as legacy
-                   where legacy.first_loaded_run_id = ?
+                "select count(*) from staging_building_revision where version_run_id = ?",
+                [run_id],
+            )
+        ),
+        "missing_building_revisions": int(
+            db.scalar(
+                """select count(*)
+                   from staging_building_snapshot_version as legacy
+                   where legacy.version_run_id = ?
                      and not exists (
                        select 1 from staging_building_revision as revision
                        where revision.version_run_id = ?
@@ -164,22 +307,107 @@ def migrate_legacy_run(db: Database, run_id: UUID) -> None:
                      )""",
                 [run_id, run_id],
             )
-        )
-        if missing_license or missing_building:
-            raise RuntimeError(
-                "legacy run has mutable snapshots without immutable revision copies"
+        ),
+        "missing_tourism_keys": _missing_fact_keys(
+            db, "fact_tourism_demand", run_id
+        ),
+        "missing_transport_keys": _missing_fact_keys(
+            db, "fact_transport_flow", run_id
+        ),
+        "missing_tourism_memberships": _missing_fact_memberships(
+            db, "fact_tourism_demand", "tourism", run_id
+        ),
+        "missing_transport_memberships": _missing_fact_memberships(
+            db, "fact_transport_flow", "transport", run_id
+        ),
+        "missing_license_building_observations": int(
+            db.scalar(
+                """select count(*)
+                   from run_facility_license as license
+                   join run_facility_building as building
+                     on building.run_id = license.run_id
+                    and building.facility_id = license.facility_id
+                   where license.run_id = ? and not exists (
+                     select 1 from run_license_building_observation as observation
+                     where observation.run_id = license.run_id
+                       and observation.source_id = license.source_id
+                       and observation.source_record_id = license.source_record_id
+                       and observation.building_id = building.building_id
+                   )""",
+                [run_id],
             )
-        db.connection.execute(
-            """insert into pipeline_run_input (run_id, input_run_id)
-               values (?, ?) on conflict do nothing""",
-            [run_id, run_id],
+        ),
+        "missing_self_lineage": int(
+            not db.query(
+                """select 1 from pipeline_run_input
+                   where run_id = ? and input_run_id = ?""",
+                [run_id, run_id],
+            )
+        ),
+        "missing_input_runs": int(
+            db.scalar(
+                """select count(*) from pipeline_run_input as lineage
+                   left join pipeline_run as input on input.run_id = lineage.input_run_id
+                   where lineage.run_id = ? and input.run_id is null""",
+                [run_id],
+            )
+        ),
+        "missing_approved_input_runs": int(
+            db.scalar(
+                """select count(*) from pipeline_run_input as lineage
+                   join pipeline_run as input on input.run_id = lineage.input_run_id
+                   where lineage.run_id = ? and lineage.input_run_id <> ?
+                     and input.rebuildable is not true""",
+                [run_id, run_id],
+            )
+        ),
+    }
+
+
+def _missing_fact_keys(db: Database, table: str, run_id: UUID) -> int:
+    return int(
+        db.scalar(
+            f"select count(*) from {table} where loaded_run_id = ? and observation_key is null",
+            [run_id],
         )
-        db.connection.execute(
-            "update pipeline_run set rebuildable = true where run_id = ?", [run_id]
+    )
+
+
+def _missing_fact_memberships(
+    db: Database, table: str, family: str, run_id: UUID
+) -> int:
+    return int(
+        db.scalar(
+            f"""select count(*) from {table} as fact
+                where fact.loaded_run_id = ? and fact.observation_key is not null
+                  and not exists (
+                    select 1 from run_fact_observation as membership
+                    where membership.run_id = ? and membership.family = ?
+                      and membership.observation_key = fact.observation_key
+                  )""",
+            [run_id, run_id, family],
         )
-        db.connection.execute("commit")
-        began = False
-    except Exception:
-        if began:
-            db.connection.execute("rollback")
-        raise
+    )
+
+
+def _record_legacy_audit(
+    db: Database,
+    run_id: UUID,
+    operator: str,
+    reason: str,
+    evidence: dict[str, int],
+    decision: str,
+) -> None:
+    db.connection.execute(
+        """insert into legacy_migration_audit (
+               audit_id, run_id, operator_identity, reason, evidence_json, decision
+           ) values (?, ?, ?, ?, ?, ?)""",
+        [
+            uuid4(),
+            run_id,
+            operator,
+            reason,
+            json.dumps(evidence, sort_keys=True),
+            decision,
+        ],
+    )

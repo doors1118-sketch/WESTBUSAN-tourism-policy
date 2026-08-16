@@ -1,5 +1,7 @@
 from datetime import UTC, date, datetime
 from pathlib import Path
+from shutil import copy2
+from uuid import uuid4
 
 import duckdb
 import pytest
@@ -59,3 +61,36 @@ def test_failed_migration_rolls_back_ddl_and_version_record(tmp_path: Path) -> N
         "select count(*) from information_schema.tables where table_name = 'half_applied'"
     ) == [(0,)]
     assert db.query("select count(*) from schema_migrations") == [(0,)]
+
+
+def test_legacy_upgrade_marks_every_preexisting_run_non_rebuildable(
+    tmp_path: Path,
+) -> None:
+    """A prior self-lineage flag is not proof that all newer bridges are complete."""
+    old_migrations = tmp_path / "old-migrations"
+    old_migrations.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name < "017_legacy_migration_audit.sql":
+            copy2(migration, old_migrations / migration.name)
+    path = tmp_path / "legacy.duckdb"
+    legacy = Database(path, old_migrations)
+    legacy.migrate()
+    run_id = uuid4()
+    legacy.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'legacy', now(), 'PUBLISHED', '2026-08-16', true)""",
+        [run_id],
+    )
+    legacy.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [run_id, run_id],
+    )
+    legacy.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+
+    assert upgraded.scalar(
+        "select rebuildable from pipeline_run where run_id = ?", [run_id]
+    ) is False

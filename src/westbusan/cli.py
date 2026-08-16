@@ -41,14 +41,25 @@ def init_db(
 @app.command("migrate-legacy")
 def migrate_legacy(
     run_id: Annotated[UUID, typer.Option(help="Legacy run to approve after revision audit.")],
+    operator: Annotated[
+        str, typer.Option(help="Operator identity recorded in the append-only audit.")
+    ],
+    reason: Annotated[
+        str, typer.Option(help="Reason for approving this legacy reconstruction.")
+    ],
     root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
 ) -> None:
     """Backfill self-lineage only when immutable revision copies are complete."""
     pipeline = _pipeline(root)
     pipeline.db.migrate()
     try:
-        migrate_legacy_run(pipeline.db, run_id)
-    except RuntimeError as error:
+        migrate_legacy_run(
+            pipeline.db,
+            run_id,
+            operator_identity=operator,
+            reason=reason,
+        )
+    except (RuntimeError, ValueError) as error:
         _print_json({"status": "BLOCKED", "run_id": run_id, "reason": str(error)})
         raise typer.Exit(1) from error
     _print_json({"status": "migrated", "run_id": run_id})
