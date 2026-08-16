@@ -156,6 +156,52 @@ def test_incomplete_mart_retry_purges_partial_outputs_and_writes_manifest_last(
     ) == [(1,)]
 
 
+def test_same_day_correction_and_later_blocked_facility_do_not_rewrite_earlier_mart(
+    tmp_path: Path,
+) -> None:
+    """Catches mutable global entity/snapshot state contaminating an earlier run."""
+    db = Database(tmp_path / "temporal.duckdb", Path("sql"))
+    db.migrate()
+    first_run, blocked_run = uuid4(), uuid4()
+    for run_id, status in ((first_run, "PUBLISHED"), (blocked_run, "BLOCKED")):
+        db.connection.execute(
+            """insert into pipeline_run (
+                   run_id, mode, started_at, status, business_date
+               ) values (?, 'test', now(), ?, '2026-08-16')""",
+            [run_id, status],
+        )
+        db.connection.execute(
+            "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+            [run_id, run_id],
+        )
+    first = _license(
+        "lodgings", "L1", "호텔", "부산광역시 사하구 하단동 1", 10
+    )
+    corrected = _license(
+        "lodgings", "L1", "호텔", "부산광역시 사하구 하단동 1", 11
+    )
+    extra = _license(
+        "lodgings", "L2", "새호텔", "부산광역시 사하구 하단동 2", 99
+    )
+    load_license_snapshot(db, [first], first_run)
+    build_facilities(db, first_run)
+    load_license_snapshot(db, [corrected, extra], blocked_run)
+    build_facilities(db, blocked_run)
+
+    result = build_marts(
+        db,
+        first_run,
+        PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+    )
+
+    assert result.facility_rows == 1
+    assert db.query(
+        """select room_count from mart_facility_current
+           where run_id = ?""",
+        [first_run],
+    ) == [(10.0,)]
+
+
 def _built_db(tmp_path: Path, records: list[object]) -> tuple[Database, object]:
     db = Database(tmp_path / "case.duckdb", Path("sql")); db.migrate(); run = uuid4()
     load_license_snapshot(db, records, run); build_facilities(db, run)

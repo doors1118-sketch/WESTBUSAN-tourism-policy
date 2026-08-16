@@ -1,6 +1,7 @@
 import json
 from datetime import UTC, date, datetime
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -11,6 +12,7 @@ from westbusan.buildings.load import (
     collect_buildings_for_licenses,
     load_legal_dong_codes,
 )
+from westbusan.buildings.normalize import BuildingRecord
 from westbusan.db import Database
 from westbusan.models import ApiPage, RunContext
 from westbusan.sources.registry import SourceRegistry
@@ -106,3 +108,59 @@ def test_same_parcel_is_requested_once_and_links_each_license(
     ]
     events = db.query("select building_id, event_type, source_payload_json from fact_building_event")
     assert events == [(None, "closed_register", '{"mgmShtregPk":"CLOSED-1001","shterGbCdNm":"폐쇄말소"}')]
+
+
+def test_same_day_building_correction_appends_system_time_version(
+    tmp_path: Path,
+) -> None:
+    """Catches a corrected permit date overwriting an earlier official observation."""
+    db = Database(tmp_path / "building-version.duckdb", Path("sql"))
+    db.migrate()
+    values = {
+        "building_id": "B1",
+        "sigungu_cd": "26380",
+        "bjdong_cd": "10100",
+        "plat_gb_cd": "0",
+        "bun": "0001",
+        "ji": "0000",
+        "road_address": "부산광역시 사하구 하단동 1",
+        "lot_address": "부산광역시 사하구 하단동 1",
+        "approval_date": date(2000, 1, 1),
+        "use_approval_date": date(2000, 1, 1),
+        "main_use": "숙박시설",
+        "total_area": 100.0,
+        "ground_floor_count": 3,
+        "underground_floor_count": 0,
+        "closed_indicator": None,
+        "is_closed": False,
+    }
+    first_run = RunContext(
+        uuid4(), "test", datetime(2026, 8, 16, tzinfo=UTC), business_date=date(2026, 8, 16)
+    )
+    corrected_run = RunContext(
+        uuid4(), "test", datetime(2026, 8, 17, tzinfo=UTC), business_date=date(2026, 8, 16)
+    )
+    building_load._store_building(
+        db,
+        BuildingRecord(**values, permit_date=date(2020, 1, 1)),
+        "parcel",
+        first_run,
+        {},
+        lambda: None,
+    )
+    building_load._store_building(
+        db,
+        BuildingRecord(**values, permit_date=date(2021, 1, 1)),
+        "parcel",
+        corrected_run,
+        {},
+        lambda: None,
+    )
+
+    assert db.query(
+        """select version_run_id, permit_date
+           from staging_building_snapshot_version order by recorded_at"""
+    ) == [
+        (first_run.run_id, date(2020, 1, 1)),
+        (corrected_run.run_id, date(2021, 1, 1)),
+    ]

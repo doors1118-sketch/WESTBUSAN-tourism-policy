@@ -186,7 +186,7 @@ def mart_manifest_is_valid(db: Database, run_id: UUID) -> bool:
 
 def _as_of_date(db: Database, run_id: UUID) -> date | None:
     """Use the producing run's cutoff, not whatever state happens to be latest."""
-    rows = db.query("select started_at::date from pipeline_run where run_id = ?", [run_id])
+    rows = db.query("select business_date from pipeline_run where run_id = ?", [run_id])
     if rows:
         return rows[0][0]
     rows = db.query(
@@ -207,21 +207,23 @@ def _facility_rows(
             select *, row_number() over (
                 partition by source_id, source_record_id order by observed_on desc
             ) as row_num
-            from staging_license_snapshot
-            where first_loaded_run_id in ({placeholders}) and (? is null or observed_on <= ?)
+            from staging_license_snapshot_version
+            where version_run_id in ({placeholders}) and (? is null or observed_on <= ?)
         )
         select link.facility_id, facility.district, facility.region_group,
                snap.source_id, snap.room_count, snap.license_date, snap.closure_date,
                snap.observed_on
-        from bridge_facility_license as link
-        join dim_facility as facility on facility.facility_id = link.facility_id
+        from run_facility_license as link
+        join run_facility as facility
+          on facility.run_id = link.run_id and facility.facility_id = link.facility_id
         join latest as snap on snap.source_id = link.source_id
                          and snap.source_record_id = link.source_record_id
                          and snap.row_num = 1
-        where facility.district is not null and facility.region_group is not null
+        where link.run_id = ?
+          and facility.district is not null and facility.region_group is not null
           and (snap.closure_date is null or snap.closure_date > snap.observed_on)
         """,
-        [*visible_runs, as_of, as_of],
+        [*visible_runs, as_of, as_of, run_id],
     )
     by_facility: dict[object, list[tuple[object, ...]]] = defaultdict(list)
     for row in snapshots:
@@ -275,15 +277,16 @@ def _building_ages(
         f"""
         with latest as (
             select *, row_number() over (partition by building_id order by observed_on desc) as row_num
-            from staging_building_snapshot
-            where first_loaded_run_id in ({placeholders}) and (? is null or observed_on <= ?)
+            from staging_building_snapshot_version
+            where version_run_id in ({placeholders}) and (? is null or observed_on <= ?)
         )
         select link.facility_id, snap.approval_date, snap.permit_date, snap.observed_on
-        from bridge_facility_building as link
+        from run_facility_building as link
         join dim_building as building on building.building_id = link.building_id
         join latest as snap on snap.building_id = building.building_key and snap.row_num = 1
+        where link.run_id = ?
         """,
-        [*visible_runs, as_of, as_of],
+        [*visible_runs, as_of, as_of, run_id],
     )
     grouped: dict[object, list[tuple[object, ...]]] = defaultdict(list)
     for value in values:
@@ -375,9 +378,9 @@ def _event_only_districts(
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
     rows = db.query(
-        f"""select distinct district, region_group from staging_license_snapshot
+        f"""select distinct district, region_group from staging_license_snapshot_version
         where district is not null and region_group is not null
-          and first_loaded_run_id in ({placeholders})
+          and version_run_id in ({placeholders})
           and (? is null or observed_on <= ?)""",
         [*visible_runs, as_of, as_of],
     )
@@ -424,8 +427,9 @@ def _periods(
     # Supply observations and legal events are periods in their own right;
     # event-only months remain visible even if no demand source has a row.
     for district, observed_on, license_date, closure_date in db.query(
-        f"""select district, observed_on, license_date, closure_date from staging_license_snapshot
-        where first_loaded_run_id in ({placeholders}) and (? is null or observed_on <= ?)""",
+        f"""select district, observed_on, license_date, closure_date
+        from staging_license_snapshot_version
+        where version_run_id in ({placeholders}) and (? is null or observed_on <= ?)""",
         [*visible_runs, as_of, as_of],
     ):
         if str(district) not in output:
@@ -514,16 +518,25 @@ def _same_period_supply(
     if len(period) != 7 or period[4] != "-":
         return None
     rows = db.query(
-        """select link.facility_id, snapshot.room_count
-        from bridge_facility_license as link
-        join dim_facility as facility on facility.facility_id = link.facility_id
-        join staging_license_snapshot as snapshot
+        f"""select link.facility_id, snapshot.room_count
+        from run_facility_license as link
+        join run_facility as facility
+          on facility.run_id = link.run_id and facility.facility_id = link.facility_id
+        join staging_license_snapshot_version as snapshot
           on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
-        where facility.district = ? and snapshot.observed_on::varchar like ?
+        where link.run_id = ? and facility.district = ? and snapshot.observed_on::varchar like ?
           and snapshot.source_id <> 'tourist_pensions'
-          and ((? is null and snapshot.last_loaded_run_id = ?) or snapshot.observed_on <= ?)
+          and snapshot.version_run_id in ({','.join('?' for _ in _visible_run_ids(db, run_id))})
+          and (? is null or snapshot.observed_on <= ?)
           and (snapshot.closure_date is null or snapshot.closure_date > snapshot.observed_on)""",
-        [district, f"{period}%", as_of, run_id, as_of],
+        [
+            run_id,
+            district,
+            f"{period}%",
+            *_visible_run_ids(db, run_id),
+            as_of,
+            as_of,
+        ],
     )
     per_facility: dict[object, set[float]] = defaultdict(set)
     for facility_id, rooms in rows:
@@ -542,16 +555,17 @@ def _same_period_inventory(
     placeholders = ",".join("?" for _ in visible_runs)
     rows = db.query(
         f"""select link.facility_id, snapshot.source_id, snapshot.room_count
-        from bridge_facility_license as link
-        join dim_facility as facility on facility.facility_id = link.facility_id
-        join staging_license_snapshot as snapshot
+        from run_facility_license as link
+        join run_facility as facility
+          on facility.run_id = link.run_id and facility.facility_id = link.facility_id
+        join staging_license_snapshot_version as snapshot
           on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
-        where facility.district = ? and snapshot.observed_on::varchar like ?
+        where link.run_id = ? and facility.district = ? and snapshot.observed_on::varchar like ?
           and snapshot.source_id <> 'tourist_pensions'
-          and snapshot.first_loaded_run_id in ({placeholders})
+          and snapshot.version_run_id in ({placeholders})
           and (snapshot.closure_date is null or snapshot.closure_date > snapshot.observed_on)
           and (? is null or snapshot.observed_on <= ?)""",
-        [district, f"{period}%", *visible_runs, as_of, as_of],
+        [run_id, district, f"{period}%", *visible_runs, as_of, as_of],
     )
     facility_rooms: dict[object, set[float]] = defaultdict(set)
     facility_sources: dict[object, set[str]] = defaultdict(set)
@@ -599,13 +613,14 @@ def _period_building_metrics(
     rows = db.query(
         f"""with latest as (
             select *, row_number() over (partition by building_id order by observed_on desc, approval_date desc nulls last, permit_date desc nulls last) as row_num
-            from staging_building_snapshot
-            where observed_on::varchar like ? and first_loaded_run_id in ({placeholders})
+            from staging_building_snapshot_version
+            where observed_on::varchar like ? and version_run_id in ({placeholders})
               and (? is null or observed_on <= ?)
         ) select link.facility_id, snapshot.approval_date, snapshot.permit_date, snapshot.observed_on
-        from bridge_facility_building as link join dim_building as building on building.building_id = link.building_id
+        from run_facility_building as link join dim_building as building on building.building_id = link.building_id
         join latest as snapshot on snapshot.building_id = building.building_key and snapshot.row_num = 1
-        """, [f"{period}%", *visible, as_of, as_of])
+        where link.run_id = ?
+        """, [f"{period}%", *visible, as_of, as_of, run_id])
     by_facility: dict[object, list[tuple[object, object, object]]] = defaultdict(list)
     for facility, approval, permit, observed in rows:
         by_facility[facility].append((approval, permit, observed))
@@ -822,14 +837,16 @@ def _event_changes(
     placeholders = ",".join("?" for _ in visible_runs)
     rows = db.query(
         f"""select distinct link.facility_id, snapshot.license_date, snapshot.closure_date
-        from bridge_facility_license as link
-        join staging_license_snapshot as snapshot
+        from run_facility_license as link
+        join staging_license_snapshot_version as snapshot
           on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
-        join dim_facility as facility on facility.facility_id = link.facility_id
-        where facility.district = ? and snapshot.source_id <> 'tourist_pensions'
-          and snapshot.first_loaded_run_id in ({placeholders})
+        join run_facility as facility
+          on facility.run_id = link.run_id and facility.facility_id = link.facility_id
+        where link.run_id = ? and facility.district = ?
+          and snapshot.source_id <> 'tourist_pensions'
+          and snapshot.version_run_id in ({placeholders})
           and (? is null or snapshot.observed_on <= ?)""",
-        [district, *visible_runs, as_of, as_of],
+        [run_id, district, *visible_runs, as_of, as_of],
     )
     openings = {(facility, value) for facility, value, _ in rows if isinstance(value, date) and value.isoformat().startswith(period)}
     closures = {(facility, value) for facility, _, value in rows if isinstance(value, date) and value.isoformat().startswith(period)}
@@ -842,15 +859,16 @@ def _group_band(rows: list[dict[str, object]], key: str) -> str:
 
 
 def _visible_run_ids(db: Database, target_run_id: UUID) -> tuple[UUID, ...]:
-    """Runs whose persisted evidence existed when the target run began."""
-    target = db.query("select started_at::varchar from pipeline_run where run_id = ?", [target_run_id])
-    if not target:
-        return (target_run_id,)
+    """Return the immutable approved observation set captured for this run."""
     rows = db.query(
-        """select run_id from pipeline_run
-        where started_at <= ? order by started_at, run_id""", [target[0][0]]
+        """select lineage.input_run_id from pipeline_run_input as lineage
+           left join pipeline_run as input on input.run_id = lineage.input_run_id
+           where lineage.run_id = ?
+           order by input.business_date nulls last, input.started_at nulls last,
+                    lineage.input_run_id""",
+        [target_run_id],
     )
-    return tuple(row[0] for row in rows)
+    return tuple(row[0] for row in rows) if rows else (target_run_id,)
 
 
 def _period_metric_set(

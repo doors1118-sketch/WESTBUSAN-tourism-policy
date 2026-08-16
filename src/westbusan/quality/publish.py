@@ -145,10 +145,11 @@ def _snapshot_duplicate_review(db: Database, run_id: UUID) -> None:
         )
         select ?, review_id, left_facility_id, right_facility_id,
                review_status, evidence_json
-        from duplicate_review
+        from run_duplicate_review
+        where run_id = ?
         on conflict (run_id, review_id) do nothing
         """,
-        [run_id],
+        [run_id, run_id],
     )
 
 

@@ -93,18 +93,24 @@ def test_monthly_native_metrics_sum_daily_visitors_but_never_select_other_consum
     )[0] == 250
 
 
-def test_visible_runs_exclude_later_backfill_and_include_prior_history(tmp_path: Path) -> None:
-    """Catches an older first build seeing a later run's backfilled observation."""
+def test_visible_runs_use_immutable_lineage_not_creation_order_or_run_status(
+    tmp_path: Path,
+) -> None:
+    """Catches a later RUNNING/BLOCKED run leaking into an earlier observation set."""
     db = Database(tmp_path / "visibility.duckdb", Path("sql"))
     db.migrate()
     first, second = uuid4(), uuid4()
     db.connection.execute(
-        "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', '2026-01-10', 'DONE')",
+        "insert into pipeline_run (run_id, mode, started_at, status, business_date) values (?, 'test', '2026-01-10', 'PUBLISHED', '2026-01-10')",
         [first],
     )
     db.connection.execute(
-        "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', '2026-02-10', 'DONE')",
+        "insert into pipeline_run (run_id, mode, started_at, status, business_date) values (?, 'test', '2026-02-10', 'BLOCKED', '2026-02-10')",
         [second],
+    )
+    db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?), (?, ?), (?, ?)",
+        [first, first, second, first, second, second],
     )
 
     assert _visible_run_ids(db, first) == (first,)

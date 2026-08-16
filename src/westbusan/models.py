@@ -88,10 +88,16 @@ class RunContext:
     mode: str
     started_at: datetime
     status: str = "RUNNING"
+    business_date: date | None = None
 
     @classmethod
     def start(cls, mode: str, now: datetime) -> RunContext:
-        return cls(run_id=uuid4(), mode=mode, started_at=now)
+        return cls(run_id=uuid4(), mode=mode, started_at=now, business_date=now.date())
+
+    @property
+    def cutoff_date(self) -> date:
+        """The explicit data cutoff, independent from execution/system time."""
+        return self.business_date or self.started_at.date()
 
 
 @dataclass(frozen=True, slots=True)

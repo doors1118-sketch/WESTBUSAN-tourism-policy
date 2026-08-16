@@ -76,6 +76,30 @@ def test_second_pipeline_cannot_acquire_an_active_run_attempt_lease(
         )
 
 
+def test_prepare_run_separates_utc_execution_time_from_business_date(
+    tmp_path: Path,
+) -> None:
+    """Catches a Seoul business midnight being stored as the actual start timestamp."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    pipeline.db.connection.execute("set TimeZone='UTC'")
+    before = datetime.now(UTC)
+
+    run, _ = pipeline._prepare_run(
+        "fixture", "daily", date(2020, 1, 2), "utc-business-date"
+    )
+
+    assert run is not None
+    started_text, business_date = pipeline.db.query(
+        "select started_at::varchar, business_date from pipeline_run where run_id = ?",
+        [run.run_id],
+    )[0]
+    started_at = datetime.fromisoformat(str(started_text))
+    assert started_at >= before
+    assert business_date == date(2020, 1, 2)
+    assert run.business_date == date(2020, 1, 2)
+
+
 def test_expired_lease_takeover_revokes_the_previous_owner(
     tmp_path: Path,
 ) -> None:

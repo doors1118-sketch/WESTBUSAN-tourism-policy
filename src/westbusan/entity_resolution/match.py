@@ -118,7 +118,7 @@ def evaluate_auto_merge_precision(labeled_pairs: Path, matcher: Callable) -> flo
 
 def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
     """Build physical facilities from latest snapshots, preserving every registration."""
-    records = _latest_records(db)
+    records = _latest_records(db, run_id)
     building_ids = _building_ids(db)
     for record in records:
         record["building_ids"] = building_ids.get(_registration_key(record), set())
@@ -223,6 +223,10 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
     desired_facilities: set[UUID] = set()
     desired_license_links: set[tuple[UUID, str, str]] = set()
     desired_building_links: set[tuple[UUID, UUID]] = set()
+    db.connection.execute("delete from run_duplicate_review where run_id = ?", [run_id])
+    db.connection.execute("delete from run_facility_building where run_id = ?", [run_id])
+    db.connection.execute("delete from run_facility_license where run_id = ?", [run_id])
+    db.connection.execute("delete from run_facility where run_id = ?", [run_id])
     for component in {tuple(keys) for keys in components.values()}:
         facility_id = _facility_id(component)
         desired_facilities.add(facility_id)
@@ -247,6 +251,12 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
             """,
             [facility_id, canonical, district, region_group],
         )
+        db.connection.execute(
+            """insert into run_facility (
+                   run_id, facility_id, canonical_name, district, region_group
+               ) values (?, ?, ?, ?, ?)""",
+            [run_id, facility_id, canonical, district, region_group],
+        )
         for record in component_records:
             key = _registration_key(record)
             source_id = str(record["source_id"])
@@ -267,6 +277,12 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
                 """,
                 [facility_id, source_id, source_record_id, evidence],
             )
+            db.connection.execute(
+                """insert into run_facility_license (
+                       run_id, facility_id, source_id, source_record_id, evidence_json
+                   ) values (?, ?, ?, ?, ?)""",
+                [run_id, facility_id, source_id, source_record_id, evidence],
+            )
             for building_id in record["building_ids"]:
                 desired_building_links.add((facility_id, building_id))
                 db.connection.execute(
@@ -276,6 +292,12 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
                     on conflict do nothing
                     """,
                     [facility_id, building_id],
+                )
+                db.connection.execute(
+                    """insert into run_facility_building (
+                           run_id, facility_id, building_id
+                       ) values (?, ?, ?)""",
+                    [run_id, facility_id, building_id],
                 )
 
     for facility_id, source_id, source_record_id in db.query(
@@ -314,6 +336,13 @@ def build_facilities(db: Database, run_id: UUID) -> FacilityBuildResult:
                 evidence_json = excluded.evidence_json
             """,
             [review_id, left_id, right_id, evidence],
+        )
+        db.connection.execute(
+            """insert into run_duplicate_review (
+                   run_id, review_id, left_facility_id, right_facility_id,
+                   evidence_json
+               ) values (?, ?, ?, ?, ?)""",
+            [run_id, review_id, left_id, right_id, evidence],
         )
 
     return FacilityBuildResult(
@@ -366,9 +395,11 @@ def _features(left: Mapping[str, object], right: Mapping[str, object]) -> MatchF
     )
 
 
-def _latest_records(db: Database) -> list[dict[str, object]]:
+def _latest_records(db: Database, run_id: UUID) -> list[dict[str, object]]:
+    visible_runs = _visible_run_ids(db, run_id)
+    placeholders = ",".join("?" for _ in visible_runs)
     rows = db.query(
-        """
+        f"""
         select source_id, source_record_id, source_name, normalized_name, road_address,
                lot_address, district, region_group, normalized_phone, longitude, latitude
         from (
@@ -376,16 +407,37 @@ def _latest_records(db: Database) -> list[dict[str, object]]:
                 partition by source_id, source_record_id
                 order by observed_on desc, source_updated_at desc nulls last
             ) as row_number
-            from staging_license_snapshot
+            from staging_license_snapshot_version
+            where version_run_id in ({placeholders})
         )
         where row_number = 1
-        """
+        """,
+        list(visible_runs),
     )
     fields = (
         "source_id", "source_record_id", "source_name", "normalized_name", "road_address",
         "lot_address", "district", "region_group", "normalized_phone", "longitude", "latitude",
     )
     return [dict(zip(fields, row, strict=True)) for row in rows]
+
+
+def _visible_run_ids(db: Database, run_id: UUID) -> tuple[UUID, ...]:
+    rows = db.query(
+        """select lineage.input_run_id from pipeline_run_input as lineage
+           left join pipeline_run as input on input.run_id = lineage.input_run_id
+           where lineage.run_id = ?
+           order by input.business_date nulls last, input.started_at nulls last,
+                    lineage.input_run_id""",
+        [run_id],
+    )
+    if rows:
+        return tuple(row[0] for row in rows)
+    if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
+        return (run_id,)
+    legacy = db.query(
+        "select distinct version_run_id from staging_license_snapshot_version order by version_run_id"
+    )
+    return tuple(row[0] for row in legacy) or (run_id,)
 
 
 def _building_ids(db: Database) -> dict[str, set[UUID]]:

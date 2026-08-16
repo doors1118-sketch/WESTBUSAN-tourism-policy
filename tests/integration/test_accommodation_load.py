@@ -86,3 +86,43 @@ def test_load_persists_official_semantics_without_using_projected_coordinates_as
             "01",
         )
     ]
+
+
+def test_same_day_correction_appends_system_time_version_instead_of_overwriting(
+    tmp_path: Path,
+) -> None:
+    """Catches a corrected room count erasing what an earlier run observed."""
+    db = Database(tmp_path / "test.duckdb", Path("sql"))
+    db.migrate()
+    first_run, corrected_run = uuid4(), uuid4()
+    observed = date(2026, 8, 16)
+    first = normalize_license(
+        "lodgings",
+        {
+            "MNG_NO": "L1",
+            "BIZPLC_NM": "호텔",
+            "ROAD_NM_ADDR": "부산광역시 사하구 하단동 1",
+            "KSRM_CNT": "0",
+            "WSRM_CNT": "10",
+        },
+        observed,
+    )
+    corrected = normalize_license(
+        "lodgings",
+        {
+            "MNG_NO": "L1",
+            "BIZPLC_NM": "호텔",
+            "ROAD_NM_ADDR": "부산광역시 사하구 하단동 1",
+            "KSRM_CNT": "0",
+            "WSRM_CNT": "11",
+        },
+        observed,
+    )
+
+    load_license_snapshot(db, [first], first_run)
+    load_license_snapshot(db, [corrected], corrected_run)
+
+    assert db.query(
+        """select version_run_id, room_count
+           from staging_license_snapshot_version order by recorded_at, version_run_id"""
+    ) == [(first_run, 10), (corrected_run, 11)]

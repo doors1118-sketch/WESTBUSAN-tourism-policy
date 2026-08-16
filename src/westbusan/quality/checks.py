@@ -134,7 +134,7 @@ def run_quality_suite(db: Database, run_id: UUID) -> QualityReport:
         checks.append(_entity_precision_check())
         checks.extend(_building_and_duplicate_warnings(db, run_id))
         checks.extend(_facility_change_checks(db, run_id))
-    checks.extend(_monthly_freshness_checks(parsed))
+    checks.extend(_monthly_freshness_checks(parsed, _run_cutoff(db, run_id)))
 
     report = QualityReport([_redacted_check(check) for check in checks], run_id=run_id)
     return _persist_suite(db, report, _contract_check_ids(contracts))
@@ -580,7 +580,22 @@ def _target_count(db: Database, run_id: UUID, source_id: str, operation: str, pa
     if source_id in _ACCOMMODATION_SOURCES:
         if partition is None:
             return None
-        return int(db.query("select count(*) from staging_license_snapshot where source_id = ? and last_loaded_run_id = ? and observed_on = ?", [source_id, run_id, partition])[0][0])
+        return int(
+            db.query(
+                """select count(*) from (
+                       select source_id from staging_license_snapshot_version
+                       where source_id = ? and version_run_id = ? and observed_on = ?
+                       union all
+                       select source_id from staging_license_snapshot
+                       where source_id = ? and last_loaded_run_id = ? and observed_on = ?
+                         and not exists (
+                           select 1 from staging_license_snapshot_version
+                           where version_run_id = ? and source_id = ?
+                         )
+                   )""",
+                [source_id, run_id, partition, source_id, run_id, partition, run_id, source_id],
+            )[0][0]
+        )
     if source_id in _TOURISM_SOURCES:
         prefix = _TOURISM_OPERATION_PREFIXES.get(operation)
         period_prefix = partition[:7] if partition else None
@@ -613,8 +628,20 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
                   source_modified_on, source_modified_date_quality,
                   data_updated_on, data_updated_date_quality,
                   status_code, status_class, detailed_status_code, detailed_status_name
-           from staging_license_snapshot where last_loaded_run_id = ?""",
-        [run_id],
+           from staging_license_snapshot_version where version_run_id = ?
+           union all
+           select source_id, district, region_group, region_quality, room_count,
+                  jurisdiction_code, license_date, license_date_quality,
+                  closure_date, closure_date_quality, source_updated_at,
+                  source_modified_on, source_modified_date_quality,
+                  data_updated_on, data_updated_date_quality,
+                  status_code, status_class, detailed_status_code, detailed_status_name
+           from staging_license_snapshot where last_loaded_run_id = ?
+             and not exists (
+               select 1 from staging_license_snapshot_version
+               where version_run_id = ?
+             )""",
+        [run_id, run_id, run_id],
     )
     by_source: dict[str, list[tuple[object, ...]]] = defaultdict(list)
     for row in rows:
@@ -718,9 +745,9 @@ def _entity_precision_check() -> CheckResult:
 def _building_and_duplicate_warnings(db: Database, run_id: UUID) -> list[CheckResult]:
     reference_rows = int(db.query("select count(*) from reference_legal_dong where active")[0][0])
     facilities = _active_facility_count(db, run_id)
-    linked = int(db.query("""select count(distinct building.facility_id) from bridge_facility_building as building join bridge_facility_license as license on license.facility_id = building.facility_id join staging_license_snapshot as snapshot on snapshot.source_id = license.source_id and snapshot.source_record_id = license.source_record_id where snapshot.last_loaded_run_id = ?""", [run_id])[0][0])
+    linked = int(db.query("select count(distinct facility_id) from run_facility_building where run_id = ?", [run_id])[0][0])
     coverage = linked / facilities if facilities else 0.0
-    unresolved = int(db.query("""select count(*) from duplicate_review as review where review.review_status = 'pending' and (review.left_facility_id in (select distinct link.facility_id from bridge_facility_license as link join staging_license_snapshot as snapshot on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id where snapshot.last_loaded_run_id = ?) or review.right_facility_id in (select distinct link.facility_id from bridge_facility_license as link join staging_license_snapshot as snapshot on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id where snapshot.last_loaded_run_id = ?))""", [run_id, run_id])[0][0])
+    unresolved = int(db.query("select count(*) from run_duplicate_review where run_id = ? and review_status = 'pending'", [run_id])[0][0])
     rate = unresolved / facilities if facilities else 0.0
     return [
         CheckResult("reference_legal_dong_import", "passed" if reference_rows else "warning", reference_rows, ">0 active official legal-dong rows", "warning", table_name="reference_legal_dong", evidence={"run_id": str(run_id)}),
@@ -730,7 +757,38 @@ def _building_and_duplicate_warnings(db: Database, run_id: UUID) -> list[CheckRe
 
 
 def _active_facility_count(db: Database, run_id: UUID) -> int:
-    return int(db.query("""select count(distinct link.facility_id) from bridge_facility_license as link join staging_license_snapshot as snapshot on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id where snapshot.last_loaded_run_id = ? and (snapshot.closure_date is null or snapshot.closure_date > snapshot.observed_on)""", [run_id])[0][0])
+    visible = _quality_visible_runs(db, run_id)
+    placeholders = ",".join("?" for _ in visible)
+    return int(
+        db.query(
+            f"""with latest as (
+                    select *, row_number() over (
+                        partition by source_id, source_record_id
+                        order by observed_on desc, recorded_at desc
+                    ) as row_num
+                    from staging_license_snapshot_version
+                    where version_run_id in ({placeholders})
+                )
+                select count(distinct link.facility_id)
+                from run_facility_license as link
+                join latest as snapshot
+                  on snapshot.source_id = link.source_id
+                 and snapshot.source_record_id = link.source_record_id
+                 and snapshot.row_num = 1
+                where link.run_id = ?
+                  and (snapshot.closure_date is null
+                       or snapshot.closure_date > snapshot.observed_on)""",
+            [*visible, run_id],
+        )[0][0]
+    )
+
+
+def _quality_visible_runs(db: Database, run_id: UUID) -> tuple[UUID, ...]:
+    rows = db.query(
+        "select input_run_id from pipeline_run_input where run_id = ? order by input_run_id",
+        [run_id],
+    )
+    return tuple(row[0] for row in rows) if rows else (run_id,)
 
 
 def _facility_change_checks(db: Database, run_id: UUID) -> list[CheckResult]:
@@ -749,8 +807,14 @@ def _facility_change_checks(db: Database, run_id: UUID) -> list[CheckResult]:
     return checks
 
 
-def _monthly_freshness_checks(parsed: dict[str, list[_ArtifactPage]]) -> list[CheckResult]:
-    today = datetime.now(UTC).date()
+def _run_cutoff(db: Database, run_id: UUID) -> date:
+    rows = db.query("select business_date from pipeline_run where run_id = ?", [run_id])
+    return rows[0][0] if rows and rows[0][0] is not None else datetime.now(UTC).date()
+
+
+def _monthly_freshness_checks(
+    parsed: dict[str, list[_ArtifactPage]], cutoff: date
+) -> list[CheckResult]:
     checks: list[CheckResult] = []
     for source_id, pages in sorted(parsed.items()):
         if source_id not in _MONTHLY_SOURCES:
@@ -760,7 +824,7 @@ def _monthly_freshness_checks(parsed: dict[str, list[_ArtifactPage]]) -> list[Ch
             checks.append(CheckResult("monthly_source_freshness", "warning", "MISSING_SOURCE_DATE", "source_date no more than 75 days old", "warning", source_id, "raw_artifact", {}))
             continue
         latest = max(dates)
-        age = (today - latest).days
+        age = (cutoff - latest).days
         checks.append(CheckResult("monthly_source_freshness", "passed" if age <= 75 else "warning", age, "<=75 days", "warning", source_id, "raw_artifact", evidence={"latest_source_date": latest.isoformat(), "age_days": age}))
     return checks
 

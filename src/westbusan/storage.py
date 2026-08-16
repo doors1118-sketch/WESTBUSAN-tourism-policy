@@ -47,7 +47,7 @@ class RawStore:
         )
         request_hash = _sha256(request_json.encode("utf-8"))
         content_hash = _sha256(body)
-        ingest_date = run.started_at.date()
+        ingest_date = run.cutoff_date
         directory = self.raw_dir / source_id / f"ingest_date={ingest_date.isoformat()}"
         path = directory / f"{content_hash}{suffix}"
         directory.mkdir(parents=True, exist_ok=True)

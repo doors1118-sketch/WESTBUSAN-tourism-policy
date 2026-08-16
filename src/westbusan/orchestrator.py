@@ -5,12 +5,11 @@ from __future__ import annotations
 import inspect
 import json
 from dataclasses import asdict, dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from time import monotonic
 from typing import Any, Literal
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
-from zoneinfo import ZoneInfo
 
 import duckdb
 from pyarrow import csv as arrow_csv
@@ -39,7 +38,6 @@ from westbusan.sources.registry import SourceRegistry, probe_source
 from westbusan.storage import RawStore
 from westbusan.transport.load import load_transport
 
-_SEOUL = ZoneInfo("Asia/Seoul")
 _LEASE_DURATION = timedelta(minutes=15)
 _FIXTURE_SOURCES = (
     "lodgings",
@@ -443,13 +441,19 @@ class Pipeline:
                 self.db.connection.execute("begin transaction")
                 began = True
                 rows = self.db.query(
-                    """select run_id, status, attempt, started_at::varchar
+                    """select run_id, status, attempt, started_at::varchar, business_date
                        from pipeline_run where logical_run_key = ?
                        order by attempt desc limit 1""",
                     [logical_key],
                 )
                 if rows:
-                    prior_run_id, prior_status, prior_attempt, prior_started_at = rows[0]
+                    (
+                        prior_run_id,
+                        prior_status,
+                        prior_attempt,
+                        prior_started_at,
+                        prior_business_date,
+                    ) = rows[0]
                     started_at = datetime.fromisoformat(str(prior_started_at))
                     if current_published_run(self.db) == prior_run_id:
                         self.db.connection.execute("commit")
@@ -495,23 +499,32 @@ class Pipeline:
                         self.db.connection.execute("commit")
                         began = False
                         return (
-                            RunContext(prior_run_id, mode, started_at, "RUNNING"),
+                            RunContext(
+                                prior_run_id,
+                                mode,
+                                started_at,
+                                "RUNNING",
+                                prior_business_date,
+                            ),
                             None,
                         )
                     attempt = int(prior_attempt) + 1
                 else:
                     attempt = 1
-                started = datetime.combine(as_of, time.min, tzinfo=_SEOUL)
+                started = now
                 run = RunContext(
                     uuid5(NAMESPACE_URL, f"{logical_key}:attempt:{attempt}"),
                     mode,
                     started,
+                    "RUNNING",
+                    as_of,
                 )
+                inherited_run_id = current_published_run(self.db)
                 inserted = self.db.query(
                     """insert into pipeline_run (
                            run_id, mode, started_at, status, logical_run_key, attempt,
-                           lease_owner_token, lease_expires_at, heartbeat_at
-                       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           lease_owner_token, lease_expires_at, heartbeat_at, business_date
+                       ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                        on conflict (run_id) do nothing
                        returning run_id""",
                     [
@@ -524,10 +537,28 @@ class Pipeline:
                         self._lease_owner_token,
                         lease_expires,
                         now,
+                        as_of,
                     ],
                 )
                 if not inserted:
                     raise duckdb.TransactionException("run attempt insertion conflicted")
+                self.db.connection.execute(
+                    """insert into pipeline_run_input (run_id, input_run_id)
+                       values (?, ?) on conflict do nothing""",
+                    [run.run_id, run.run_id],
+                )
+                if inherited_run_id is not None:
+                    self.db.connection.execute(
+                        """insert into pipeline_run_input (run_id, input_run_id)
+                           select ?, input_run_id from pipeline_run_input where run_id = ?
+                           on conflict do nothing""",
+                        [run.run_id, inherited_run_id],
+                    )
+                    self.db.connection.execute(
+                        """insert into pipeline_run_input (run_id, input_run_id)
+                           values (?, ?) on conflict do nothing""",
+                        [run.run_id, inherited_run_id],
+                    )
                 self.db.connection.execute("commit")
                 began = False
                 return run, None

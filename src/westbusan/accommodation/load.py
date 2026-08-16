@@ -100,6 +100,24 @@ def load_license_snapshot(
         if not record.is_busan or record.source_record_id is None:
             continue
         values, record_hash = _payload(record)
+        db.connection.execute(
+            """
+            insert into staging_license_snapshot_version (
+                version_run_id, source_id, source_record_id, observed_on,
+                jurisdiction_code, source_name,
+                normalized_name, road_address, lot_address, district, region_group,
+                region_quality, license_date, license_date_quality,
+                closure_date, closure_date_quality, status_code, status_name, status_class,
+                detailed_status_code, detailed_status_name, room_count, room_count_quality,
+                normalized_phone, longitude, latitude, projected_x, projected_y, coordinate_crs,
+                source_updated_at, source_modified_on, source_modified_date_quality,
+                data_updated_on, data_updated_date_quality, data_update_point,
+                source_payload_json, record_hash
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            on conflict (version_run_id, source_id, source_record_id, observed_on) do nothing
+            """,
+            [run_id, *values, record_hash],
+        )
         existing = db.query(
             """
             select record_hash from staging_license_snapshot

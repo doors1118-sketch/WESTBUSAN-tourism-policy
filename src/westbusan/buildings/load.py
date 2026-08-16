@@ -264,7 +264,7 @@ def _parcel_responses(
                 request,
                 page.raw_body,
                 ".json",
-                source_date=run.started_at.date(),
+                source_date=run.cutoff_date,
             )
             progress()
             db.record_artifact(artifact)
@@ -314,7 +314,7 @@ def _record_building_page(
             source_id,
             operation,
             query.request_hash,
-            run.started_at.date(),
+            run.cutoff_date,
             page.page_no,
             page.total_count,
             len(page.rows),
@@ -360,6 +360,40 @@ def _store_building(
     )
     payload = json.dumps(responses, ensure_ascii=False, sort_keys=True, default=str)
     progress()
+    building_values = [
+        record.building_id,
+        run.cutoff_date,
+        parcel_hash,
+        record.sigungu_cd,
+        record.bjdong_cd,
+        record.plat_gb_cd,
+        record.bun,
+        record.ji,
+        record.road_address,
+        record.lot_address,
+        record.approval_date,
+        record.use_approval_date,
+        record.permit_date,
+        record.main_use,
+        record.total_area,
+        record.ground_floor_count,
+        record.underground_floor_count,
+        record.closed_indicator,
+        record.is_closed,
+        payload,
+    ]
+    db.connection.execute(
+        """insert into staging_building_snapshot_version (
+               version_run_id, building_id, observed_on, parcel_hash, sigungu_cd,
+               bjdong_cd, plat_gb_cd, bun, ji, road_address, lot_address,
+               approval_date, use_approval_date, permit_date, main_use, total_area,
+               ground_floor_count, underground_floor_count, closed_indicator,
+               is_closed, source_payload_json
+           ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           on conflict (version_run_id, building_id, observed_on) do nothing""",
+        [run.run_id, *building_values],
+    )
+    progress()
     db.connection.execute(
         """
         insert into staging_building_snapshot (
@@ -378,27 +412,9 @@ def _store_building(
             source_payload_json = excluded.source_payload_json
         """,
         [
-            record.building_id,
-            run.started_at.date(),
+            *building_values[:2],
             run.run_id,
-            parcel_hash,
-            record.sigungu_cd,
-            record.bjdong_cd,
-            record.plat_gb_cd,
-            record.bun,
-            record.ji,
-            record.road_address,
-            record.lot_address,
-            record.approval_date,
-            record.use_approval_date,
-            record.permit_date,
-            record.main_use,
-            record.total_area,
-            record.ground_floor_count,
-            record.underground_floor_count,
-            record.closed_indicator,
-            record.is_closed,
-            payload,
+            *building_values[2:],
         ],
     )
 
