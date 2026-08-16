@@ -1189,6 +1189,8 @@ def _metadata_partition(metadata: dict[str, object]) -> str | None:
 
 
 def _expected_page_count(total: int, page_size: int | None) -> int:
+    if total == 0:
+        return 1
     if page_size is None or page_size <= 0:
         return 0
     return max(1, (total + page_size - 1) // page_size)

@@ -450,6 +450,46 @@ def test_accommodation_quality_reparse_requires_actual_paging_metadata(
     assert _check(report, "raw_total_matches_staging", "lodgings").status == "failed"
 
 
+def test_metadata_less_official_no_data_reconciles_as_one_empty_page(
+    tmp_path: Path,
+) -> None:
+    """An explicit NO_DATA response is page 1 evidence even with zero page size."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    body = b'{"response":{"header":{"resultCode":"00","resultMsg":"NO_DATA"},"body":{}}}'
+    page = parse_data_page(body, "application/json", require_paging_metadata=True)
+    path = tmp_path / "metadata-less-no-data.json"
+    path.write_bytes(body)
+    _record_raw_page(db, run_id, "lodgings", path, body, "info", date(2026, 8, 16))
+    approve_schema_baseline(db, "lodgings", "info", page.schema_fingerprint)
+    db.record_source_status(
+        SourceStatus(
+            "lodgings",
+            datetime(2026, 8, 16, tzinfo=UTC),
+            "EMPTY",
+            {},
+            run_id,
+        )
+    )
+
+    report = run_quality_suite(db, run_id)
+    reconciliation = _check(report, "raw_total_matches_staging", "lodgings")
+
+    assert (page.total_count, page.page_no, page.page_size) == (0, 1, 0)
+    assert reconciliation.status == "passed"
+    assert reconciliation.actual == [
+        {
+            "operation": "info",
+            "partition": "2026-08-16",
+            "raw_total": 0,
+            "page_numbers": [1],
+            "expected_pages": [1],
+            "target_rows": 0,
+            "target_table": "staging_license_snapshot",
+        }
+    ]
+
+
 def test_schema_changed_then_ready_cannot_be_approved_by_its_later_status(
     tmp_path: Path,
 ) -> None:
