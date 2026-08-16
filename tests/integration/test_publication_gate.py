@@ -4,6 +4,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from tests.integrity_fixtures import ensure_integrity_run
+from westbusan.analytics.build import write_mart_manifest
 from westbusan.db import Database
 from westbusan.models import SourceStatus
 from westbusan.quality.checks import (
@@ -20,6 +22,12 @@ def test_rejected_run_never_replaces_last_known_good_publication(tmp_path: Path)
     db = _db(tmp_path)
     valid_run, invalid_run = uuid4(), uuid4()
     valid = _valid_report(db, tmp_path, valid_run)
+    ensure_integrity_run(
+        db,
+        invalid_run,
+        business_date=date(2026, 8, 16),
+        inherit_published=False,
+    )
     invalid = run_quality_suite(db, invalid_run)
 
     first = publish_if_valid(db, valid_run, valid)
@@ -46,6 +54,7 @@ def test_publication_is_idempotent_for_a_verified_valid_run(tmp_path: Path) -> N
 
 
 def _valid_report(db: Database, tmp_path: Path, run_id) -> QualityReport:
+    ensure_integrity_run(db, run_id, business_date=date(2026, 8, 16))
     for source_id in _CORE_ACCOMMODATION_SOURCES:
         official_row = {
             "MNG_NO": "L1",
@@ -117,7 +126,27 @@ def _valid_report(db: Database, tmp_path: Path, run_id) -> QualityReport:
         """,
         [date(2026, 8, 16), run_id, run_id],
     )
-    return run_quality_suite(db, run_id)
+    db.connection.execute(
+        """insert into staging_license_revision (
+               version_run_id, source_id, source_record_id, observed_on,
+               revision_sequence, district, region_group, region_quality,
+               room_count, room_count_quality, jurisdiction_code, license_date,
+               license_date_quality, closure_date_quality, source_updated_at,
+               source_modified_on, source_modified_date_quality, data_updated_on,
+               data_updated_date_quality, status_code, status_name, status_class,
+               detailed_status_code, detailed_status_name, source_payload_json,
+               record_hash
+           ) values (?, 'lodgings', 'L1', '2026-08-16', 1, '사하구', 'west',
+                     'resolved', 1, 'reported', '6260000', '2020-01-02',
+                     'parsed', 'missing', '20250831', '2025-08-31', 'parsed',
+                     '2025-09-01', 'parsed', '01', '영업', 'active', '01',
+                     '정상', '{}', 'hash')
+           on conflict do nothing""",
+        [run_id],
+    )
+    report = run_quality_suite(db, run_id)
+    write_mart_manifest(db, run_id)
+    return report
 
 
 def _db(tmp_path: Path) -> Database:

@@ -11,7 +11,10 @@ from uuid import uuid4
 
 import pytest
 
-from westbusan.accommodation.load import load_license_snapshot
+from tests.integrity_fixtures import (
+    ensure_integrity_run,
+    load_complete_license_snapshot,
+)
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.db import Database
 from westbusan.entity_resolution.match import build_facilities
@@ -21,10 +24,24 @@ from westbusan.quality.checks import (
     QualityReport,
     _active_facility_count,
     approve_schema_baseline,
-    run_quality_suite,
+    run_quality_suite as _run_quality_suite,
 )
 from westbusan.quality.publish import current_published_run, publish_if_valid
 from westbusan.sources.datagokr import parse_data_page
+
+
+def run_quality_suite(db: Database, run_id) -> QualityReport:
+    """Exercise quality checks with the production run contract made explicit."""
+    cutoff = db.query(
+        "select max(checked_at::date) from source_status where run_id = ?", [run_id]
+    )[0][0]
+    ensure_integrity_run(
+        db,
+        run_id,
+        business_date=cutoff or date(2026, 8, 16),
+        inherit_published=False,
+    )
+    return _run_quality_suite(db, run_id)
 
 
 def test_active_facility_count_uses_target_business_date_revision_identity(
@@ -47,14 +64,16 @@ def test_active_facility_count_uses_target_business_date_revision_identity(
         "MNG_NO": "L1",
         "BPLC_NM": "기준일 영업 호텔",
         "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
+        "SALS_STTS_CD": "01",
+        "SALS_STTS_NM": "영업",
     }
-    load_license_snapshot(
+    load_complete_license_snapshot(
         db,
         [normalize_license("lodgings", base, date(2026, 8, 16))],
         run_id,
     )
     build_facilities(db, run_id)
-    load_license_snapshot(
+    load_complete_license_snapshot(
         db,
         [
             normalize_license(
@@ -574,8 +593,9 @@ def test_tourism_reconciliation_scopes_each_monthly_partition(tmp_path: Path) ->
             insert into fact_tourism_demand (
                 source_id, metric_code, period, district, region_group, dimension_json,
                 dimension_json_hash, source_revision, metric_value, unit,
-                source_payload_json, artifact_id, loaded_run_id
-            ) values (?, ?, ?, '사하구', 'west', '{}', ?, 'fixture', 1, 'count', '{}', ?, ?)
+                source_payload_json, artifact_id, loaded_run_id, observation_key
+            ) values (?, ?, ?, '사하구', 'west', '{}', ?, 'fixture', 1, 'count',
+                      '{}', ?, ?, ?)
             """,
             [
                 "tourism_data_lab",
@@ -584,7 +604,14 @@ def test_tourism_reconciliation_scopes_each_monthly_partition(tmp_path: Path) ->
                 month,
                 artifact_id,
                 run_id,
+                f"tourism-{month}",
             ],
+        )
+        db.connection.execute(
+            """insert into run_fact_observation (
+                   run_id, family, observation_key
+               ) values (?, 'tourism', ?)""",
+            [run_id, f"tourism-{month}"],
         )
     db.record_source_status(
         SourceStatus("tourism_data_lab", datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, run_id)
@@ -891,7 +918,7 @@ def test_approved_accommodation_shape_cannot_hide_null_critical_semantics(
     run_id = uuid4()
     _valid_run(db, tmp_path, run_id)
     db.connection.execute(
-        """update staging_license_snapshot set
+        """update staging_license_revision set
                jurisdiction_code = null,
                license_date = null,
                source_updated_at = null,
@@ -900,7 +927,7 @@ def test_approved_accommodation_shape_cannot_hide_null_critical_semantics(
                status_class = null,
                detailed_status_code = null,
                detailed_status_name = null
-           where last_loaded_run_id = ?""",
+           where version_run_id = ?""",
         [run_id],
     )
 
@@ -919,13 +946,13 @@ def test_invalid_nonnull_official_dates_fail_required_date_coverage(
     run_id = uuid4()
     _valid_run(db, tmp_path, run_id)
     db.connection.execute(
-        """update staging_license_snapshot set
+        """update staging_license_revision set
                source_updated_at = '20250899',
                source_modified_on = null,
                source_modified_date_quality = 'invalid',
                data_updated_on = null,
                data_updated_date_quality = 'invalid'
-           where last_loaded_run_id = ?""",
+           where version_run_id = ?""",
         [run_id],
     )
 
@@ -945,10 +972,10 @@ def test_closed_or_cancelled_status_requires_a_valid_closure_date(
     _valid_run(db, tmp_path, run_id)
     status_class = "closed" if status_code == "03" else "cancelled_or_expired_or_stopped"
     db.connection.execute(
-        """update staging_license_snapshot set
+        """update staging_license_revision set
                status_code = ?, status_class = ?, closure_date = null,
                closure_date_quality = 'missing'
-           where last_loaded_run_id = ?""",
+           where version_run_id = ?""",
         [status_code, status_class, run_id],
     )
 
@@ -969,12 +996,18 @@ def test_older_backfill_cannot_replace_newer_pointer_without_audited_override(
         db, tmp_path, older, checked_at=datetime(2026, 8, 17, tzinfo=UTC)
     )
     db.connection.execute(
-        "insert into pipeline_run (run_id, mode, started_at, status, business_date) values (?, 'daily', ?, 'RUNNING', ?)",
-        [newer, datetime(2026, 8, 16, tzinfo=UTC), date(2026, 8, 16)],
+        """update pipeline_run
+              set mode = 'daily', started_at = ?, status = 'RUNNING',
+                  business_date = ?
+            where run_id = ?""",
+        [datetime(2026, 8, 16, tzinfo=UTC), date(2026, 8, 16), newer],
     )
     db.connection.execute(
-        "insert into pipeline_run (run_id, mode, started_at, status, business_date) values (?, 'backfill', ?, 'RUNNING', ?)",
-        [older, datetime(2026, 8, 17, tzinfo=UTC), date(2026, 7, 1)],
+        """update pipeline_run
+              set mode = 'backfill', started_at = ?, status = 'RUNNING',
+                  business_date = ?
+            where run_id = ?""",
+        [datetime(2026, 8, 17, tzinfo=UTC), date(2026, 7, 1), older],
     )
     _empty_mart_manifest(db, newer)
     _empty_mart_manifest(db, older)
@@ -1005,6 +1038,7 @@ def _valid_run(
     *,
     checked_at: datetime = datetime(2026, 8, 16, tzinfo=UTC),
 ) -> QualityReport:
+    ensure_integrity_run(db, run_id, business_date=checked_at.date())
     for source_id in _CORE_ACCOMMODATION_SOURCES:
         official_row = {
             "MNG_NO": "L1",
@@ -1079,7 +1113,27 @@ def _valid_run(
         """,
         [str(run_id), date(2026, 8, 16), run_id, run_id, str(run_id)],
     )
-    return run_quality_suite(db, run_id)
+    db.connection.execute(
+        """insert into staging_license_revision (
+               version_run_id, source_id, source_record_id, observed_on,
+               revision_sequence, region_quality, region_group, district,
+               room_count, room_count_quality, jurisdiction_code, license_date,
+               license_date_quality, closure_date_quality, source_updated_at,
+               source_modified_on, source_modified_date_quality, data_updated_on,
+               data_updated_date_quality, status_code, status_name, status_class,
+               detailed_status_code, detailed_status_name, source_payload_json,
+               record_hash
+           ) values (?, 'lodgings', ?, '2026-08-16', 1, 'resolved', 'west',
+                     '사하구', 1, 'reported', '6260000', '2020-01-02',
+                     'parsed', 'missing', '20250831', '2025-08-31', 'parsed',
+                     '2025-09-01', 'parsed', '01', '영업', 'active', '01',
+                     '정상', '{}', ?)
+           on conflict do nothing""",
+        [run_id, str(run_id), str(run_id)],
+    )
+    report = run_quality_suite(db, run_id)
+    _empty_mart_manifest(db, run_id)
+    return report
 
 
 def _empty_mart_manifest(db: Database, run_id) -> None:

@@ -25,6 +25,7 @@ def ensure_integrity_run(
     run_id: UUID,
     *,
     business_date: date | None = None,
+    inherit_published: bool = True,
 ) -> date:
     """Register a rebuildable test run with explicit self and inherited lineage."""
     existing = db.query(
@@ -63,15 +64,16 @@ def ensure_integrity_run(
            values (?, ?) on conflict do nothing""",
         [run_id, run_id],
     )
-    db.connection.execute(
-        """insert into pipeline_run_input (run_id, input_run_id)
-           select ?, prior.run_id
-             from pipeline_run as prior
-            where prior.status in ('PUBLISHED', 'PUBLISHED_WITH_WARNINGS')
-              and prior.business_date <= ?
-           on conflict do nothing""",
-        [run_id, business_date],
-    )
+    if inherit_published:
+        db.connection.execute(
+            """insert into pipeline_run_input (run_id, input_run_id)
+               select ?, prior.run_id
+                 from pipeline_run as prior
+                where prior.status in ('PUBLISHED', 'PUBLISHED_WITH_WARNINGS')
+                  and prior.business_date <= ?
+               on conflict do nothing""",
+            [run_id, business_date],
+        )
     return business_date
 
 

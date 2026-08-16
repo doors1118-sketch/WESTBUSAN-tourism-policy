@@ -12,6 +12,7 @@ from westbusan.accommodation.normalize import normalize_license
 from westbusan.cli import app, exit_code_for_summary
 from westbusan.db import Database
 from westbusan.entity_resolution.match import build_facilities
+from westbusan.models import SourceStatus
 from westbusan.orchestrator import Pipeline, RunSummary
 
 
@@ -273,11 +274,22 @@ def test_migrate_legacy_command_approves_only_backfilled_self_lineage(
                     "MNG_NO": "legacy",
                     "BPLC_NM": "레거시호텔",
                     "ROAD_NM_ADDR": "부산광역시 사하구 길 1",
+                    "SALS_STTS_CD": "01",
+                    "SALS_STTS_NM": "영업",
                 },
                 date(2026, 8, 16),
             )
         ],
         run_id,
+    )
+    pipeline.db.record_source_status(
+        SourceStatus(
+            "lodgings",
+            datetime(2026, 8, 16, tzinfo=UTC),
+            "READY",
+            {},
+            run_id,
+        )
     )
     facility_id = uuid4()
     building_id = uuid4()
@@ -348,7 +360,10 @@ def test_migrate_legacy_command_approves_only_backfilled_self_lineage(
     )
 
     assert result.exit_code == 0
-    assert build_facilities(pipeline.db, run_id).facility_count == 1
+    assert build_facilities(pipeline.db, run_id).facility_count == 0
+    assert pipeline.db.query(
+        "select status, rebuildable from pipeline_run where run_id = ?", [run_id]
+    ) == [("BLOCKED", True)]
     assert pipeline.db.query(
         """select operator_identity, reason, decision
            from legacy_migration_audit where run_id = ?""",

@@ -872,7 +872,11 @@ def _designation_coverage_check(db: Database, run_id: UUID) -> CheckResult:
 
 
 def _active_facility_count(db: Database, run_id: UUID) -> int:
-    completed = latest_complete_snapshot_runs(db, run_id)
+    completed = {
+        source_id: source_run
+        for source_id, source_run in latest_complete_snapshot_runs(db, run_id).items()
+        if source_id in _ACCOMMODATION_SOURCES
+    }
     if not completed:
         return 0
     immutable = latest_immutable_license_records(db, run_id, completed)

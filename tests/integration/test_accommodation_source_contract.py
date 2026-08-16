@@ -142,7 +142,15 @@ def test_every_accommodation_source_follows_provider_page_caps_until_total(
             [source_id],
         )
     )
-    assert checkpoint["evidence"] == {"received_rows": 3, "total_count": 3}
+    evidence = checkpoint["evidence"]
+    assert evidence["received_rows"] == 3
+    assert evidence["total_count"] == 3
+    assert evidence["counts"] == {"accepted": 3, "out_of_scope": 0, "rejected": 0}
+    assert evidence["jurisdiction_filter"] == {
+        "expected": "6260000",
+        "parameter": "cond[OPN_ATMY_GRP_CD::EQ]",
+    }
+    assert evidence["operation"] == "info"
 
 
 @pytest.mark.parametrize("missing_key", ["totalCount", "pageNo", "numOfRows"])
