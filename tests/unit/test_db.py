@@ -18,6 +18,7 @@ def test_empty_database_migration_creates_spatial_schema_tables(tmp_path: Path) 
 
     required_tables = {
         "spatial_boundary_version",
+        "spatial_boundary_approval_event",
         "dim_spatial_grid_500m",
         "spatial_run",
         "spatial_writer_lease",
@@ -120,6 +121,50 @@ def test_exception_lineage_migration_backfills_original_029_rows(tmp_path: Path)
            where spatial_run_id = ? and subject_id = 'facility-1'""",
         [spatial_run_id],
     ) == [(base_run_id,)]
+
+
+def test_boundary_approval_audit_migration_upgrades_applied_030_database(
+    tmp_path: Path,
+) -> None:
+    """Catches migration 031 depending on a fresh database or omitting audit fields."""
+    migrations_030 = tmp_path / "migrations-030"
+    migrations_030.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name <= "030_spatial_exception_lineage.sql":
+            copy2(migration, migrations_030 / migration.name)
+    path = tmp_path / "applied-030.duckdb"
+    original = Database(path, migrations_030)
+    original.migrate()
+    original_checksums = dict(
+        original.query("select version, checksum from schema_migrations")
+    )
+    original.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+
+    assert dict(upgraded.query("select version, checksum from schema_migrations")).items() >= (
+        original_checksums.items()
+    )
+    columns = {
+        row[0]
+        for row in upgraded.query(
+            """select column_name from information_schema.columns
+               where table_schema = 'main'
+                 and table_name = 'spatial_boundary_approval_event'"""
+        )
+    }
+    assert columns == {
+        "event_id",
+        "observed_content_hash",
+        "boundary_version_id",
+        "action",
+        "actor",
+        "rationale",
+        "source_metadata_json",
+        "evidence_json",
+        "event_at",
+    }
 
 
 def test_migrations_are_idempotent(tmp_path: Path) -> None:

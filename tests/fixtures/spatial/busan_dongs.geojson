@@ -1,0 +1,23 @@
+{
+  "type": "FeatureCollection",
+  "crs": {"type": "name", "properties": {"name": "EPSG:4326"}},
+  "features": [
+    {"type":"Feature","properties":{"district":"강서구","dong_code":"26440101","dong_name":"대저동"},"geometry":{"type":"Polygon","coordinates":[[[128.900,35.050],[128.902,35.050],[128.902,35.054],[128.900,35.054],[128.900,35.050]]]}},
+    {"type":"Feature","properties":{"district":"강서구","dong_code":"26440102","dong_name":"강동동"},"geometry":{"type":"Polygon","coordinates":[[[128.902,35.050],[128.904,35.050],[128.904,35.054],[128.902,35.054],[128.902,35.050]]]}},
+    {"type":"Feature","properties":{"district":"북구","dong_code":"26320101","dong_name":"구포동"},"geometry":{"type":"Polygon","coordinates":[[[128.904,35.050],[128.908,35.050],[128.908,35.054],[128.904,35.054],[128.904,35.050]]]}},
+    {"type":"Feature","properties":{"district":"사상구","dong_code":"26530101","dong_name":"삼락동"},"geometry":{"type":"Polygon","coordinates":[[[128.908,35.050],[128.912,35.050],[128.912,35.054],[128.908,35.054],[128.908,35.050]]]}},
+    {"type":"Feature","properties":{"district":"사하구","dong_code":"26380101","dong_name":"괴정동"},"geometry":{"type":"Polygon","coordinates":[[[128.912,35.050],[128.916,35.050],[128.916,35.054],[128.912,35.054],[128.912,35.050]]]}},
+    {"type":"Feature","properties":{"해운대구":"unused","district":"해운대구","dong_code":"26350101","dong_name":"우동"},"geometry":{"type":"Polygon","coordinates":[[[128.900,35.054],[128.904,35.054],[128.904,35.058],[128.900,35.058],[128.900,35.054]]]}},
+    {"type":"Feature","properties":{"district":"수영구","dong_code":"26500101","dong_name":"망미동"},"geometry":{"type":"Polygon","coordinates":[[[128.904,35.054],[128.908,35.054],[128.908,35.058],[128.904,35.058],[128.904,35.054]]]}},
+    {"type":"Feature","properties":{"district":"기장군","dong_code":"26710101","dong_name":"기장읍"},"geometry":{"type":"Polygon","coordinates":[[[128.908,35.054],[128.912,35.054],[128.912,35.058],[128.908,35.058],[128.908,35.054]]]}},
+    {"type":"Feature","properties":{"district":"중구","dong_code":"26110101","dong_name":"영주동"},"geometry":{"type":"Polygon","coordinates":[[[128.912,35.054],[128.916,35.054],[128.916,35.058],[128.912,35.058],[128.912,35.054]]]}},
+    {"type":"Feature","properties":{"district":"서구","dong_code":"26140101","dong_name":"동대신동"},"geometry":{"type":"Polygon","coordinates":[[[128.900,35.058],[128.904,35.058],[128.904,35.062],[128.900,35.062],[128.900,35.058]]]}},
+    {"type":"Feature","properties":{"district":"동구","dong_code":"26170101","dong_name":"초량동"},"geometry":{"type":"Polygon","coordinates":[[[128.904,35.058],[128.908,35.058],[128.908,35.062],[128.904,35.062],[128.904,35.058]]]}},
+    {"type":"Feature","properties":{"district":"영도구","dong_code":"26200101","dong_name":"대교동"},"geometry":{"type":"Polygon","coordinates":[[[128.908,35.058],[128.912,35.058],[128.912,35.062],[128.908,35.062],[128.908,35.058]]]}},
+    {"type":"Feature","properties":{"district":"부산진구","dong_code":"26230101","dong_name":"부전동"},"geometry":{"type":"Polygon","coordinates":[[[128.912,35.058],[128.916,35.058],[128.916,35.062],[128.912,35.062],[128.912,35.058]]]}},
+    {"type":"Feature","properties":{"district":"동래구","dong_code":"26260101","dong_name":"수민동"},"geometry":{"type":"Polygon","coordinates":[[[128.900,35.062],[128.904,35.062],[128.904,35.066],[128.900,35.066],[128.900,35.062]]]}},
+    {"type":"Feature","properties":{"district":"남구","dong_code":"26290101","dong_name":"대연동"},"geometry":{"type":"Polygon","coordinates":[[[128.904,35.062],[128.908,35.062],[128.908,35.066],[128.904,35.066],[128.904,35.062]]]}},
+    {"type":"Feature","properties":{"district":"금정구","dong_code":"26410101","dong_name":"서동"},"geometry":{"type":"Polygon","coordinates":[[[128.908,35.062],[128.912,35.062],[128.912,35.066],[128.908,35.066],[128.908,35.062]]]}},
+    {"type":"Feature","properties":{"district":"연제구","dong_code":"26470101","dong_name":"거제동"},"geometry":{"type":"Polygon","coordinates":[[[128.912,35.062],[128.916,35.062],[128.916,35.066],[128.912,35.066],[128.912,35.062]]]}}
+  ]
+}
