@@ -96,6 +96,16 @@ def test_build_marts_end_to_end_division_none_coverage_is_insufficient(tmp_path:
     assert db.query("select coverage, quality_band from mart_region_comparison where comparison_type = 'west_divided_by_east' limit 1") == [(None, "insufficient")]
 
 
+def test_build_marts_end_to_end_group_distribution_does_not_use_district_medians(tmp_path: Path) -> None:
+    """Reviewer regression: one small facility cannot become a 50% group share."""
+    records = [_license("lodgings", "small", "소형", "부산광역시 사하구 길 1", 1)]
+    records.extend(_license("lodgings", f"large-{index}", f"대형{index}", f"부산광역시 사하구 길 {index + 2}", 9) for index in range(9))
+    db, run = _built_db(tmp_path, records)
+    build_marts(db, run, PolicyConfig(small_room_threshold=1, old_building_years=[20, 30]))
+    assert db.query("select room_median, small_facility_share from mart_region_month where district = '사하구' and period = 'current'") == [(9.0, 0.1)]
+    assert db.query("select count(*) from mart_policy_signal where run_id = ?", [run]) == [(0,)]
+
+
 def _built_db(tmp_path: Path, records: list[object]) -> tuple[Database, object]:
     db = Database(tmp_path / "case.duckdb", Path("sql")); db.migrate(); run = uuid4()
     load_license_snapshot(db, records, run); build_facilities(db, run)
