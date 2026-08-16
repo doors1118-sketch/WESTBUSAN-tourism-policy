@@ -244,7 +244,7 @@ def migrate_legacy_run(
         )
         db.connection.execute("commit")
         began = False
-    except Exception as error:
+    except Exception:
         if began:
             db.connection.execute("rollback")
         if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
