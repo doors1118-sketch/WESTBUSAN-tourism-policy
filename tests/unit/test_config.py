@@ -43,6 +43,26 @@ def test_region_config_rejects_overlap_missing_or_non_busan_districts() -> None:
         )
 
 
+def test_region_config_rejects_districts_swapped_between_fixed_policy_groups() -> None:
+    """A valid 4/3/9 partition cannot redefine the approved west/east comparison."""
+    with pytest.raises(ValidationError, match="fixed west/east/other policy groups"):
+        RegionConfig(
+            west=["강서구", "북구", "사상구", "해운대구"],
+            east=["사하구", "수영구", "기장군"],
+            other=[
+                "중구",
+                "서구",
+                "동구",
+                "영도구",
+                "부산진구",
+                "동래구",
+                "남구",
+                "금정구",
+                "연제구",
+            ],
+        )
+
+
 def test_region_resolver_uses_validated_configuration() -> None:
     """Catches a hard-coded loader mapping diverging from the validated config."""
     regions = RegionConfig.default()

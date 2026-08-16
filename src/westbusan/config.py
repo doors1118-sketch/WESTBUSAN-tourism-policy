@@ -29,6 +29,9 @@ BUSAN_DISTRICTS = frozenset(
         "해운대구",
     }
 )
+WEST_BUSAN_DISTRICTS = frozenset({"강서구", "북구", "사상구", "사하구"})
+EAST_BUSAN_DISTRICTS = frozenset({"해운대구", "수영구", "기장군"})
+OTHER_BUSAN_DISTRICTS = BUSAN_DISTRICTS - WEST_BUSAN_DISTRICTS - EAST_BUSAN_DISTRICTS
 
 
 class RegionConfig(BaseModel):
@@ -41,13 +44,20 @@ class RegionConfig(BaseModel):
         groups = (self.west, self.east, self.other)
         flattened = [district for group in groups for district in group]
         valid_sizes = tuple(map(len, groups)) == (4, 3, 9)
+        fixed_memberships = (
+            set(self.west) == WEST_BUSAN_DISTRICTS
+            and set(self.east) == EAST_BUSAN_DISTRICTS
+            and set(self.other) == OTHER_BUSAN_DISTRICTS
+        )
         if (
             not valid_sizes
             or len(set(flattened)) != len(flattened)
             or set(flattened) != BUSAN_DISTRICTS
+            or not fixed_memberships
         ):
             raise ValueError(
-                "regions must exactly partition the 16 Busan districts into disjoint 4/3/9 groups"
+                "regions must exactly partition the 16 Busan districts and match "
+                "fixed west/east/other policy groups"
             )
         return self
 
