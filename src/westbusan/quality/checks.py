@@ -15,12 +15,17 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 import duckdb
 
 from westbusan.db import Database, ensure_run_rebuildable
-from westbusan.entity_resolution.match import (
-    classify_pair,
-    evaluate_auto_merge_calibration,
-)
 from westbusan.http import SchemaError
-from westbusan.inventory import is_active_status
+from westbusan.inventory import (
+    is_active_status,
+    latest_complete_snapshot_runs,
+    visible_run_ids,
+)
+from westbusan.revisions import (
+    latest_immutable_license_records,
+    require_immutable_for_overwritten_completed_runs,
+    target_facility_license_links,
+)
 from westbusan.sources.datagokr import parse_data_page
 
 CheckStatus = Literal["passed", "failed", "warning", "skipped"]
@@ -867,24 +872,68 @@ def _designation_coverage_check(db: Database, run_id: UUID) -> CheckResult:
 
 
 def _active_facility_count(db: Database, run_id: UUID) -> int:
-    ensure_run_rebuildable(db, run_id)
+    completed = latest_complete_snapshot_runs(db, run_id)
+    if not completed:
+        return 0
+    immutable = latest_immutable_license_records(db, run_id, completed)
+    if immutable is not None:
+        records = {
+            (str(record["source_id"]), str(record["source_record_id"])): record
+            for record in immutable
+        }
+        return len(
+            {
+                facility_id
+                for facility_id, source_id, source_record_id
+                in target_facility_license_links(db, run_id)
+                for record in [records.get((source_id, source_record_id))]
+                if record is not None
+                and is_active_status(
+                    record["status_code"], record["status_name"],
+                    record["closure_date"], record["observed_on"],
+                )
+            }
+        )
+    if db.query("select 1 from pipeline_run where run_id = ?", [run_id]):
+        require_immutable_for_overwritten_completed_runs(db, run_id, completed)
+    visible = visible_run_ids(db, run_id)
+    placeholders = ",".join("?" for _ in visible)
+    eligible_values = ",".join("(?, ?)" for _ in completed)
+    eligible_params = [
+        value
+        for source_id, source_run in sorted(completed.items())
+        for value in (source_id, source_run)
+    ]
     rows = db.query(
-        """select link.facility_id, snapshot.status_code, snapshot.status_name,
-                  snapshot.closure_date, snapshot.observed_on
-           from run_facility_license as link
-           join staging_license_revision as snapshot
-             on snapshot.version_run_id = link.selected_version_run_id
-            and snapshot.source_id = link.source_id
-            and snapshot.source_record_id = link.source_record_id
-            and snapshot.observed_on = link.selected_observed_on
-            and snapshot.revision_sequence = link.selected_revision_sequence
-           where link.run_id = ?""",
-        [run_id],
+        f"""with eligible(source_id, run_id) as (
+            values {eligible_values}
+        )
+        select link.facility_id, snapshot.source_id, snapshot.last_loaded_run_id,
+               snapshot.status_code, snapshot.status_name, snapshot.closure_date,
+               snapshot.observed_on
+        from bridge_facility_license as link
+        join (
+            select staged.*, row_number() over (
+                partition by staged.source_id, staged.source_record_id
+                order by staged.observed_on desc,
+                         staged.source_updated_at desc nulls last
+            ) as row_number
+            from staging_license_snapshot as staged
+            join eligible on eligible.source_id = staged.source_id
+                         and (eligible.run_id = staged.first_loaded_run_id
+                              or eligible.run_id = staged.last_loaded_run_id)
+            where staged.first_loaded_run_id in ({placeholders})
+        ) as snapshot
+          on snapshot.source_id = link.source_id
+         and snapshot.source_record_id = link.source_record_id
+         and snapshot.row_number = 1
+        """,
+        [*eligible_params, *visible],
     )
     return len(
         {
             facility_id
-            for facility_id, code, name, closure, observed in rows
+            for facility_id, source_id, loaded_run, code, name, closure, observed in rows
             if is_active_status(code, name, closure, observed)
         }
     )

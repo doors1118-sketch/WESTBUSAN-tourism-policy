@@ -24,6 +24,10 @@ from westbusan.entity_resolution.normalize import (
     normalize_phone,
 )
 from westbusan.inventory import is_active_status, latest_complete_snapshot_runs
+from westbusan.revisions import (
+    latest_immutable_license_records,
+    require_immutable_for_overwritten_completed_runs,
+)
 
 DecisionLabel = Literal["auto_merge", "designation_link", "review", "separate"]
 ALGORITHM_VERSION = "entity-resolution-v2"
@@ -640,50 +644,56 @@ def _features(left: Mapping[str, object], right: Mapping[str, object]) -> MatchF
 
 
 def _latest_records(db: Database, run_id: UUID) -> list[dict[str, object]]:
-    visible_runs = _visible_run_ids(db, run_id)
-    placeholders = ",".join("?" for _ in visible_runs)
-    cutoff_rows = db.query(
-        "select business_date from pipeline_run where run_id = ?", [run_id]
-    )
-    cutoff = cutoff_rows[0][0] if cutoff_rows else None
-    rows = db.query(
-        f"""
-        select source_id, source_record_id, source_name, normalized_name, road_address,
-               lot_address, district, region_group, normalized_phone, longitude, latitude,
-               version_run_id, observed_on, revision_sequence,
-               status_code, status_name, closure_date
-        from (
-            select snapshot.*, row_number() over (
-                partition by source_id, source_record_id
-                order by observed_on desc, source_updated_at desc nulls last,
-                         input.started_at desc nulls last, recorded_at desc,
-                         revision_sequence desc
-            ) as row_number
-            from staging_license_revision as snapshot
-            left join pipeline_run as input on input.run_id = snapshot.version_run_id
-            where version_run_id in ({placeholders})
-              and (? is null or observed_on <= ?)
-        )
-        where row_number = 1
-        """,
-        [*visible_runs, cutoff, cutoff],
-    )
-    fields = (
-        "source_id", "source_record_id", "source_name", "normalized_name", "road_address",
-        "lot_address", "district", "region_group", "normalized_phone", "longitude", "latitude",
-        "selected_version_run_id", "selected_observed_on", "selected_revision_sequence",
-        "status_code", "status_name", "closure_date",
+    target_is_dated = bool(
+        db.query("select 1 from pipeline_run where run_id = ?", [run_id])
     )
     completed = latest_complete_snapshot_runs(db, run_id)
-    records = [dict(zip(fields, row, strict=True)) for row in rows]
+    if target_is_dated and not completed:
+        return []
+    immutable_records = (
+        latest_immutable_license_records(db, run_id, completed)
+        if target_is_dated
+        else None
+    )
+    if immutable_records is not None:
+        records = immutable_records
+    elif target_is_dated:
+        require_immutable_for_overwritten_completed_runs(db, run_id, completed)
+        raise RuntimeError(
+            "immutable license revisions are required for a dated analytical run"
+        )
+    else:
+        rows = db.query(
+            """
+            select source_id, source_record_id, source_name, normalized_name,
+                   road_address, lot_address, district, region_group,
+                   normalized_phone, longitude, latitude, status_code,
+                   status_name, closure_date, observed_on, last_loaded_run_id
+            from (
+                select *, row_number() over (
+                    partition by source_id, source_record_id
+                    order by observed_on desc,
+                             source_updated_at desc nulls last
+                ) as row_number
+                from staging_license_snapshot
+            ) where row_number = 1
+            """
+        )
+    if immutable_records is None:
+        fields = (
+            "source_id", "source_record_id", "source_name", "normalized_name", "road_address",
+            "lot_address", "district", "region_group", "normalized_phone", "longitude", "latitude",
+            "status_code", "status_name", "closure_date", "observed_on", "last_loaded_run_id",
+        )
+        records = [dict(zip(fields, row, strict=True)) for row in rows]
+        for record in records:
+            record["selected_version_run_id"] = record["last_loaded_run_id"]
+            record["selected_observed_on"] = record["observed_on"]
+            record["selected_revision_sequence"] = 1
     return [
         record
         for record in records
-        if (
-            str(record["source_id"]) not in completed
-            or record["selected_version_run_id"] == completed[str(record["source_id"])]
-        )
-        and is_active_status(
+        if is_active_status(
             record["status_code"],
             record["status_name"],
             record["closure_date"],

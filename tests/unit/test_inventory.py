@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from tests.integrity_fixtures import ensure_integrity_run
 from westbusan.db import Database
 from westbusan.inventory import latest_complete_snapshot_runs
 from westbusan.models import SourceStatus
@@ -75,6 +76,15 @@ def test_period_selection_uses_snapshot_observation_month_for_backfill(
         """,
         [backfill, backfill],
     )
+    db.connection.execute(
+        """insert into staging_license_revision (
+               version_run_id, source_id, source_record_id, observed_on,
+               revision_sequence, region_quality, room_count_quality,
+               source_payload_json, record_hash
+           ) values (?, 'lodgings', 'L1', '2026-01-31', 1, 'resolved',
+                     'reported', '{}', 'L1')""",
+        [backfill],
+    )
     db.record_source_status(
         SourceStatus(
             "lodgings",
@@ -97,4 +107,9 @@ def _run(db: Database, run_id, started_at: str) -> None:
         values (?, 'test', ?, 'DONE')
         """,
         [run_id, started_at],
+    )
+    ensure_integrity_run(
+        db,
+        run_id,
+        business_date=datetime.fromisoformat(started_at).date(),
     )

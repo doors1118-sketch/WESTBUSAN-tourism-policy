@@ -1,7 +1,8 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+from tests.integrity_fixtures import ensure_integrity_run
 from westbusan.db import Database
 from westbusan.models import SourceStatus
 from westbusan.quality.checks import (
@@ -135,8 +136,81 @@ def test_quality_active_facility_count_uses_status_and_snapshot_membership(
         "insert into bridge_facility_license (facility_id, source_id, source_record_id) values (?, 'lodgings', 'L1')",
         [facility_id],
     )
-
     assert _active_facility_count(db, run_id) == 0
+
+
+def test_quality_active_count_filters_failed_retry_before_revision_rank(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "quality-fallback.duckdb", Path("sql")); db.migrate()
+    first, failed, target, facility_id = uuid4(), uuid4(), uuid4(), uuid4()
+    for run_id, started in (
+        (first, "2026-08-16"),
+        (failed, "2026-08-17"),
+        (target, "2026-08-18"),
+    ):
+        db.connection.execute(
+            "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', ?, 'DONE')",
+            [run_id, started],
+        )
+        ensure_integrity_run(
+            db, run_id, business_date=datetime.fromisoformat(started).date()
+        )
+    db.connection.execute(
+        "insert into dim_facility (facility_id, district, region_group) values (?, '사하구', 'west')",
+        [facility_id],
+    )
+    db.connection.execute(
+        "insert into bridge_facility_license (facility_id, source_id, source_record_id) values (?, 'lodgings', 'L1')",
+        [facility_id],
+    )
+    db.connection.execute(
+        """insert into run_facility_license (
+               run_id, facility_id, source_id, source_record_id, evidence_json,
+               selected_version_run_id, selected_observed_on,
+               selected_revision_sequence
+           ) values (?, ?, 'lodgings', 'L1', '{}', ?, '2026-08-16', 1)""",
+        [target, facility_id, first],
+    )
+    for run_id, observed, code, name, record_hash in (
+        (first, "2026-08-16", "01", "영업/정상", "active"),
+        (failed, "2026-08-17", "02", "폐업", "inactive"),
+    ):
+        db.connection.execute(
+            """insert into staging_license_snapshot (
+                source_id, source_record_id, observed_on, first_loaded_run_id,
+                last_loaded_run_id, status_code, status_name, region_quality,
+                room_count_quality, source_payload_json, record_hash
+            ) values ('lodgings', 'L1', ?, ?, ?, ?, ?, 'resolved',
+                      'missing', '{}', ?)""",
+            [observed, run_id, run_id, code, name, record_hash],
+        )
+        db.connection.execute(
+            """insert into staging_license_revision (
+                   version_run_id, source_id, source_record_id, observed_on,
+                   revision_sequence, status_code, status_name, region_quality,
+                   room_count_quality, source_payload_json, record_hash
+               ) values (?, 'lodgings', 'L1', ?, 1, ?, ?, 'resolved',
+                         'missing', '{}', ?)""",
+            [run_id, observed, code, name, record_hash],
+        )
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, first)
+    )
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 17, 1, tzinfo=UTC), "READY", {}, failed)
+    )
+    db.record_source_status(
+        SourceStatus(
+            "lodgings",
+            datetime(2026, 8, 17, 2, tzinfo=UTC),
+            "SCHEMA_CHANGED",
+            {},
+            failed,
+        )
+    )
+
+    assert _active_facility_count(db, target) == 1
 
 
 def test_ready_accommodation_source_with_no_run_snapshot_fails_and_is_persisted(
@@ -146,6 +220,7 @@ def test_ready_accommodation_source_with_no_run_snapshot_fails_and_is_persisted(
     db = Database(tmp_path / "test.duckdb", Path("sql"))
     db.migrate()
     run_id = uuid4()
+    ensure_integrity_run(db, run_id, business_date=date(2026, 8, 16))
     db.record_source_status(
         SourceStatus("lodgings", datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, run_id)
     )

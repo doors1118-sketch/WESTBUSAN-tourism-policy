@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -6,11 +7,13 @@ import duckdb
 import pytest
 
 import westbusan.entity_resolution.match as match_module
-from westbusan.accommodation.load import load_license_snapshot
+from tests.integrity_fixtures import build_facilities, load_complete_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.db import Database
-from westbusan.entity_resolution.match import build_facilities, record_pair_adjudication
+from westbusan.entity_resolution.match import record_pair_adjudication
 from westbusan.models import SourceStatus
+
+load_license_snapshot = load_complete_license_snapshot
 
 
 @pytest.mark.parametrize(
@@ -124,8 +127,8 @@ def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_p
                 "BPLC_NM": "부산바다호텔",
                 "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
                     "SITETEL": "051-123-4567",
-                    "DTL_STATE_GBN": "01",
-                    "DTL_STATE_NM": "영업/정상",
+                    "SALS_STTS_CD": "01",
+                    "SALS_STTS_NM": "영업",
             },
             date(2026, 8, 16),
         ),
@@ -136,8 +139,8 @@ def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_p
                 "BPLC_NM": "부산 바다 호텔",
                 "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
                     "SITETEL": "0511234567",
-                    "DTL_STATE_GBN": "01",
-                    "DTL_STATE_NM": "영업/정상",
+                    "SALS_STTS_CD": "01",
+                    "SALS_STTS_NM": "영업",
             },
             date(2026, 8, 16),
         ),
@@ -147,8 +150,8 @@ def test_build_preserves_dual_registrations_and_keeps_review_pair_separate(tmp_p
                 "MNG_NO": "L2",
                 "BPLC_NM": "별도 게스트하우스",
                     "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
-                    "DTL_STATE_GBN": "01",
-                    "DTL_STATE_NM": "영업/정상",
+                    "SALS_STTS_CD": "01",
+                    "SALS_STTS_NM": "영업",
             },
             date(2026, 8, 16),
         ),
@@ -344,6 +347,144 @@ def test_component_merge_persists_losing_facility_as_survivor_alias(
            where alias_facility_id = ?""",
         [losing],
     ) == [(survivor, "component_merge_survivor")]
+
+
+def test_entity_latest_record_falls_back_past_later_failed_inactive_retry(
+    tmp_path: Path,
+) -> None:
+    """Filter eligible source runs before ranking record revisions."""
+    db = Database(tmp_path / "entity-fallback.duckdb", Path("sql")); db.migrate()
+    first, failed, target = uuid4(), uuid4(), uuid4()
+    for run_id, started in (
+        (first, "2026-08-16"),
+        (failed, "2026-08-17"),
+        (target, "2026-08-18"),
+    ):
+        db.connection.execute(
+            "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', ?, 'DONE')",
+            [run_id, started],
+        )
+    active = _license(
+        "lodgings", "L1", "바다호텔", "부산광역시 사하구 바다로 1", "051-111-1111"
+    )
+    load_license_snapshot(db, [active], first)
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, first)
+    )
+    build_facilities(db, first)
+    canonical = db.query("select facility_id from bridge_facility_license")[0][0]
+
+    inactive = replace(
+        _license(
+            "lodgings", "L1", "바다호텔", "부산광역시 사하구 바다로 1",
+            "051-111-1111", observed_on=date(2026, 8, 17),
+        ),
+        status_code="02",
+        status_name="폐업",
+    )
+    load_license_snapshot(db, [inactive], failed)
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 17, 1, tzinfo=UTC), "READY", {}, failed)
+    )
+    db.record_source_status(
+        SourceStatus(
+            "lodgings",
+            datetime(2026, 8, 17, 2, tzinfo=UTC),
+            "SCHEMA_CHANGED",
+            {},
+            failed,
+        )
+    )
+
+    result = build_facilities(db, target)
+
+    assert result.facility_count == 1
+    assert db.query("select facility_id from bridge_facility_license") == [(canonical,)]
+
+
+def test_same_date_failed_retry_uses_migrated_integrity_revision(
+    tmp_path: Path,
+) -> None:
+    """The combined schema keeps the older complete revision immutable."""
+    db = Database(tmp_path / "same-date-guard.duckdb", Path("sql")); db.migrate()
+    first, failed, target = uuid4(), uuid4(), uuid4()
+    for run_id, started in (
+        (first, "2026-08-16 01:00:00"),
+        (failed, "2026-08-16 02:00:00"),
+        (target, "2026-08-16 03:00:00"),
+    ):
+        db.connection.execute(
+            "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', ?, 'DONE')",
+            [run_id, started],
+        )
+    active = _license(
+        "lodgings", "L1", "바다호텔", "부산광역시 사하구 바다로 1", "051-111-1111"
+    )
+    load_license_snapshot(db, [active], first)
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 16, 1, tzinfo=UTC), "READY", {}, first)
+    )
+    build_facilities(db, first)
+    inactive = replace(active, status_code="02", status_name="폐업")
+    load_license_snapshot(db, [inactive], failed)
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 16, 2, tzinfo=UTC), "READY", {}, failed)
+    )
+    db.record_source_status(
+        SourceStatus(
+            "lodgings",
+            datetime(2026, 8, 16, 2, 30, tzinfo=UTC),
+            "SCHEMA_CHANGED",
+            {},
+            failed,
+        )
+    )
+
+    assert build_facilities(db, target).facility_count == 1
+
+
+def test_same_date_failed_retry_uses_approved_immutable_revision(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "same-date-revision.duckdb", Path("sql")); db.migrate()
+    first, failed, target = uuid4(), uuid4(), uuid4()
+    for run_id, started in (
+        (first, "2026-08-16 01:00:00"),
+        (failed, "2026-08-16 02:00:00"),
+        (target, "2026-08-16 03:00:00"),
+    ):
+        db.connection.execute(
+            """insert into pipeline_run (
+                   run_id, mode, started_at, status, business_date
+               ) values (?, 'test', ?, 'DONE', '2026-08-16')""",
+            [run_id, started],
+        )
+    active = _license(
+        "lodgings", "L1", "바다호텔", "부산광역시 사하구 바다로 1", "051-111-1111"
+    )
+    load_license_snapshot(db, [active], first)
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 16, 1, tzinfo=UTC), "READY", {}, first)
+    )
+    build_facilities(db, first)
+    canonical = db.scalar("select facility_id from bridge_facility_license")
+    load_license_snapshot(
+        db, [replace(active, status_code="02", status_name="폐업")], failed
+    )
+    db.record_source_status(
+        SourceStatus("lodgings", datetime(2026, 8, 16, 2, tzinfo=UTC), "READY", {}, failed)
+    )
+    db.record_source_status(
+        SourceStatus(
+            "lodgings", datetime(2026, 8, 16, 2, 30, tzinfo=UTC),
+            "SCHEMA_CHANGED", {}, failed,
+        )
+    )
+
+    result = build_facilities(db, target)
+
+    assert result.facility_count == 1
+    assert db.query("select facility_id from bridge_facility_license") == [(canonical,)]
 
 
 def test_unmatched_tourist_pension_is_reviewed_without_creating_a_facility(tmp_path: Path) -> None:
@@ -719,8 +860,8 @@ def _license(
         "MNG_NO": source_record_id,
         "BPLC_NM": name,
         "ROAD_NM_ADDR": address,
-        "DTL_STATE_GBN": "01",
-        "DTL_STATE_NM": "영업/정상",
+        "SALS_STTS_CD": "01",
+        "SALS_STTS_NM": "영업",
     }
     if phone is not None:
         row["SITETEL"] = phone

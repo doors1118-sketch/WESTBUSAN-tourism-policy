@@ -113,6 +113,19 @@ NULL/insufficient로 표시합니다. 현행 재고는 원천별 마지막 완�
 않습니다. 한 필지에 여러 건축물대장 표제가 조회되면 자동 fan-out하지 않고
 `building_link_review` 후보로 남깁니다.
 
+동일 날짜 재시도까지 재현하려면 무결성 트랙의 불변 계약이 필요합니다. 분석
+코드는 `pipeline_run_input(run_id, input_run_id, observed_at)`으로 승인된 입력만
+보고, `staging_license_revision.version_run_id = pipeline_run_input.input_run_id`를
+결합한 뒤 대상 실행의 `business_date` 이하에서 `observed_on`,
+`source_updated_at`, 입력 실행 `started_at`, `recorded_at`, `revision_sequence`
+순으로 최신 행을 정합니다. 시설 소속은 대상 실행과 정확히 일치하는
+`run_facility`·`run_facility_license`를 우선 사용합니다. 건축 연결과 사실 데이터는
+각각 `run_facility_building`·`run_license_building_observation`,
+`run_fact_observation`으로 같은 방식의 실행 소속을 확인해야 합니다. 이 테이블이
+아직 합쳐지지 않은 환경에서는 안전한 기존 snapshot만 허용하며, 동일 날짜의
+후속 재시도가 선택된 완결행을 덮어쓴 정황이 있으면 분석/시설 빌드를 명시적으로
+차단합니다. 따라서 최종 게시 승인은 무결성 트랙 통합 후 다시 수행해야 합니다.
+
 현재 시설·지역월·품질·중복검토 export는 각각 CSV와 Parquet로
 `data/exports/export_date=YYYY-MM-DD` 아래 생성됩니다. 원문·Parquet는
 `data/raw`, DuckDB 기본값은 `data/westbusan.duckdb`, JSONL 로그 기본값은

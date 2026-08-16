@@ -7,7 +7,7 @@ import json
 from calendar import monthrange
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import date
 from statistics import mean, median
 from typing import Literal
@@ -17,7 +17,14 @@ from westbusan.config import PolicyConfig, RegionConfig
 from westbusan.db import Database, ensure_run_rebuildable
 from westbusan.inventory import (
     is_active_status,
+    is_explicitly_inactive_status,
     latest_complete_snapshot_runs,
+)
+from westbusan.revisions import (
+    latest_immutable_license_records,
+    require_immutable_for_overwritten_completed_runs,
+    target_facility_license_links,
+    target_facility_metadata,
 )
 
 QualityBand = Literal["good", "warning", "insufficient", "incompatible"]
@@ -325,31 +332,109 @@ def _as_of_date(db: Database, run_id: UUID) -> date | None:
 def _facility_rows(
     db: Database, run_id: UUID, as_of: date | None
 ) -> list[dict[str, object]]:
-    snapshots = db.query(
-        """select link.facility_id, facility.district, facility.region_group,
-               snap.source_id, snap.room_count, snap.license_date, snap.closure_date,
-               snap.observed_on, snap.status_code, snap.status_name,
-               snap.version_run_id, snap.source_record_id
-        from run_facility_license as link
-        join run_facility as facility
-          on facility.run_id = link.run_id and facility.facility_id = link.facility_id
-        join staging_license_revision as snap
-          on snap.version_run_id = link.selected_version_run_id
-         and snap.source_id = link.source_id
-         and snap.source_record_id = link.source_record_id
-         and snap.observed_on = link.selected_observed_on
-         and snap.revision_sequence = link.selected_revision_sequence
-        where link.run_id = ?
-          and facility.district is not null and facility.region_group is not null
-        """,
-        [run_id],
+    visible_runs = _visible_run_ids(db, run_id)
+    placeholders = ",".join("?" for _ in visible_runs)
+    history_exists = bool(
+        db.query(
+            "select 1 from facility_component_history where run_id = ? limit 1",
+            [run_id],
+        )
     )
     completed = latest_complete_snapshot_runs(db, run_id)
+    strict_membership = bool(
+        db.query("select 1 from pipeline_run where run_id = ?", [run_id])
+    )
+    immutable = (
+        latest_immutable_license_records(db, run_id, completed)
+        if strict_membership
+        else None
+    )
+    if immutable is not None:
+        metadata = target_facility_metadata(db, run_id)
+        records = {
+            (str(record["source_id"]), str(record["source_record_id"])): record
+            for record in immutable
+        }
+        snapshots = []
+        for facility_id, source_id, source_record_id in target_facility_license_links(
+            db, run_id
+        ):
+            record = records.get((source_id, source_record_id))
+            district, region_group = metadata.get(facility_id, (None, None))
+            if record is None or district is None or region_group is None:
+                continue
+            snapshots.append(
+                (
+                    facility_id, district, region_group, source_id,
+                    record["room_count"], record["license_date"],
+                    record["closure_date"], record["observed_on"],
+                    record["status_code"], record["status_name"],
+                    record["version_run_id"], source_record_id,
+                )
+            )
+    elif strict_membership and not completed:
+        snapshots = []
+    else:
+        if strict_membership:
+            require_immutable_for_overwritten_completed_runs(db, run_id, completed)
+        link_select = (
+            """select facility_id, source_id, source_record_id, district,
+                      region_group
+               from facility_component_history where run_id = ?"""
+            if history_exists
+            else """select link.facility_id, link.source_id,
+                             link.source_record_id, facility.district,
+                             facility.region_group
+                      from bridge_facility_license as link
+                      join dim_facility as facility
+                        on facility.facility_id = link.facility_id"""
+        )
+        link_params: list[object] = [run_id] if history_exists else []
+        if completed:
+            eligible_values = ",".join("(?, ?)" for _ in completed)
+            eligible_params = [
+                value
+                for source_id, source_run in sorted(completed.items())
+                for value in (source_id, source_run)
+            ]
+            eligible_join = f"""join (values {eligible_values})
+                    as eligible(source_id, run_id)
+                  on eligible.source_id = staged.source_id
+                 and (eligible.run_id = staged.first_loaded_run_id
+                      or eligible.run_id = staged.last_loaded_run_id)"""
+        else:
+            eligible_params = []
+            eligible_join = ""
+        snapshots = db.query(
+            f"""with link as ({link_select}), latest as (
+                    select staged.*, row_number() over (
+                        partition by staged.source_id, staged.source_record_id
+                        order by staged.observed_on desc,
+                                 staged.source_updated_at desc nulls last
+                    ) as row_num
+                    from staging_license_snapshot as staged
+                    {eligible_join}
+                    where staged.first_loaded_run_id in ({placeholders})
+                      and (? is null or staged.observed_on <= ?)
+                )
+                select link.facility_id, link.district, link.region_group,
+                       snap.source_id, snap.room_count, snap.license_date,
+                       snap.closure_date, snap.observed_on, snap.status_code,
+                       snap.status_name, snap.last_loaded_run_id,
+                       snap.source_record_id
+                from link join latest as snap
+                  on snap.source_id = link.source_id
+                 and snap.source_record_id = link.source_record_id
+                 and snap.row_num = 1
+                where link.district is not null
+                  and link.region_group is not null""",
+            [*link_params, *eligible_params, *visible_runs, as_of, as_of],
+        )
     active_designations = _active_designation_facility_ids(db, run_id)
     by_facility: dict[object, list[tuple[object, ...]]] = defaultdict(list)
     for row in snapshots:
         source_id = str(row[3])
-        if source_id in completed and row[10] != completed[source_id]:
+        if strict_membership and source_id not in completed:
             continue
         if not is_active_status(row[8], row[9], row[6], row[7]):
             continue
@@ -414,8 +499,32 @@ def _active_designation_facility_ids(
         """select facility_id, source_id, source_record_id
            from bridge_facility_designation"""
     )
-    snapshots = db.query(
-        f"""select source_id, source_record_id, status_code, status_name,
+    completed = latest_complete_snapshot_runs(db, run_id)
+    selected_run = completed.get("tourist_pensions")
+    strict_membership = bool(
+        db.query("select 1 from pipeline_run where run_id = ?", [run_id])
+    )
+    immutable = (
+        latest_immutable_license_records(
+            db, run_id, completed, source_id="tourist_pensions"
+        )
+        if strict_membership
+        else None
+    )
+    if immutable is not None:
+        snapshots = [
+            (
+                record["source_id"], record["source_record_id"],
+                record["status_code"], record["status_name"],
+                record["closure_date"], record["observed_on"],
+                record["version_run_id"],
+            )
+            for record in immutable
+        ]
+    elif selected_run is not None:
+        require_immutable_for_overwritten_completed_runs(db, run_id, completed)
+        snapshots = db.query(
+            f"""select source_id, source_record_id, status_code, status_name,
                    closure_date, observed_on, last_loaded_run_id
             from (
                 select *, row_number() over (
@@ -425,26 +534,39 @@ def _active_designation_facility_ids(
                 from staging_license_snapshot
                 where first_loaded_run_id in ({placeholders})
                   and source_id = 'tourist_pensions'
+                  and (first_loaded_run_id = ? or last_loaded_run_id = ?)
             ) where row_number = 1""",
-        list(visible),
-    )
+            [*visible, selected_run, selected_run],
+        )
+    elif strict_membership:
+        return set()
+    else:
+        snapshots = db.query(
+            f"""select source_id, source_record_id, status_code, status_name,
+                       closure_date, observed_on, last_loaded_run_id
+                from (
+                    select *, row_number() over (
+                        partition by source_id, source_record_id
+                        order by observed_on desc,
+                                 source_updated_at desc nulls last
+                    ) as row_number
+                    from staging_license_snapshot
+                    where first_loaded_run_id in ({placeholders})
+                      and source_id = 'tourist_pensions'
+                ) where row_number = 1""",
+            list(visible),
+        )
     by_key = {
         (str(source_id), str(source_record_id)): row
         for row in snapshots
         for source_id, source_record_id in [row[:2]]
     }
-    completed = latest_complete_snapshot_runs(db, run_id)
     active: set[object] = set()
     for facility_id, source_id, source_record_id in links:
         row = by_key.get((str(source_id), str(source_record_id)))
         if row is None:
             continue
-        _, _, code, name, closure, observed, loaded_run = row
-        if (
-            str(source_id) in completed
-            and loaded_run != completed[str(source_id)]
-        ):
-            continue
+        _, _, code, name, closure, observed, _ = row
         if is_active_status(code, name, closure, observed):
             active.add(facility_id)
     return active
@@ -782,6 +904,21 @@ def _region_rows(
                     "interpretation": "visitor-person-days pressure; not monthly unique tourists or occupancy",
                 }
             )
+            for metric_name, native_coverage in (
+                ("lodging_consumption_per_room", consumption[2]),
+                ("transport_inflow_per_room", transport[2]),
+            ):
+                evidence[metric_name]["coverage_components"] = {
+                    "numerator_expected_day": native_coverage["day_coverage"],
+                    "numerator_source": native_coverage["source_coverage"],
+                    "numerator_dimension": native_coverage[
+                        "dimension_coverage"
+                    ],
+                    "numerator_geography": native_coverage[
+                        "geography_coverage"
+                    ],
+                    "denominator_total_room": period_values["coverage"],
+                }
             evidence["tourism_registration_room_share"]["coverage_components"] = {
                 "denominator_total_room": period_values["coverage"],
                 "numerator_tourism_subgroup_room": period_values[
@@ -962,6 +1099,10 @@ def _same_period_inventory(
     """Build the room distribution from this period's snapshot, never today’s one."""
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
+    completed = latest_complete_snapshot_runs(db, run_id, period=period)
+    strict_membership = bool(
+        db.query("select 1 from pipeline_run where run_id = ?", [run_id])
+    )
     history_exists = bool(
         db.query(
             f"""select 1 from facility_component_history
@@ -1022,31 +1163,87 @@ def _same_period_inventory(
                   and (? is null or snapshot.observed_on <= ?)""",
             [run_id, district, f"{period}%", *visible_runs, as_of, as_of],
         )
-    completed = latest_complete_snapshot_runs(db, run_id, period=period)
+    immutable = (
+        latest_immutable_license_records(
+            db, run_id, completed, period=period
+        )
+        if strict_membership
+        else None
+    )
+    if immutable is not None:
+        link_by_key: dict[tuple[str, str], tuple[object, object | None]] = {}
+        for facility_id, source_id, source_record_id, link_district in db.query(
+            f"""select history.facility_id, history.source_id,
+                       history.source_record_id, history.district
+                from facility_component_history as history
+                left join pipeline_run as input on input.run_id = history.run_id
+                where history.run_id in ({placeholders})
+                order by input.started_at nulls first, history.recorded_at""",
+            list(visible_runs),
+        ):
+            link_by_key[(str(source_id), str(source_record_id))] = (
+                facility_id, link_district
+            )
+        rows = []
+        for record in immutable:
+            key = (str(record["source_id"]), str(record["source_record_id"]))
+            linked = link_by_key.get(key)
+            if linked is None:
+                continue
+            record_district = record["district"] or linked[1]
+            if record_district != district:
+                continue
+            rows.append(
+                (
+                    linked[0], record["source_id"], record["source_record_id"],
+                    record["room_count"], record["status_code"],
+                    record["status_name"], record["closure_date"],
+                    record["observed_on"], record["version_run_id"],
+                )
+            )
+    elif strict_membership:
+        require_immutable_for_overwritten_completed_runs(db, run_id, completed)
+    eligible_rows = [
+        row
+        for row in rows
+        if (
+            str(row[1]) in completed
+            and row[8] == completed[str(row[1])]
+        )
+        or (not strict_membership and not completed)
+    ]
     completed_run_ids = tuple(completed.values())
     completed_placeholders = ",".join("?" for _ in completed_run_ids)
-    raw_snapshot_rows = (
-        db.query(
-            f"""select 1 from staging_license_revision
-                where district = ? and observed_on::varchar like ?
-                  and version_run_id in ({completed_placeholders})
-                """,
-            [district, f"{period}%", *completed_run_ids],
+    if immutable is not None:
+        raw_snapshot_rows = [
+            (
+                record["status_code"], record["status_name"],
+                record["closure_date"], record["observed_on"],
+            )
+            for record in immutable
+            if record["district"] == district
+        ]
+    else:
+        raw_snapshot_rows = (
+            db.query(
+                f"""select status_code, status_name, closure_date, observed_on
+                    from staging_license_snapshot
+                    where district = ? and observed_on::varchar like ?
+                      and last_loaded_run_id in ({completed_placeholders})
+                    """,
+                [district, f"{period}%", *completed_run_ids],
+            )
+            if completed_run_ids
+            else []
         )
-        if completed_run_ids
-        else []
+    raw_rows_explicitly_inactive = bool(raw_snapshot_rows) and all(
+        is_explicitly_inactive_status(code, name, closure, observed)
+        for code, name, closure, observed in raw_snapshot_rows
     )
-    raw_active = any(
-        is_active_status(code, name, closure, observed)
-        for _, code, name, closure, observed in db.query(
-            f"""select source_record_id, status_code, status_name,
-                       closure_date, observed_on
-                from staging_license_revision
-                where district = ? and observed_on::varchar like ?
-                  and version_run_id in ({completed_placeholders})""",
-            [district, f"{period}%", *completed_run_ids],
-        )
-    ) if completed_run_ids else False
+    linked_rows_explicitly_inactive = bool(eligible_rows) and all(
+        is_explicitly_inactive_status(row[4], row[5], row[6], row[7])
+        for row in eligible_rows
+    )
     selected_statuses = [
         str(
             db.query(
@@ -1061,32 +1258,15 @@ def _same_period_inventory(
     all_selected_empty = bool(selected_statuses) and all(
         status == "EMPTY" for status in selected_statuses
     )
-    history_period_evidence = bool(
-        history_exists
-        and completed_run_ids
-        and db.query(
-            f"""select 1
-                from facility_component_history as link
-                join staging_license_revision as snapshot
-                  on snapshot.source_id = link.source_id
-                 and snapshot.source_record_id = link.source_record_id
-                 and snapshot.version_run_id = link.source_snapshot_run_id
-                where link.run_id in ({placeholders})
-                  and link.source_snapshot_run_id in ({completed_placeholders})
-                  and snapshot.observed_on::varchar like ? limit 1""",
-            [*visible_runs, *completed_run_ids, f"{period}%"],
-        )
+    observed_snapshot_rows = (
+        linked_rows_explicitly_inactive
+        or all_selected_empty
+        or raw_rows_explicitly_inactive
     )
-    observed_snapshot_rows = bool(rows) or all_selected_empty or bool(
-        raw_snapshot_rows and not raw_active
-    ) or history_period_evidence
     rows = [
         row
-        for row in rows
-        if (
-            str(row[1]) not in completed or row[8] == completed[str(row[1])]
-        )
-        and is_active_status(row[4], row[5], row[6], row[7])
+        for row in eligible_rows
+        if is_active_status(row[4], row[5], row[6], row[7])
     ]
     if not rows:
         if observed_snapshot_rows:
@@ -1700,19 +1880,106 @@ def _event_changes(
         return 0, 0
     visible_runs = _visible_run_ids(db, run_id)
     placeholders = ",".join("?" for _ in visible_runs)
-    rows = db.query(
-        f"""select distinct link.facility_id, snapshot.license_date, snapshot.closure_date
-        from run_facility_license as link
-        join staging_license_revision as snapshot
-          on snapshot.source_id = link.source_id and snapshot.source_record_id = link.source_record_id
-        join run_facility as facility
-          on facility.run_id = link.run_id and facility.facility_id = link.facility_id
-        where link.run_id = ? and facility.district = ?
-          and snapshot.source_id <> 'tourist_pensions'
-          and snapshot.version_run_id in ({placeholders})
-          and (? is null or snapshot.observed_on <= ?)""",
-        [run_id, district, *visible_runs, as_of, as_of],
+    completed = latest_complete_snapshot_runs(db, run_id, period=period)
+    strict_membership = bool(
+        db.query("select 1 from pipeline_run where run_id = ?", [run_id])
     )
+    immutable = (
+        latest_immutable_license_records(
+            db, run_id, completed, period=period
+        )
+        if strict_membership
+        else None
+    )
+    if immutable is not None:
+        facility_by_key: dict[tuple[str, str], tuple[object, object | None]] = {}
+        for facility_id, source_id, source_record_id, link_district in db.query(
+            f"""select history.facility_id, history.source_id,
+                       history.source_record_id, history.district
+                from facility_component_history as history
+                left join pipeline_run as input on input.run_id = history.run_id
+                where history.run_id in ({placeholders})
+                order by input.started_at nulls first, history.recorded_at""",
+            list(visible_runs),
+        ):
+            facility_by_key[(str(source_id), str(source_record_id))] = (
+                facility_id, link_district
+            )
+        rows = []
+        for record in immutable:
+            if record["source_id"] == "tourist_pensions":
+                continue
+            linked = facility_by_key.get(
+                (str(record["source_id"]), str(record["source_record_id"]))
+            )
+            if linked is None or (record["district"] or linked[1]) != district:
+                continue
+            rows.append(
+                (linked[0], record["license_date"], record["closure_date"])
+            )
+    elif completed:
+        if strict_membership:
+            require_immutable_for_overwritten_completed_runs(db, run_id, completed)
+        eligible_values = ",".join("(?, ?)" for _ in completed)
+        eligible_params = [
+            value
+            for source_id, source_run in sorted(completed.items())
+            for value in (source_id, source_run)
+        ]
+        rows = db.query(
+            f"""with eligible(source_id, run_id) as (
+                    values {eligible_values}
+                ), eligible_snapshot as (
+                    select snapshot.*,
+                           row_number() over (
+                               partition by snapshot.source_id,
+                                            snapshot.source_record_id
+                               order by snapshot.observed_on desc,
+                                        snapshot.source_updated_at desc nulls last
+                           ) as row_number
+                    from staging_license_snapshot as snapshot
+                    join eligible
+                      on eligible.source_id = snapshot.source_id
+                     and (eligible.run_id = snapshot.first_loaded_run_id
+                          or eligible.run_id = snapshot.last_loaded_run_id)
+                    where (? is null or snapshot.observed_on <= ?)
+                )
+                select distinct link.facility_id, snapshot.license_date,
+                                snapshot.closure_date
+                from eligible_snapshot as snapshot
+                join facility_component_history as link
+                  on link.source_id = snapshot.source_id
+                 and link.source_record_id = snapshot.source_record_id
+                 and link.run_id in ({placeholders})
+                where snapshot.row_number = 1
+                  and coalesce(snapshot.district, link.district) = ?
+                  and snapshot.source_id <> 'tourist_pensions'""",
+            [
+                *eligible_params,
+                as_of,
+                as_of,
+                *visible_runs,
+                district,
+            ],
+        )
+    elif strict_membership:
+        rows = []
+    else:
+        rows = db.query(
+            f"""select distinct link.facility_id, snapshot.license_date,
+                               snapshot.closure_date
+                from bridge_facility_license as link
+                join staging_license_snapshot as snapshot
+                  on snapshot.source_id = link.source_id
+                 and snapshot.source_record_id = link.source_record_id
+                join dim_facility as facility
+                  on facility.facility_id = link.facility_id
+                where facility.district = ?
+                  and snapshot.source_id <> 'tourist_pensions'
+                  and snapshot.first_loaded_run_id in ({placeholders})
+                  and (? is null or snapshot.observed_on <= ?)""",
+            [district, *visible_runs, as_of, as_of],
+        )
     openings = {(facility, value) for facility, value, _ in rows if isinstance(value, date) and value.isoformat().startswith(period)}
     closures = {(facility, value) for facility, _, value in rows if isinstance(value, date) and value.isoformat().startswith(period)}
     return len(openings), len(closures)
