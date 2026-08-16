@@ -20,7 +20,12 @@ from westbusan.http import (
 from westbusan.models import ApiPage, SourceSpec
 
 
-def parse_data_page(body: bytes, content_type: str) -> ApiPage:
+def parse_data_page(
+    body: bytes,
+    content_type: str,
+    *,
+    require_paging_metadata: bool = False,
+) -> ApiPage:
     """Parse the JSON or XML envelope forms used by data.go.kr APIs."""
     decoded = _decode(body, content_type)
     raise_for_portal_error(body, content_type)
@@ -37,9 +42,33 @@ def parse_data_page(body: bytes, content_type: str) -> ApiPage:
         else:
             raise SchemaError("no recognized data.go.kr row container")
     rows = _rows(rows_value)
-    total_count = _integer(_metadata(root, body_node, "totalCount"), len(rows))
-    page_no = _integer(_metadata(root, body_node, "pageNo"), 1)
-    page_size = _integer(_metadata(root, body_node, "numOfRows"), len(rows))
+    total_value = _metadata(root, body_node, "totalCount")
+    page_value = _metadata(root, body_node, "pageNo")
+    size_value = _metadata(root, body_node, "numOfRows")
+    if require_paging_metadata and rows and any(
+        value is None for value in (total_value, page_value, size_value)
+    ):
+        raise SchemaError(
+            "nonempty response is missing required paging metadata"
+        )
+    if require_paging_metadata and not rows and not _is_explicit_no_data(
+        root, body_node
+    ):
+        raise SchemaError("empty response is not an explicit no-data envelope")
+    total_count = _integer(total_value, len(rows))
+    page_no = _integer(page_value, 1)
+    page_size = _integer(size_value, 0 if not rows else len(rows))
+    if require_paging_metadata:
+        if total_count < 0 or page_no < 1 or page_size < 0:
+            raise SchemaError("paging metadata contains an invalid value")
+        if rows and (
+            total_count < len(rows)
+            or page_size < 1
+            or len(rows) > page_size
+        ):
+            raise SchemaError("paging metadata contradicts the returned rows")
+        if not rows and total_count != 0:
+            raise SchemaError("explicit no-data response has a nonzero totalCount")
     return ApiPage(
         rows=rows,
         total_count=total_count,

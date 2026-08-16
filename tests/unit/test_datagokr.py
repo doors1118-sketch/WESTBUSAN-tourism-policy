@@ -140,6 +140,24 @@ def test_parse_explicit_no_data_response() -> None:
     assert page.total_count == 0
 
 
+def test_strict_paging_accepts_only_an_explicit_empty_envelope() -> None:
+    """Catches an arbitrary empty row container being treated as provider no-data evidence."""
+    with pytest.raises(SchemaError, match="explicit no-data"):
+        parse_data_page(
+            b'{"data":[]}',
+            "application/json",
+            require_paging_metadata=True,
+        )
+
+    page = parse_data_page(
+        b'{"response":{"header":{"resultCode":"00","resultMsg":"NO_DATA"},"body":{}}}',
+        "application/json",
+        require_paging_metadata=True,
+    )
+    assert page.rows == []
+    assert page.total_count == 0
+
+
 @pytest.mark.parametrize(
     ("result_code", "error_type"), [("20", AuthenticationError), ("22", QuotaError)]
 )

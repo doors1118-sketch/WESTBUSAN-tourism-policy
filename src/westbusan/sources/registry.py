@@ -201,7 +201,13 @@ def probe_source(spec: SourceSpec, client: SafeHttpClient, db: Database) -> Sour
             result.body, result.content_type, spec.response_row_path
         ):
             raise SchemaError("response does not contain the inspected row path")
-        page = parse_data_page(result.body, result.content_type)
+        page = parse_data_page(
+            result.body,
+            result.content_type,
+            require_paging_metadata=spec.url.startswith(
+                "https://apis.data.go.kr/1741000/"
+            ),
+        )
     except AuthenticationError as error:
         return _persist(db, _status(spec.source_id, "AUTH_FAILED", _error_detail(error)))
     except QuotaError as error:

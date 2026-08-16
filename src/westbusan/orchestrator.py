@@ -799,10 +799,26 @@ class Pipeline:
         next_page = int(checkpoint.get("next_page", 1)) if same_attempt else 1
         if same_attempt and checkpoint.get("status") == "completed":
             return 0
+        checkpoint_evidence = checkpoint.get("evidence") if same_attempt else None
+        if checkpoint_evidence is not None and not isinstance(
+            checkpoint_evidence, dict
+        ):
+            raise SchemaError("accommodation checkpoint evidence is malformed")
+        received_rows = int(
+            (checkpoint_evidence or {}).get("received_rows", 0)
+        )
+        expected_total_value = (checkpoint_evidence or {}).get("total_count")
+        expected_total = (
+            int(expected_total_value) if expected_total_value is not None else None
+        )
+        if next_page > 1 and expected_total is None:
+            raise SchemaError(
+                "nonfirst accommodation checkpoint lacks cumulative paging evidence"
+            )
         client = SafeHttpClient()
         page_no = next_page
         loaded = 0
-        accepted_total = 0
+        accepted_total = received_rows
         out_of_scope_total = 0
         rejected_total = 0
         started = monotonic()
@@ -816,7 +832,30 @@ class Pipeline:
                 spec.format_parameter: spec.format_value,
             }
             result = client.get(spec.endpoint_url, parameters)
-            page = parse_data_page(result.body, result.content_type)
+            page = parse_data_page(
+                result.body,
+                result.content_type,
+                require_paging_metadata=True,
+            )
+            if page.page_no != page_no:
+                raise SchemaError(
+                    f"response page {page.page_no} does not match requested page {page_no}"
+                )
+            if page.rows and page.page_size > spec.page_size:
+                raise SchemaError(
+                    "returned numOfRows exceeds the reviewed request page size"
+                )
+            if expected_total is None:
+                expected_total = page.total_count
+            elif page.total_count != expected_total:
+                raise SchemaError(
+                    "accommodation totalCount changed during pagination"
+                )
+            next_received_rows = received_rows + len(page.rows)
+            if next_received_rows > expected_total:
+                raise SchemaError("received rows exceed accommodation totalCount")
+            if not page.rows and next_received_rows < expected_total:
+                raise SchemaError("pagination ended before accommodation totalCount")
             normalized = [normalize_license(source_id, row, as_of) for row in page.rows]
             accepted = [
                 record
@@ -856,6 +895,8 @@ class Pipeline:
                     },
                     "counts": counts,
                     "total_count": page.total_count,
+                    "returned_page_no": page.page_no,
+                    "returned_page_size": page.page_size,
                     "schema_fingerprint": page.schema_fingerprint,
                 },
                 result.body,
@@ -898,18 +939,23 @@ class Pipeline:
             self._refresh_lease(run.run_id)
             load_license_snapshot(self.db, accepted, run.run_id)
             loaded += len(accepted)
-            completed = not page.rows or page_no * spec.page_size >= page.total_count
+            received_rows = next_received_rows
+            completed = received_rows == expected_total
             self._checkpoint(
                 source_id,
                 partition,
                 "completed" if completed else "running",
                 page_no + 1,
                 run.run_id,
+                evidence={
+                    "received_rows": received_rows,
+                    "total_count": expected_total,
+                },
             )
             if completed:
                 break
             page_no += 1
-        status = "READY" if loaded else "EMPTY"
+        status = "READY" if received_rows else "EMPTY"
         self._refresh_lease(run.run_id)
         self.db.record_source_status(
             SourceStatus(
@@ -919,7 +965,7 @@ class Pipeline:
                 {
                     "operation": spec.operation,
                     "partition": as_of.isoformat(),
-                    "row_count": loaded,
+                    "row_count": received_rows,
                     "jurisdiction_filter": {
                         "parameter": jurisdiction_parameter,
                         "expected": jurisdiction_expected,

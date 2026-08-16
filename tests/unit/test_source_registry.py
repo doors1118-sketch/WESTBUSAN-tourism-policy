@@ -99,6 +99,34 @@ def test_probe_records_ready_status_without_service_key(tmp_path: Path, monkeypa
     }
 
 
+def test_official_accommodation_probe_rejects_invented_paging_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches the one-row probe approving a malformed 1741000 response."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-service-key")
+    spec = SourceRegistry.load(Path("config/sources.yaml")).get("lodgings")
+    db = Database(tmp_path / "status.duckdb", Path("sql"))
+    db.migrate()
+    client = SafeHttpClient(
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "data": [{"MNG_NO": "L1", "OPN_ATMY_GRP_CD": "6260000"}],
+                        "totalCount": 1,
+                    },
+                )
+            )
+        ),
+        sleeper=lambda _: None,
+    )
+
+    status = probe_source(spec, client, db)
+
+    assert status.status == "SCHEMA_CHANGED"
+
+
 @pytest.mark.parametrize(
     ("source_id", "body", "expected_status"),
     [
