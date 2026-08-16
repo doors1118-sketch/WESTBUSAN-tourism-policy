@@ -44,11 +44,11 @@ def _payload(record: LicenseRecord) -> tuple[list[object], str]:
 
 _INSERT_SQL = """
 insert into staging_license_snapshot (
-    source_id, source_record_id, observed_on, first_loaded_run_id, source_name,
+    source_id, source_record_id, observed_on, first_loaded_run_id, last_loaded_run_id, source_name,
     normalized_name, road_address, lot_address, district, region_group, region_quality,
     license_date, closure_date, status_code, status_name, room_count, room_count_quality,
     normalized_phone, longitude, latitude, source_updated_at, source_payload_json, record_hash
-) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 _UPDATE_SQL = """
@@ -57,7 +57,7 @@ update staging_license_snapshot set
     district = ?, region_group = ?, region_quality = ?, license_date = ?, closure_date = ?,
     status_code = ?, status_name = ?, room_count = ?, room_count_quality = ?,
     normalized_phone = ?, longitude = ?, latitude = ?, source_updated_at = ?,
-    source_payload_json = ?, record_hash = ?
+    source_payload_json = ?, record_hash = ?, last_loaded_run_id = ?
 where source_id = ? and source_record_id = ? and observed_on = ?
 """
 
@@ -84,12 +84,29 @@ def load_license_snapshot(
             [record.source_id, record.source_record_id, record.observed_on],
         )
         if not existing:
-            db.connection.execute(_INSERT_SQL, [*values[:3], run_id, *values[3:], record_hash])
+            db.connection.execute(
+                _INSERT_SQL, [*values[:3], run_id, run_id, *values[3:], record_hash]
+            )
             changed += 1
         elif existing[0][0] != record_hash:
             db.connection.execute(
                 _UPDATE_SQL,
-                [*values[3:], record_hash, record.source_id, record.source_record_id, record.observed_on],
+                [
+                    *values[3:],
+                    record_hash,
+                    run_id,
+                    record.source_id,
+                    record.source_record_id,
+                    record.observed_on,
+                ],
             )
             changed += 1
+        else:
+            db.connection.execute(
+                """
+                update staging_license_snapshot set last_loaded_run_id = ?
+                where source_id = ? and source_record_id = ? and observed_on = ?
+                """,
+                [run_id, record.source_id, record.source_record_id, record.observed_on],
+            )
     return changed

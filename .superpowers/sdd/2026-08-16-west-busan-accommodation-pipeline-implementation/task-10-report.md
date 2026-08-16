@@ -19,3 +19,13 @@
 - Quality evidence uses canonical JSON and recursively redacts credential-shaped keys.
 - Publication performs no pointer write until the report has no failed required check, then updates the sole pointer in one DuckDB transaction.
 - A rejected later run leaves the previously published run current, and repeated publication of the same valid run remains a single pointer row.
+
+## Independent-review hardening
+
+- A completed quality suite now writes an atomic manifest containing a deterministic report hash and every expected quality row. Publication accepts only that exact run's complete, persisted, untampered suite and rechecks database failures inside its transaction.
+- Source readiness, raw artifacts, staged snapshots, facts, facility evidence, and reconciliation are all run-scoped. `last_loaded_run_id` records the snapshot confirmed by each accommodation run; historical rows cannot satisfy a new run's gates.
+- Raw evidence is parsed from the retained response body rather than made-up request metadata. Totals reconcile by source, operation, partition, and a complete page set to the appropriate run-scoped target; missing structure, schema approval, totals, or targets fails closed.
+- Required availability failures block; explicitly optional unavailable sources stay visible as informational skips. An explicit EMPTY status remains distinct from authentication, quota, HTTP, spec, and schema failures.
+- Legal-dong import, zero/missing building coverage, source-date freshness, and active-facility change warnings are emitted from their actual tables. The labeled entity-resolution fixture is evaluated for every accommodation suite.
+- Redaction is recursive for service/API keys, tokens, auth, secrets, credentials, and passwords in source status, raw-request, and quality evidence persistence.
+- Added adversarial tests for forged/foreign/unpersisted/tampered reports, stale snapshots, missing evidence, readiness contracts, missing pages, secret leakage, obsolete evidence cleanup, and stable idempotent publication timestamps.

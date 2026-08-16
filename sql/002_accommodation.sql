@@ -3,6 +3,7 @@ create table if not exists staging_license_snapshot (
     source_record_id varchar not null,
     observed_on date not null,
     first_loaded_run_id uuid not null,
+    last_loaded_run_id uuid not null,
     source_name varchar,
     normalized_name varchar,
     road_address varchar,

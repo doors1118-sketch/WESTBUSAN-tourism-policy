@@ -17,7 +17,6 @@ import pyarrow.parquet as pq
 from westbusan.models import RawArtifact, RunContext
 
 _REDACTED = "***"
-_SENSITIVE_KEYS = {"servicekey", "apikey", "authorization"}
 
 
 class RawStore:
@@ -85,13 +84,21 @@ def _redact(value: object) -> object:
     if isinstance(value, Mapping):
         return {
             str(key): _REDACTED
-            if str(key).lower() in _SENSITIVE_KEYS
+            if _sensitive_key(str(key))
             else _redact(item)
             for key, item in value.items()
         }
     if isinstance(value, list):
         return [_redact(item) for item in value]
     return value
+
+
+def _sensitive_key(key: str) -> bool:
+    normalized = "".join(character for character in key.casefold() if character.isalnum())
+    return any(
+        marker in normalized
+        for marker in ("servicekey", "apikey", "token", "auth", "secret", "password", "credential")
+    )
 
 
 def _sha256(value: bytes) -> str:

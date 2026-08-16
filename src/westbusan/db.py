@@ -69,13 +69,14 @@ class Database:
         """Persist one redacted source-access check."""
         self.connection.execute(
             """
-            insert into source_status (source_id, checked_at, status, detail_json)
-            values (?, ?, ?, ?)
+            insert into source_status (source_id, checked_at, status, detail_json, run_id)
+            values (?, ?, ?, ?, ?)
             """,
             [
                 source_status.source_id,
                 source_status.checked_at,
                 source_status.status,
                 source_status.detail_json,
+                source_status.run_id,
             ],
         )

@@ -280,6 +280,7 @@ def load_tourism_demand(
                     spec,
                     "AUTH_FAILED",
                     {"reason": "DATA_GO_KR_SERVICE_KEY is not configured"},
+                    run,
                 )
                 source_succeeded = False
                 continue
@@ -289,6 +290,7 @@ def load_tourism_demand(
                     spec,
                     "SPEC_UNRESOLVED",
                     {"reason": _skip_reason(spec, service_key)},
+                    run,
                 )
                 source_succeeded = False
                 continue
@@ -310,6 +312,7 @@ def load_tourism_demand(
                             "parameters": parameters,
                             "pageNo": page.page_no,
                             "numOfRows": page.page_size,
+                            "total_count": page.total_count,
                             "schema_fingerprint": page.schema_fingerprint,
                             "source_revision": source_revision,
                         },
@@ -364,6 +367,7 @@ def load_tourism_demand(
                             "schema_fingerprint": page.schema_fingerprint,
                             "source_revision": artifact.content_hash,
                         },
+                        run,
                     )
             if backfill_phase is not None:
                 _record_backfill_checkpoint(
@@ -687,7 +691,11 @@ def _persist_record(
 
 
 def _record_status(
-    db: Database, spec: SourceSpec, status: str, detail: Mapping[str, object]
+    db: Database,
+    spec: SourceSpec,
+    status: str,
+    detail: Mapping[str, object],
+    run: RunContext,
 ) -> None:
     db.record_source_status(
         SourceStatus(
@@ -695,5 +703,6 @@ def _record_status(
             checked_at=datetime.now(UTC),
             status=status,  # type: ignore[arg-type]
             detail=detail,
+            run_id=run.run_id,
         )
     )

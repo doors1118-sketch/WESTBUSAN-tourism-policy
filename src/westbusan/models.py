@@ -70,11 +70,12 @@ class SourceStatus:
     checked_at: datetime
     status: SourceStatusCode
     detail: Mapping[str, object] = field(default_factory=dict)
+    run_id: UUID | None = None
 
     @property
     def detail_json(self) -> str:
         """Serialize stable, redacted detail for the source-status audit trail."""
-        return json.dumps(self.detail, ensure_ascii=False, sort_keys=True)
+        return json.dumps(_redact_detail(self.detail), ensure_ascii=False, sort_keys=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,3 +106,24 @@ class RawArtifact:
     path: Path
     created_at: datetime
     source_date: date | None = None
+
+
+def _redact_detail(value: object) -> object:
+    if isinstance(value, Mapping):
+        return {
+            str(key): "[REDACTED]" if _sensitive_key(str(key)) else _redact_detail(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_detail(item) for item in value]
+    if isinstance(value, tuple):
+        return [_redact_detail(item) for item in value]
+    return value
+
+
+def _sensitive_key(key: str) -> bool:
+    normalized = "".join(character for character in key.casefold() if character.isalnum())
+    return any(
+        marker in normalized
+        for marker in ("servicekey", "apikey", "token", "auth", "secret", "password", "credential")
+    )

@@ -28,6 +28,7 @@ create table if not exists source_status (
     checked_at timestamp with time zone not null,
     status varchar not null,
     detail_json varchar not null,
+    run_id uuid,
     primary key (source_id, checked_at)
 );
 
