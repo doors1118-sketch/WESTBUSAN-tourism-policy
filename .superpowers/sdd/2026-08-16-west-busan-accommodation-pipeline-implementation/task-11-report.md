@@ -58,3 +58,10 @@ Added five named adversarial unit regressions before implementation changes:
 The reusable visible-run rule now admits evidence from the target run and earlier runs only. Native monthly aggregation applies that rule and chooses one latest revision per period/dimension observation. Period-local metric construction preserves unknown-room coverage; growth evidence stores the actual gap as numerator/value; group pressure combines raw visitors and rooms; and partial comparison coverage is warning rather than good.
 
 Validation after round 4: `tests/unit/test_analytics.py tests/integration/test_marts.py`: 10 passed; full suite: 163 passed, 3 skipped; Ruff: passed; `git diff --check`: passed.
+
+## Rereview fix round 5
+
+- Wired `_visible_run_ids` through the facility snapshot, building snapshot, period-union, period-local inventory, and source-native fact aggregation paths. These paths now use `first_loaded_run_id`/fact producer run visibility instead of a target-run `last_loaded_run_id` shortcut.
+- `rg -n "_visible_run_ids\\(" src/westbusan/analytics/build.py` reports production call sites at the facility, building, period, inventory, and native-fact paths, plus the helper definition.
+
+Validation after round 5: focused analytics tests: 10 passed; full suite: 163 passed, 3 skipped; Ruff: passed; `git diff --check`: passed.
