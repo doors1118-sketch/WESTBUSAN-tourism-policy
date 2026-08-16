@@ -296,11 +296,14 @@ def _event_only_districts(
     existing: dict[str, dict[str, object]],
 ) -> dict[str, dict[str, object]]:
     """Keep closure-only districts in the mart with null supply metrics."""
+    visible_runs = _visible_run_ids(db, run_id)
+    placeholders = ",".join("?" for _ in visible_runs)
     rows = db.query(
-        """select distinct district, region_group from staging_license_snapshot
+        f"""select distinct district, region_group from staging_license_snapshot
         where district is not null and region_group is not null
-          and ((? is null and last_loaded_run_id = ?) or observed_on <= ?)""",
-        [as_of, run_id, as_of],
+          and first_loaded_run_id in ({placeholders})
+          and (? is null or observed_on <= ?)""",
+        [*visible_runs, as_of, as_of],
     )
     output: dict[str, dict[str, object]] = {}
     for district, group in rows:
@@ -375,13 +378,13 @@ def _region_rows(
                 "visitors_per_100_rooms": (visitor[0], denom, period_values["coverage"], visitor[1]),
                 "lodging_consumption_per_room": (consumption[0], denom, period_values["coverage"], consumption[1]),
                 "transport_inflow_per_room": (transport[0], denom, period_values["coverage"], transport[1]),
-                "tourism_registration_facility_share": (float(values["tourism_facilities"]), float(values["facilities"]), 1.0, "inventory.registration_type"),
-                "tourism_registration_room_share": (values["tourism_rooms"], denom, values["coverage"], "inventory.registration_type"),
-                "foreigner_city_homestay_registration_share": (float(values["foreigner_registrations"]), float(values["registrations"]), 1.0, "inventory.registration_type"),
-                "foreign_visitor_capable_registration_share": (float(values["foreign_capable_registrations"]), float(values["registrations"]), 1.0, "inventory.registration_type"),
-                "building_20y_share": (float(values["age20_count"]), float(values["age_known"]), values["age_known"] / values["facilities"] if values["facilities"] else None, "building_register.approval_date"),
-                "building_30y_share": (float(values["age30_count"]), float(values["age_known"]), values["age_known"] / values["facilities"] if values["facilities"] else None, "building_register.approval_date"),
-                "recent_five_year_permit_event_share": (float(values["permit_count"]), float(values["permit_known"]), values["permit_known"] / values["facilities"] if values["facilities"] else None, "building_register.permit_date"),
+                "tourism_registration_facility_share": (float(period_values["tourism_facilities"]), float(period_values["facilities"]), 1.0, "inventory.registration_type"),
+                "tourism_registration_room_share": (period_values["tourism_rooms"], denom, period_values["coverage"], "inventory.registration_type"),
+                "foreigner_city_homestay_registration_share": (float(period_values["foreigner_registrations"]), float(period_values["registrations"]), 1.0, "inventory.registration_type"),
+                "foreign_visitor_capable_registration_share": (float(period_values["foreign_capable_registrations"]), float(period_values["registrations"]), 1.0, "inventory.registration_type"),
+                "building_20y_share": (float(period_values["age20_count"]), float(period_values["age_known"]), period_values["age_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.approval_date"),
+                "building_30y_share": (float(period_values["age30_count"]), float(period_values["age_known"]), period_values["age_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.approval_date"),
+                "recent_five_year_permit_event_share": (float(period_values["permit_count"]), float(period_values["permit_known"]), period_values["permit_known"] / period_values["facilities"] if period_values["facilities"] else None, "building_register.permit_date"),
             }
             evidence = {name: _evidence(name, numerator, denominator, coverage, period, source, factor=100 if name == "visitors_per_100_rooms" else 1) for name, (numerator, denominator, coverage, source) in ratios.items()}
             evidence["visitor_growth_minus_room_supply_growth"] = _evidence(
@@ -469,6 +472,7 @@ def _same_period_inventory(
         where facility.district = ? and snapshot.observed_on::varchar like ?
           and snapshot.source_id <> 'tourist_pensions'
           and snapshot.first_loaded_run_id in ({placeholders})
+          and (snapshot.closure_date is null or snapshot.closure_date > snapshot.observed_on)
           and (? is null or snapshot.observed_on <= ?)""",
         [district, f"{period}%", *visible_runs, as_of, as_of],
     )
