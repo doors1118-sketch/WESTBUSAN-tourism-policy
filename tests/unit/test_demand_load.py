@@ -14,6 +14,7 @@ from westbusan.demand.load import (
 )
 from westbusan.models import ApiPage, RunContext, SourceSpec
 from westbusan.sources.registry import SourceRegistry, record_inspection
+from westbusan.storage import RawStore
 
 
 def test_month_iterator_includes_end_month() -> None:
@@ -154,6 +155,62 @@ def test_datalab_filters_non_busan_duplicate_district_names_without_schema_chang
         ("북구", "west", 1200.0)
     ]
     assert db.query("select status from source_status") == [("READY",)]
+
+
+def test_tourism_uses_injected_data_directory_when_database_is_elsewhere(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches tourism raw files following DuckDB instead of configured storage."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    data_dir = tmp_path / "configured-data"
+    db = Database(tmp_path / "database" / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="tourism_data_lab",
+                url="https://example.test/DataLabService",
+                operation="locgoRegnVisitrDDList",
+                group="tourism",
+                required_parameters={"startYmd": "{startYmd}", "endYmd": "{endYmd}"},
+            ),
+        )
+    )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            row = {
+                "baseYmd": "20260115",
+                "signguCode": "26380",
+                "signguNm": "사하구",
+                "touNum": "10",
+            }
+            yield ApiPage(
+                rows=[row],
+                total_count=1,
+                page_no=1,
+                page_size=1,
+                raw_body=json.dumps({"data": [row]}, ensure_ascii=False).encode(),
+                schema_fingerprint="datalab-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    result = load_tourism_demand(
+        db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+        raw_store=RawStore(data_dir),
+    )
+
+    assert result.records_loaded == 1
+    assert Path(db.scalar("select path from raw_artifact")).is_relative_to(data_dir)
 
 
 def test_datalab_missing_jurisdiction_code_is_schema_evidence(

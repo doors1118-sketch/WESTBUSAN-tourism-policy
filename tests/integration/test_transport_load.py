@@ -13,6 +13,7 @@ from westbusan.models import RunContext
 from westbusan.sources.files import read_tabular_rows
 from westbusan.sources.odcloud import build_odcloud_client, discover_latest_dataset
 from westbusan.sources.registry import SourceRegistry, record_inspection
+from westbusan.storage import RawStore
 from westbusan.transport.load import (
     TransportMeasure,
     load_transport,
@@ -164,6 +165,34 @@ def test_load_transport_registers_static_korail_file_at_native_grain(tmp_path: P
         "select period, metric_code, metric_value, unit from fact_transport_flow where metric_code = 'korail_workplace_smart_ticket_count'"
     ) == [("2022-04..2022-06", "korail_workplace_smart_ticket_count", 100, "count")]
     assert db.query("select source_date from raw_artifact") == [(None,)]
+
+
+def test_transport_uses_injected_data_directory_when_database_is_elsewhere(
+    tmp_path: Path,
+) -> None:
+    """Catches falling back to db.parent for the inbox and raw artifact store."""
+    data_dir = tmp_path / "configured-data"
+    inbox = data_dir / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "KORAIL_근무지_2022.csv").write_bytes(
+        Path("tests/fixtures/transport/railway.csv").read_bytes()
+    )
+    db = Database(tmp_path / "database" / "test.duckdb", Path("sql"))
+    db.migrate()
+
+    result = load_transport(
+        db,
+        SourceRegistry.load(Path("config/sources.yaml")),
+        date(2022, 4, 1),
+        date(2022, 6, 30),
+        RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
+        raw_store=RawStore(data_dir),
+        inbox_dir=inbox,
+    )
+
+    assert result.records_loaded == 1
+    raw_path = Path(db.scalar("select path from raw_artifact"))
+    assert raw_path.is_relative_to(data_dir)
 
 
 def test_load_transport_filters_file_records_to_inclusive_requested_months(

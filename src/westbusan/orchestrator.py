@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -278,6 +279,7 @@ class Pipeline:
                     tourism_end,
                     run,
                     progress=lambda: self._refresh_lease(run.run_id),
+                    **self._supported_storage_kwargs(load_tourism_demand),
                 )
             except Exception as error:  # noqa: BLE001 - terminal family boundary
                 for source_id in selected:
@@ -318,6 +320,7 @@ class Pipeline:
                             range_end,
                             run,
                             progress=lambda: self._refresh_lease(run.run_id),
+                            **self._supported_storage_kwargs(load_transport),
                         )
                         total_rows += result.records_loaded
                         for evidence in result.source_months:
@@ -409,6 +412,15 @@ class Pipeline:
         for source_id in selected:
             self.registry.get(source_id)
         return selected
+
+    def _supported_storage_kwargs(self, loader: object) -> dict[str, object]:
+        """Inject configured storage without constraining narrow test adapters."""
+        parameters = inspect.signature(loader).parameters
+        values: dict[str, object] = {
+            "raw_store": self.raw_store,
+            "inbox_dir": self.settings.data_dir / "inbox",
+        }
+        return {name: value for name, value in values.items() if name in parameters}
 
     def _prepare_run(
         self,

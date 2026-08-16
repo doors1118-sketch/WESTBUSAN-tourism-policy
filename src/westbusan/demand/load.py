@@ -269,13 +269,14 @@ def load_tourism_demand(
     run: RunContext,
     *,
     progress: ProgressCallback | None = None,
+    raw_store: RawStore | None = None,
 ) -> LoadResult:
     """Collect inspected KTO series month by month, persisting each raw page first."""
     heartbeat = progress or _noop_progress
     heartbeat()
     service_key = os.getenv("DATA_GO_KR_SERVICE_KEY", "")
     end = min(end, _latest_complete_month_end(run.started_at.date()))
-    raw_store = RawStore(db.path.parent)
+    raw_store = raw_store or RawStore(db.path.parent)
     loaded = 0
     artifacts = 0
     ready: list[str] = []

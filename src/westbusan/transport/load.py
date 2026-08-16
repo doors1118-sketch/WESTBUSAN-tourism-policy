@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
 from westbusan.db import Database
 from westbusan.http import (
@@ -187,14 +188,17 @@ def load_transport(
     *,
     client: SafeHttpClient | None = None,
     progress: ProgressCallback | None = None,
+    raw_store: RawStore | None = None,
+    inbox_dir: Path | None = None,
 ) -> LoadResult:
     """Load approved evidence; network collection is explicitly opt-in."""
     heartbeat = progress or _noop_progress
     heartbeat()
     if start > end:
         raise ValueError("transport start must be on or before end")
-    files = FileSource(db.path.parent)
-    raw_store = RawStore(db.path.parent)
+    raw_store = raw_store or RawStore(db.path.parent)
+    files = FileSource(raw_store.data_dir)
+    inbox_dir = Path(inbox_dir) if inbox_dir is not None else raw_store.data_dir / "inbox"
     loaded = artifacts = 0
     ready: list[str] = []
     skipped: list[str] = []
@@ -204,7 +208,7 @@ def load_transport(
         spec = registry.get(source_id)
         if spec.source_type == "file":
             outcome = _load_files(
-                db, files, raw_store, spec, start, end, run, heartbeat
+                db, files, raw_store, inbox_dir, spec, start, end, run, heartbeat
             )
         else:
             outcome = _load_live(
@@ -227,6 +231,7 @@ def _load_files(
     db: Database,
     files: FileSource,
     raw_store: RawStore,
+    inbox_dir: Path,
     spec: SourceSpec,
     start: date,
     end: date,
@@ -234,7 +239,7 @@ def _load_files(
     progress: ProgressCallback,
 ) -> _SourceOutcome:
     progress()
-    paths = files.discover(db.path.parent / "inbox", spec.source_id)
+    paths = files.discover(inbox_dir, spec.source_id)
     if not paths:
         _status(
             db,
@@ -255,7 +260,7 @@ def _load_files(
         artifacts += 1
         try:
             progress()
-            rows = read_tabular_rows(path)
+            rows = read_tabular_rows(artifact.path)
         except (OSError, ValueError) as error:
             _status(
                 db,
