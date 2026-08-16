@@ -45,13 +45,15 @@ def test_same_parcel_is_requested_once_and_links_each_license(
         Path("tests/fixtures/buildings/closed.json").read_text(encoding="utf-8")
     )
     calls: list[str] = []
+    include_empty: list[bool] = []
 
     class FakePager:
         def __init__(self, *_: object, **__: object) -> None:
             pass
 
-        def iter_url(self, url: str, *_: object, **__: object) -> list[ApiPage]:
+        def iter_url(self, url: str, *_: object, **kwargs: object) -> list[ApiPage]:
             calls.append(url)
+            include_empty.append(kwargs.get("include_empty") is True)
             if url.endswith("getBrTitleInfo"):
                 rows = title_rows
             elif url.endswith("getApBasisOulnInfo"):
@@ -82,6 +84,7 @@ def test_same_parcel_is_requested_once_and_links_each_license(
     )
 
     assert calls.count("https://apis.data.go.kr/1613000/BldRgstHubService/getBrTitleInfo") == 1
+    assert all(include_empty)
     assert result.bridge_rows == 2
     assert db.query("select count(*) from bridge_license_building") == [(2,)]
     assert db.query("select count(*) from raw_artifact") == [(5,)]
@@ -92,5 +95,7 @@ def test_same_parcel_is_requested_once_and_links_each_license(
     assert all('"schema_fingerprint"' in request_json for request_json in request_jsons)
     assert all(path.exists() for path in artifact_paths)
     assert db.query("select permit_date, is_closed from staging_building_snapshot") == [
-        (date(1997, 1, 1), True)
+        (date(1997, 1, 1), False)
     ]
+    events = db.query("select building_id, event_type, source_payload_json from fact_building_event")
+    assert events == [(None, "closed_register", '{"mgmShtregPk":"CLOSED-1001","shterGbCdNm":"폐쇄말소"}')]

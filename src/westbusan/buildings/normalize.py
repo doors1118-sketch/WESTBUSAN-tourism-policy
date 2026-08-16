@@ -38,7 +38,6 @@ def normalize_building_title(row: dict[str, object]) -> BuildingRecord:
         _first(
             values,
             "shtergbcdnm",
-            "regstrgbcdnm",
             "closedyn",
             "closureyn",
             "closed",

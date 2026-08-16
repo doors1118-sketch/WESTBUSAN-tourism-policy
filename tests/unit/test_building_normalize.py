@@ -77,3 +77,12 @@ def test_provider_permit_and_closed_register_fields_are_normalized() -> None:
     assert permit.permit_date == date(1997, 1, 1)
     assert closed.building_id == "CLOSED-1001"
     assert closed.is_closed is True
+
+
+def test_ordinary_title_register_type_is_not_closure_evidence() -> None:
+    title = normalize_building_title(
+        {"mgmBldrgstPk": "26140-1001", "regstrGbCdNm": "일반건축물대장"}
+    )
+
+    assert title.is_closed is False
+    assert title.closed_indicator is None

@@ -146,6 +146,9 @@ def collect_buildings_for_licenses(
         responses = _parcel_responses(
             pager, registry, query, db, run, raw_store, service_key
         )
+        _store_closed_register_events(
+            db, run, parcel_hash, responses["closed_register_basis_outline"]
+        )
         titles = [
             normalize_building_title(row)
             for row in responses["building_register_title"]
@@ -153,7 +156,8 @@ def collect_buildings_for_licenses(
         enrichments = [
             normalize_building_title(row)
             for source_id, rows in responses.items()
-            if source_id != "building_register_title"
+            if source_id
+            not in {"building_register_title", "closed_register_basis_outline"}
             for row in rows
         ]
         for title in titles:
@@ -196,6 +200,7 @@ def _parcel_responses(
             page_size=spec.page_size,
             format_parameter=spec.format_parameter,
             format_value=spec.format_value,
+            include_empty=True,
         ):
             request = {
                 **query.parameters,
@@ -313,12 +318,39 @@ def _merge(primary: BuildingRecord, extra: BuildingRecord | None) -> BuildingRec
     return BuildingRecord(**values)
 
 
+def _store_closed_register_events(
+    db: Database,
+    run: RunContext,
+    parcel_hash: str,
+    rows: list[dict[str, object]],
+) -> None:
+    """Retain closed-register history without asserting it identifies a current title."""
+    for row in rows:
+        record = normalize_building_title(row)
+        source_payload = json.dumps(
+            row, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+        )
+        event_id = uuid5(
+            NAMESPACE_URL,
+            f"closed-register:{parcel_hash}:{record.building_id or source_payload}",
+        )
+        db.connection.execute(
+            """
+            insert into fact_building_event (
+                event_id, building_id, event_type, event_date, source_payload_json
+            ) values (?, null, 'closed_register', ?, ?)
+            on conflict (event_id) do nothing
+            """,
+            [event_id, record.approval_date, source_payload],
+        )
+
+
 def _parcel_enrichments(
     title: BuildingRecord,
     titles: list[BuildingRecord],
     enrichments: list[BuildingRecord],
 ) -> list[BuildingRecord]:
-    """Associate permit/closed rows by parcel, never by unrelated management keys."""
+    """Associate current permit/register facts by parcel, never by management-key guesses."""
     if len(titles) == 1:
         return enrichments
     title_parcel = _parcel_identity(title)

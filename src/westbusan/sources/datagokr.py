@@ -64,7 +64,11 @@ class DataGoKrPager:
         return cls(SafeHttpClient(client, sleeper=lambda _: None), service_key)
 
     def iter_pages(
-        self, spec: SourceSpec, base_params: dict[str, object]
+        self,
+        spec: SourceSpec,
+        base_params: dict[str, object],
+        *,
+        include_empty: bool = False,
     ) -> Iterator[ApiPage]:
         """Fetch all pages for a source specification."""
         yield from self.iter_url(
@@ -73,6 +77,7 @@ class DataGoKrPager:
             page_size=spec.page_size,
             format_parameter=spec.format_parameter,
             format_value=spec.format_value,
+            include_empty=include_empty,
         )
 
     def iter_url(
@@ -83,6 +88,7 @@ class DataGoKrPager:
         page_size: int = 100,
         format_parameter: str = "returnType",
         format_value: str = "json",
+        include_empty: bool = False,
     ) -> Iterator[ApiPage]:
         """Fetch pages until the advertised total is reached or a page is empty."""
         if page_size <= 0:
@@ -102,6 +108,8 @@ class DataGoKrPager:
             result = self.client.get(url, params)
             page = parse_data_page(result.body, result.content_type)
             if not page.rows:
+                if include_empty:
+                    yield page
                 return
             yield page
             received += len(page.rows)

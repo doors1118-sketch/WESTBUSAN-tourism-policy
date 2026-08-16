@@ -172,3 +172,18 @@ def test_pager_defaults_to_data_go_kr_return_type_parameter() -> None:
     pager = DataGoKrPager.for_test(httpx.MockTransport(handler), "masked")
     assert list(pager.iter_url("https://example.test/info", {})) == []
     assert captured["returnType"] == "json"
+
+
+def test_pager_can_emit_an_explicit_empty_response_for_auditing() -> None:
+    body = b'{"response":{"header":{"resultCode":"00","resultMsg":"NO_DATA"},"body":{"totalCount":0,"pageNo":1,"numOfRows":100}}}'
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=body, headers={"content-type": "application/json"})
+
+    pager = DataGoKrPager.for_test(httpx.MockTransport(handler), "masked")
+
+    pages = list(pager.iter_url("https://example.test/info", {}, include_empty=True))
+
+    assert len(pages) == 1
+    assert pages[0].rows == []
+    assert pages[0].raw_body == body
