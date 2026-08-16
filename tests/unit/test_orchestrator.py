@@ -1134,3 +1134,53 @@ def test_export_writes_four_current_datasets_as_csv_and_parquet(tmp_path: Path) 
         "duplicate_review.parquet",
     }
     assert all(path.exists() for path in paths)
+
+
+def test_export_manifest_binds_current_run_counts_and_file_hashes(tmp_path: Path) -> None:
+    """Consumers can verify that every file belongs to one complete publication."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    summary = pipeline.daily(date(2026, 8, 16))
+
+    paths = export_current(
+        pipeline.db, pipeline.settings.data_dir, date(2026, 8, 16)
+    )
+    manifest_path = paths[0].parent / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["published_run_id"] == str(summary.run_id)
+    assert set(manifest["files"]) == {path.name for path in paths}
+    assert all(item["sha256"] for item in manifest["files"].values())
+    assert all(item["row_count"] >= 0 for item in manifest["files"].values())
+
+
+def test_same_date_export_rejects_mismatch_until_explicit_rebuild(tmp_path: Path) -> None:
+    """A same-date directory is reusable only when its manifest still verifies."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.daily(date(2026, 8, 16))
+    export_date = date(2026, 8, 16)
+    paths = export_current(pipeline.db, pipeline.settings.data_dir, export_date)
+    corrupted = next(path for path in paths if path.name == "facility_current.csv")
+    corrupted.write_bytes(b"tampered")
+
+    with pytest.raises(RuntimeError, match="export bundle mismatch"):
+        export_current(pipeline.db, pipeline.settings.data_dir, export_date)
+
+    rebuilt = export_current(
+        pipeline.db, pipeline.settings.data_dir, export_date, rebuild=True
+    )
+
+    assert next(path for path in rebuilt if path.name == "facility_current.csv").read_bytes() != b"tampered"
+
+
+def test_export_rejects_tampered_current_marts(tmp_path: Path) -> None:
+    """A valid pointer cannot authorize export after its mart manifest diverges."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    summary = pipeline.daily(date(2026, 8, 16))
+    pipeline.db.connection.execute(
+        """update mart_facility_current set room_count = coalesce(room_count, 0) + 1
+           where run_id = ?""",
+        [summary.run_id],
+    )
+
+    with pytest.raises(RuntimeError, match="mart manifest"):
+        export_current(pipeline.db, pipeline.settings.data_dir, date(2026, 8, 16))

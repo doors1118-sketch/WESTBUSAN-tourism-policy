@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import os
@@ -20,7 +21,7 @@ from pyarrow import parquet
 
 from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
-from westbusan.analytics.build import build_marts
+from westbusan.analytics.build import build_marts, mart_manifest_is_valid
 from westbusan.buildings.load import collect_buildings_for_licenses
 from westbusan.config import PolicyConfig, RegionConfig, Settings
 from westbusan.db import Database
@@ -1533,12 +1534,20 @@ def _partition_month_date(partition: str) -> date:
     return date(int(partition[:4]), int(partition[5:7]), 1)
 
 
-def export_current(db: Database, data_dir: Path, export_date: date) -> tuple[Path, ...]:
+def export_current(
+    db: Database,
+    data_dir: Path,
+    export_date: date,
+    *,
+    rebuild: bool = False,
+) -> tuple[Path, ...]:
     """Export current marts and review evidence as CSV and Parquet."""
     db.migrate()
     run_id = current_published_run(db)
     if run_id is None:
         raise ValueError("there is no current published run to export")
+    if not mart_manifest_is_valid(db, run_id):
+        raise RuntimeError("current run mart manifest is invalid")
     exports_dir = Path(data_dir) / "exports"
     directory = exports_dir / f"export_date={export_date.isoformat()}"
     datasets = {
@@ -1574,21 +1583,84 @@ def export_current(db: Database, data_dir: Path, export_date: date) -> tuple[Pat
     )
     if directory.exists():
         existing = tuple(directory / name for name in expected_names)
-        if all(path.is_file() for path in existing):
+        if _export_bundle_is_valid(directory, run_id, expected_names):
             return existing
-        raise RuntimeError(f"incomplete export bundle already exists: {directory}")
+        if not rebuild:
+            raise RuntimeError(f"export bundle mismatch: {directory}")
     exports_dir.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".export-", dir=exports_dir))
     try:
+        manifest_files: dict[str, dict[str, object]] = {}
         for name, (query, parameters) in datasets.items():
             table = db.connection.execute(query, parameters).to_arrow_table()
-            arrow_csv.write_csv(table, temporary / f"{name}.csv")
-            parquet.write_table(table, temporary / f"{name}.parquet")
-        os.replace(str(temporary), str(directory))
+            for suffix in ("csv", "parquet"):
+                output = temporary / f"{name}.{suffix}"
+                if suffix == "csv":
+                    arrow_csv.write_csv(table, output)
+                else:
+                    parquet.write_table(table, output)
+                manifest_files[output.name] = {
+                    "row_count": table.num_rows,
+                    "sha256": _path_sha256(output),
+                }
+        manifest = {
+            "schema_version": 1,
+            "published_run_id": str(run_id),
+            "export_date": export_date.isoformat(),
+            "files": manifest_files,
+        }
+        (temporary / "manifest.json").write_text(
+            json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2),
+            encoding="utf-8",
+        )
+        if directory.exists():
+            backup = exports_dir / f".replaced-{uuid4()}"
+            os.replace(str(directory), str(backup))
+            try:
+                os.replace(str(temporary), str(directory))
+            except Exception:
+                os.replace(str(backup), str(directory))
+                raise
+            else:
+                shutil.rmtree(backup)
+        else:
+            os.replace(str(temporary), str(directory))
     finally:
         if temporary.exists():
             shutil.rmtree(temporary)
     return tuple(directory / name for name in expected_names)
+
+
+def _export_bundle_is_valid(
+    directory: Path, run_id: UUID, expected_names: tuple[str, ...]
+) -> bool:
+    try:
+        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        files = manifest["files"]
+    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+    if manifest.get("published_run_id") != str(run_id) or set(files) != set(expected_names):
+        return False
+    for name in expected_names:
+        path = directory / name
+        detail = files.get(name)
+        if (
+            not path.is_file()
+            or not isinstance(detail, dict)
+            or not isinstance(detail.get("row_count"), int)
+            or detail.get("row_count", -1) < 0
+            or detail.get("sha256") != _path_sha256(path)
+        ):
+            return False
+    return True
+
+
+def _path_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 __all__ = [
