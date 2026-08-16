@@ -1,0 +1,183 @@
+sources:
+  # Legal accommodation registrations.  Tourist-pension designations are attributes,
+  # never additional physical facilities.
+  - source_id: lodgings
+    url: https://apis.data.go.kr/1741000/lodgings
+    operation: info
+    group: accommodation
+    cadence: daily
+    page_size: 1000
+    format_parameter: returnType
+    format_value: json
+    response_row_path: data
+  - source_id: tourist_accommodations
+    url: https://apis.data.go.kr/1741000/tourist_accommodations
+    operation: info
+    group: accommodation
+    cadence: daily
+    page_size: 1000
+    format_parameter: returnType
+    format_value: json
+    response_row_path: data
+  - source_id: foreigner_city_homestays
+    url: https://apis.data.go.kr/1741000/foreigner_city_homestays
+    operation: info
+    group: accommodation
+    cadence: daily
+    page_size: 1000
+    format_parameter: returnType
+    format_value: json
+    response_row_path: data
+  - source_id: rural_homestays
+    url: https://apis.data.go.kr/1741000/rural_homestays
+    operation: info
+    group: accommodation
+    cadence: daily
+    page_size: 1000
+    format_parameter: returnType
+    format_value: json
+    response_row_path: data
+  - source_id: hanok_experience
+    url: https://apis.data.go.kr/1741000/hanok_experience
+    operation: info
+    group: accommodation
+    cadence: daily
+    page_size: 1000
+    format_parameter: returnType
+    format_value: json
+    response_row_path: data
+  - source_id: tourist_pensions
+    url: https://apis.data.go.kr/1741000/tourist_pensions
+    operation: info
+    group: accommodation
+    cadence: daily
+    page_size: 1000
+    format_parameter: returnType
+    format_value: json
+    response_row_path: data
+    additive_facility: false
+
+  - source_id: building_register_title
+    url: https://apis.data.go.kr/1613000/BldRgstHubService
+    operation: getBrTitleInfo
+    group: building
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+  - source_id: building_register_basis_outline
+    url: https://apis.data.go.kr/1613000/BldRgstHubService
+    operation: getBrBasisOulnInfo
+    group: building
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+  - source_id: building_permit_basis_outline
+    url: https://apis.data.go.kr/1613000/ArchPmsHubService
+    operation: getApBasisOulnInfo
+    group: building
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+  - source_id: building_permit_site
+    url: https://apis.data.go.kr/1613000/ArchPmsHubService
+    operation: getApPlatPlcInfo
+    group: building
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+  - source_id: closed_register_basis_outline
+    url: https://apis.data.go.kr/1613000/ShtRgstHubService
+    operation: getSrBasisOulnInfo
+    group: building
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+
+  # KTO endpoint operations are portal-version-specific.  They remain unresolved
+  # until record_inspection stores reviewed portal metadata.
+  - source_id: tourism_data_lab
+    url: https://apis.data.go.kr/B551011/DataLabService
+    group: tourism
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+    inspection_required: true
+  - source_id: area_tourism_demand
+    url: https://apis.data.go.kr/B551011/AreaTarDemDsService
+    group: tourism
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+    inspection_required: true
+  - source_id: area_tourism_consumption
+    url: https://apis.data.go.kr/B551011/AreaTarResDemService
+    group: tourism
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+    inspection_required: true
+  - source_id: tourism_concentration_rate
+    url: https://apis.data.go.kr/B551011/TatsCnctrRateService
+    group: tourism
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+    inspection_required: true
+  - source_id: area_tourism_destination_division
+    url: https://apis.data.go.kr/B551011/AreaTarDivService
+    group: tourism
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+    inspection_required: true
+  - source_id: related_tourism_destinations
+    url: https://apis.data.go.kr/B551011/TarRlteTarService1
+    group: tourism
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+    inspection_required: true
+
+  - source_id: public_transport_od_usage
+    url: https://apis.data.go.kr/1613000/ODUsageforGeneralBusesandUrbanRailways
+    group: transport
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+    inspection_required: true
+  - source_id: busan_metro_odcloud_discovery
+    url: https://api.odcloud.kr/api/3057229/v1
+    group: transport
+    cadence: monthly
+    source_type: discovery
+
+  - source_id: korail_workplace_ticketing_file
+    url: file://manual-provisioning/korail-workplace-ticketing
+    group: transport
+    cadence: monthly
+    source_type: file
+    immutable_file_hashing: true
+  - source_id: korail_residence_ticketing_file
+    url: file://manual-provisioning/korail-residence-ticketing
+    group: transport
+    cadence: monthly
+    source_type: file
+    immutable_file_hashing: true
+  - source_id: srt_station_boarding_file
+    url: file://manual-provisioning/srt-station-boarding
+    group: transport
+    cadence: monthly
+    source_type: file
+    immutable_file_hashing: true

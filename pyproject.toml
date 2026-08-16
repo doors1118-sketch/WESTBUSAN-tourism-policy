@@ -24,6 +24,7 @@ westbusan = "westbusan.cli:app"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
+markers = ["integration: opt-in checks that may contact live external sources"]
 
 [tool.ruff]
 line-length = 88

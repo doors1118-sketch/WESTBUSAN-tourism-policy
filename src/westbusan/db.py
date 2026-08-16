@@ -7,7 +7,7 @@ from typing import Any
 
 import duckdb
 
-from westbusan.models import RawArtifact
+from westbusan.models import RawArtifact, SourceStatus
 
 
 class Database:
@@ -62,5 +62,20 @@ class Database:
                 str(artifact.path),
                 artifact.created_at,
                 artifact.source_date,
+            ],
+        )
+
+    def record_source_status(self, source_status: SourceStatus) -> None:
+        """Persist one redacted source-access check."""
+        self.connection.execute(
+            """
+            insert into source_status (source_id, checked_at, status, detail_json)
+            values (?, ?, ?, ?)
+            """,
+            [
+                source_status.source_id,
+                source_status.checked_at,
+                source_status.status,
+                source_status.detail_json,
             ],
         )

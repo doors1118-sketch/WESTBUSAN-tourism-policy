@@ -1,0 +1,19 @@
+sources:
+  - source_id: ready_source
+    url: https://example.test/service
+    operation: info
+    group: accommodation
+    cadence: daily
+    page_size: 1000
+    format_parameter: returnType
+    format_value: json
+    response_row_path: data
+  - source_id: unresolved_source
+    url: https://example.test/unresolved
+    group: tourism
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+    inspection_required: true
+    portal_detail_url: https://data.go.kr/detail/example

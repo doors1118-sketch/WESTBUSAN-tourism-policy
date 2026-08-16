@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
+from typing import Literal
 from uuid import UUID, uuid4
 
 
@@ -22,13 +25,55 @@ class ApiPage:
 
 @dataclass(frozen=True, slots=True)
 class SourceSpec:
-    """Minimum paging configuration shared by data.go.kr sources."""
+    """Registered metadata and paging configuration for an external source."""
 
     source_id: str
     url: str
     page_size: int = 100
     format_parameter: str = "returnType"
     format_value: str = "json"
+    operation: str | None = None
+    group: str = ""
+    cadence: str = "daily"
+    additive_facility: bool = True
+    source_type: str = "api"
+    required_parameters: tuple[str, ...] = ()
+    response_row_path: str | None = None
+    portal_detail_url: str | None = None
+    inspection_required: bool = False
+    immutable_file_hashing: bool = False
+
+    @property
+    def endpoint_url(self) -> str:
+        """Return the selected API operation endpoint, if one is registered."""
+        if self.operation is None:
+            return self.url
+        return f"{self.url.rstrip('/')}/{self.operation.lstrip('/')}"
+
+
+SourceStatusCode = Literal[
+    "READY",
+    "AUTH_FAILED",
+    "SPEC_UNRESOLVED",
+    "EMPTY",
+    "QUOTA_EXCEEDED",
+    "SCHEMA_CHANGED",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class SourceStatus:
+    """A redacted result of checking whether a source can be collected."""
+
+    source_id: str
+    checked_at: datetime
+    status: SourceStatusCode
+    detail: Mapping[str, object] = field(default_factory=dict)
+
+    @property
+    def detail_json(self) -> str:
+        """Serialize stable, redacted detail for the source-status audit trail."""
+        return json.dumps(self.detail, ensure_ascii=False, sort_keys=True)
 
 
 @dataclass(frozen=True, slots=True)
