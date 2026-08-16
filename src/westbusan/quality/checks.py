@@ -117,9 +117,11 @@ def run_quality_suite(
     statuses = _run_statuses(db, run_id)
     artifacts = _run_artifacts(db, run_id)
     contracts = _source_contracts(db)
+    present_data_sources = set(artifacts) | _run_fact_sources(db, run_id)
     source_ids = sorted(
         set(statuses)
         | set(artifacts)
+        | present_data_sources
         | {source_id for source_id, required in contracts.items() if required}
     )
     checks: list[CheckResult] = []
@@ -132,7 +134,10 @@ def run_quality_suite(
         source_statuses = statuses.get(source_id, [])
         source_artifacts = artifacts.get(source_id, [])
         required = _required_contract(
-            source_id, source_statuses, bool(source_artifacts), contracts.get(source_id)
+            source_id,
+            source_statuses,
+            source_id in present_data_sources,
+            contracts.get(source_id),
         )
         checks.append(_readiness_check(source_id, source_statuses, required))
         pages = _parse_artifacts(source_id, source_artifacts)
@@ -300,16 +305,28 @@ def _source_contracts(db: Database) -> dict[str, bool]:
     }
 
 
+def _run_fact_sources(db: Database, run_id: UUID) -> set[str]:
+    rows = db.query(
+        """select source_id from staging_building_response where run_id = ?
+           union
+           select source_id from fact_tourism_demand where loaded_run_id = ?
+           union
+           select source_id from fact_transport_flow where loaded_run_id = ?""",
+        [run_id, run_id, run_id],
+    )
+    return {str(source_id) for (source_id,) in rows}
+
+
 def _required_contract(
     source_id: str,
     statuses: list[tuple[str, dict[str, object]]],
-    has_artifacts: bool,
+    has_data: bool,
     configured: bool | None,
 ) -> bool:
-    if configured is not None:
-        return configured
-    if has_artifacts:
+    if configured is True or has_data:
         return True
+    if configured is False:
+        return False
     if not statuses:
         return False
     detail = statuses[-1][1]

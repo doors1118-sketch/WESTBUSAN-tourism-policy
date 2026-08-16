@@ -148,6 +148,69 @@ def test_quality_fails_closed_when_raw_bytes_no_longer_match_content_hash(
     assert integrity.actual == {"mismatched_artifacts": 1}
 
 
+@pytest.mark.parametrize(
+    ("present_kind", "source_id"),
+    (
+        ("artifact", "building_register_title"),
+        ("fact", "area_tourism_consumption"),
+    ),
+)
+def test_present_optional_source_failure_blocks_publication(
+    tmp_path: Path,
+    present_kind: str,
+    source_id: str,
+) -> None:
+    """Optional absence is allowed, but present unverified evidence must fail closed."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    _valid_run(db, tmp_path, run_id)
+
+    if present_kind == "artifact":
+        body = b'{"data":[],"totalCount":0,"pageNo":1,"numOfRows":1}'
+        raw_path = tmp_path / "optional-building.json"
+        raw_path.write_bytes(body)
+        _record_raw_page(
+            db,
+            run_id,
+            source_id,
+            raw_path,
+            body,
+            "getBrTitleInfo",
+            date(2026, 8, 16),
+            quality_partition="parcel-1",
+        )
+        raw_path.write_bytes(body + b" ")
+        db.record_source_status(
+            SourceStatus(
+                source_id,
+                datetime(2026, 8, 16, 0, 0, 1, tzinfo=UTC),
+                "READY",
+                {},
+                run_id,
+            )
+        )
+    else:
+        db.connection.execute(
+            """insert into fact_tourism_demand (
+                   source_id, metric_code, period, district, region_group,
+                   dimension_json, dimension_json_hash, source_revision,
+                   metric_value, unit, source_payload_json, artifact_id,
+                   loaded_run_id, observation_key
+               ) values (?, 'visitor', '2026-08', '사하구', 'west', '{}',
+                         'dimension', 'revision', 1, 'KRW', '{}', ?, ?, ?)""",
+            [source_id, uuid4(), run_id, "optional-tourism-fact"],
+        )
+
+    report = run_quality_suite(db, run_id)
+    source_checks = [check for check in report.checks if check.source_id == source_id]
+
+    assert source_checks
+    assert _check(report, "raw_content_hash", source_id).status == "failed"
+    assert _check(report, "raw_content_hash", source_id).severity == "required"
+    assert report.has_failed_required_check is True
+    assert publish_if_valid(db, run_id, report).published is False
+
+
 def test_monthly_freshness_uses_run_business_cutoff_not_wall_clock(
     tmp_path: Path,
 ) -> None:
