@@ -208,6 +208,16 @@ class _FailingRawStore(RawStore):
         raise OSError("DO_NOT_AUDIT_FILE_CONTENTS")
 
 
+class _DeletingRawStore(RawStore):
+    artifact_path: Path | None = None
+
+    def write(self, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        artifact = super().write(*args, **kwargs)
+        self.artifact_path = artifact.path
+        artifact.path.unlink()
+        return artifact
+
+
 class _ArtifactRecordFailingDatabase(Database):
     def record_artifact(self, artifact: RawArtifact) -> None:
         raise duckdb.ConstraintException("DO_NOT_AUDIT_DATABASE_DETAIL")
@@ -292,6 +302,43 @@ def test_artifact_record_failure_appends_redacted_rejection_event(
     )
 
 
+def test_deleted_artifact_during_inspection_appends_one_redacted_rejection(
+    tmp_path: Path,
+) -> None:
+    """Catches inspection-path file loss escaping without a rejection audit."""
+    inspection = inspect_boundary(FIXTURE, RegionConfig.default())
+    db = _database(tmp_path)
+    store = _DeletingRawStore(tmp_path / "data")
+
+    with pytest.raises(BoundaryApprovalError, match="inspection unavailable") as raised:
+        approve_boundary(
+            db,
+            store,
+            FIXTURE,
+            inspection,
+            inspection.content_hash,
+            "reviewer@example.org",
+            "Reviewed against the official district release.",
+            _metadata(),
+        )
+
+    assert isinstance(raised.value.__cause__, FileNotFoundError)
+    assert store.artifact_path is not None
+    assert db.query("select count(*) from spatial_boundary_version") == [(0,)]
+    events = db.query(
+        """select boundary_version_id, action, source_metadata_json, evidence_json
+           from spatial_boundary_approval_event"""
+    )
+    assert len(events) == 1
+    assert events[0][:2] == (None, "rejected")
+    assert json.loads(events[0][2])["source_organization"] == "부산광역시"
+    assert json.loads(events[0][3]) == {
+        "failure_type": "FileNotFoundError",
+        "reason": "immutable_artifact_inspection_io_failed",
+    }
+    assert str(store.artifact_path) not in events[0][3]
+
+
 def test_approval_parses_immutable_copy_after_inbox_is_changed(tmp_path: Path) -> None:
     """Catches reparsing the mutable reviewed inbox after immutable storage."""
     inbox = tmp_path / "inbox.geojson"
@@ -374,6 +421,54 @@ def test_approval_rehash_rejects_artifact_changed_after_immutable_inspection(
             '{"reason":"immutable_artifact_hash_changed"}',
         )
     ]
+
+
+def test_unreadable_artifact_at_final_rehash_appends_one_rejection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches final-rehash I/O errors escaping the approval transaction unaudited."""
+    inspection = inspect_boundary(FIXTURE, RegionConfig.default())
+    db = _database(tmp_path)
+    original_inspect = boundary_module.inspect_boundary
+    unreadable_artifact: list[Path] = []
+
+    def inspect_then_make_unreadable(path: Path, regions: RegionConfig):
+        result = original_inspect(path, regions)
+        artifact_path = Path(path)
+        artifact_path.unlink()
+        artifact_path.mkdir()
+        unreadable_artifact.append(artifact_path)
+        return result
+
+    monkeypatch.setattr(
+        boundary_module, "inspect_boundary", inspect_then_make_unreadable
+    )
+
+    with pytest.raises(BoundaryApprovalError, match="rehash unavailable") as raised:
+        approve_boundary(
+            db,
+            RawStore(tmp_path / "data"),
+            FIXTURE,
+            inspection,
+            inspection.content_hash,
+            "reviewer@example.org",
+            "Reviewed against the official district release.",
+            _metadata(),
+        )
+
+    assert isinstance(raised.value.__cause__, OSError)
+    assert len(unreadable_artifact) == 1
+    assert db.query("select count(*) from spatial_boundary_version") == [(0,)]
+    events = db.query(
+        """select boundary_version_id, action, evidence_json
+           from spatial_boundary_approval_event"""
+    )
+    assert len(events) == 1
+    assert events[0][:2] == (None, "rejected")
+    evidence = json.loads(events[0][2])
+    assert evidence["reason"] == "immutable_artifact_rehash_io_failed"
+    assert evidence["failure_type"] in {"PermissionError", "IsADirectoryError"}
+    assert str(unreadable_artifact[0]) not in events[0][2]
 
 
 def test_repeated_matching_approval_is_idempotent_and_conflict_fails_closed(

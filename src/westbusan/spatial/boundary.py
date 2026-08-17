@@ -229,6 +229,23 @@ def approve_boundary(
             {"reason": "immutable_copy_validation_failed", "error": str(exc)},
         )
         raise BoundaryApprovalError("immutable boundary copy failed validation") from exc
+    except OSError as exc:
+        _append_approval_event(
+            db,
+            observed_hash,
+            None,
+            "rejected",
+            actor,
+            reason,
+            source_metadata,
+            {
+                "failure_type": type(exc).__name__,
+                "reason": "immutable_artifact_inspection_io_failed",
+            },
+        )
+        raise BoundaryApprovalError(
+            "immutable boundary inspection unavailable"
+        ) from exc
     if immutable_inspection != inspection:
         _append_approval_event(
             db,
@@ -267,7 +284,29 @@ def approve_boundary(
     try:
         db.connection.execute("begin transaction")
         began = True
-        final_artifact_hash = hashlib.sha256(artifact.path.read_bytes()).hexdigest()
+        try:
+            final_artifact_hash = hashlib.sha256(
+                artifact.path.read_bytes()
+            ).hexdigest()
+        except OSError as exc:
+            db.connection.execute("rollback")
+            began = False
+            _append_approval_event(
+                db,
+                observed_hash,
+                None,
+                "rejected",
+                actor,
+                reason,
+                source_metadata,
+                {
+                    "failure_type": type(exc).__name__,
+                    "reason": "immutable_artifact_rehash_io_failed",
+                },
+            )
+            raise BoundaryApprovalError(
+                "immutable boundary artifact rehash unavailable"
+            ) from exc
         if final_artifact_hash != observed_hash:
             db.connection.execute("rollback")
             began = False
