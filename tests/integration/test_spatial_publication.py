@@ -114,12 +114,12 @@ def _active_run(
 
 
 def _lease_token(db: Database, spatial_run_id: UUID) -> SpatialLeaseToken:
-    owner, epoch = db.query(
-        """select owner, fence_epoch from spatial_run
+    owner, epoch, lease_expires_at = db.query(
+        """select owner, fence_epoch, lease_expires_at from spatial_run
            where spatial_run_id = ? and status = 'RUNNING'""",
         [spatial_run_id],
     )[0]
-    return SpatialLeaseToken(str(owner), int(epoch))
+    return SpatialLeaseToken(str(owner), int(epoch), lease_expires_at)
 
 
 def _seed_manifest_rows(
@@ -199,6 +199,20 @@ def _seed_manifest_rows(
                exception_code, redacted_evidence_json, resolution_status
            ) values (?, ?, 'facility', ?, 'MISSING_COORDINATE', '{}', 'unresolved')""",
         [spatial_run_id, base_run_id, str(facility_id)],
+    )
+
+
+def test_pipeline_lease_token_captures_exact_persisted_expiry(
+    tmp_path: Path,
+) -> None:
+    """Catches a retry deadline drifting beyond the lease persisted at acquisition."""
+    db, _settings_value, pipeline, run_id, _base_run_id, _boundary_id = _active_run(
+        tmp_path
+    )
+
+    assert pipeline.lease_token(run_id).lease_expires_at == db.scalar(
+        "select lease_expires_at from spatial_run where spatial_run_id = ?",
+        [run_id],
     )
 
 
@@ -858,10 +872,10 @@ def test_completed_pipeline_retry_uses_transactional_publication_validation(
         SpatialPipeline(db, settings).run(base_run_id, boundary_id, BUSINESS_DATE)
 
 
-def test_concurrent_same_run_publish_retries_to_one_immutable_result(
+def test_concurrent_same_run_publish_waits_past_fixed_retry_window(
     tmp_path: Path,
 ) -> None:
-    """Catches a same-run transaction conflict escaping instead of validating winner."""
+    """Catches retry count expiring while the same valid lease is still committing."""
     first_db, settings, _pipeline, run_id, _base_run_id, _boundary_id = _active_run(
         tmp_path
     )
@@ -897,7 +911,7 @@ def test_concurrent_same_run_publish_retries_to_one_immutable_result(
         assert first_paused.wait(10)
         second_future = executor.submit(publish_second)
         assert second_started.wait(10)
-        Event().wait(0.25)
+        Event().wait(3.5)
         release_first.set()
         first_result = first_future.result(timeout=20)
         second_result = second_future.result(timeout=20)
@@ -909,6 +923,129 @@ def test_concurrent_same_run_publish_retries_to_one_immutable_result(
         """select completed_at from spatial_run where spatial_run_id = ?""",
         [run_id],
     ) == [(first_result.published_at,)]
+
+
+def test_concurrent_loser_publishes_after_winner_rolls_back(
+    tmp_path: Path,
+) -> None:
+    """Catches conflict waiting abandoning a still-valid token after winner rollback."""
+
+    class InjectedWinnerCrash(RuntimeError):
+        pass
+
+    first_db, settings, _pipeline, run_id, _base_run_id, _boundary_id = _active_run(
+        tmp_path
+    )
+    token = _lease_token(first_db, run_id)
+    write_spatial_manifest(first_db, run_id, lease_token=token)
+    second_db = Database(settings.db_path, Path("sql"))
+    winner_paused = Event()
+    release_winner = Event()
+
+    def crash_winner(stage: str, _run_id: UUID) -> None:
+        if stage != "pointer":
+            return
+        winner_paused.set()
+        if not release_winner.wait(10):
+            raise TimeoutError("winner was not released")
+        raise InjectedWinnerCrash("winner rolled back")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        winner = executor.submit(
+            publish_spatial,
+            first_db,
+            run_id,
+            lease_token=token,
+            settings=settings,
+            stage_hook=crash_winner,
+        )
+        assert winner_paused.wait(10)
+        loser = executor.submit(
+            publish_spatial,
+            second_db,
+            run_id,
+            lease_token=token,
+            settings=settings,
+        )
+        Event().wait(0.25)
+        release_winner.set()
+        with pytest.raises(InjectedWinnerCrash, match="rolled back"):
+            winner.result(timeout=20)
+        result = loser.result(timeout=20)
+
+    assert result.spatial_run_id == run_id
+    assert second_db.scalar("select count(*) from spatial_publication_audit") == 1
+    assert second_db.scalar("select count(*) from spatial_run_summary") == 1
+
+
+def test_takeover_while_publication_waits_rejects_stale_token(
+    tmp_path: Path,
+) -> None:
+    """Catches conflict waiting following a replacement owner or fence epoch."""
+
+    class InjectedWinnerCrash(RuntimeError):
+        pass
+
+    first_db, settings, _pipeline, run_id, _base_run_id, _boundary_id = _active_run(
+        tmp_path
+    )
+    token = _lease_token(first_db, run_id)
+    write_spatial_manifest(first_db, run_id, lease_token=token)
+    loser_db = Database(settings.db_path, Path("sql"))
+    takeover_db = Database(settings.db_path, Path("sql"))
+    replacement = SpatialPipeline(takeover_db, settings)
+    winner_paused = Event()
+    release_winner = Event()
+    takeover_done = Event()
+
+    def crash_winner(stage: str, _run_id: UUID) -> None:
+        if stage != "pointer":
+            return
+        winner_paused.set()
+        if not release_winner.wait(10):
+            raise TimeoutError("winner was not released")
+        raise InjectedWinnerCrash("winner rolled back before takeover")
+
+    def publish_then_yield_to_takeover() -> object:
+        try:
+            return publish_spatial(
+                first_db,
+                run_id,
+                lease_token=token,
+                settings=settings,
+                stage_hook=crash_winner,
+            )
+        except InjectedWinnerCrash:
+            _shorten_lease(first_db, run_id, milliseconds=-1)
+            replacement.take_over(run_id)
+            takeover_done.set()
+            raise
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        winner = executor.submit(publish_then_yield_to_takeover)
+        assert winner_paused.wait(10)
+        loser = executor.submit(
+            publish_spatial,
+            loser_db,
+            run_id,
+            lease_token=token,
+            settings=settings,
+        )
+        Event().wait(0.4)
+        release_winner.set()
+        with pytest.raises(InjectedWinnerCrash, match="before takeover"):
+            winner.result(timeout=20)
+        assert takeover_done.wait(10)
+        with pytest.raises(SpatialFenceError, match="ownership|fence"):
+            loser.result(timeout=20)
+
+    assert takeover_db.query(
+        """select status, fence_epoch from spatial_run
+           where spatial_run_id = ?""",
+        [run_id],
+    ) == [("RUNNING", token.fence_epoch + 1)]
+    assert takeover_db.scalar("select count(*) from spatial_publication_audit") == 0
+    assert takeover_db.scalar("select count(*) from spatial_run_summary") == 0
 
 
 @pytest.mark.parametrize(

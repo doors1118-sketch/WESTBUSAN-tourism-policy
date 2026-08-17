@@ -106,8 +106,8 @@ class SpatialPipeline:
                         existing[0][6],
                     )
                     if status == "RUNNING":
+                        expires = _parse_datetime(expires_text)
                         if owner != self._owner:
-                            expires = _parse_datetime(expires_text)
                             qualifier = "active" if expires and expires > now else "expired"
                             raise SpatialLeaseError(
                                 f"spatial run {spatial_run_id} has an {qualifier} lease"
@@ -115,7 +115,13 @@ class SpatialPipeline:
                         self._require_writer_row(spatial_run_id, int(existing[0][7]), now)
                         self.db.connection.execute("commit")
                         began = False
-                        self._remember_lease(spatial_run_id, int(existing[0][7]))
+                        if expires is None:
+                            raise SpatialLeaseError(
+                                f"spatial run {spatial_run_id} lease expiry is missing"
+                            )
+                        self._remember_lease(
+                            spatial_run_id, int(existing[0][7]), expires
+                        )
                         return spatial_run_id
                     if status == "COMPLETED":
                         self.db.connection.execute("commit")
@@ -151,7 +157,9 @@ class SpatialPipeline:
                         self._purge_run_outputs(spatial_run_id)
                         self.db.connection.execute("commit")
                         began = False
-                        self._remember_lease(spatial_run_id, epoch)
+                        self._remember_lease(
+                            spatial_run_id, epoch, lease_expires_at
+                        )
                         return spatial_run_id
                     raise SpatialLeaseError(
                         f"spatial run {spatial_run_id} cannot prepare from {status}"
@@ -178,7 +186,9 @@ class SpatialPipeline:
                 )
                 self.db.connection.execute("commit")
                 began = False
-                self._remember_lease(spatial_run_id, epoch)
+                self._remember_lease(
+                    spatial_run_id, epoch, now + _LEASE_DURATION
+                )
                 return spatial_run_id
             except duckdb.TransactionException:
                 _rollback(self.db, began)
@@ -308,7 +318,7 @@ class SpatialPipeline:
             self._purge_run_outputs(spatial_run_id)
             self.db.connection.execute("commit")
             began = False
-            self._remember_lease(spatial_run_id, epoch)
+            self._remember_lease(spatial_run_id, epoch, lease_expires_at)
         except Exception:
             _rollback(self.db, began)
             raise
@@ -372,8 +382,12 @@ class SpatialPipeline:
                 f"spatial run {spatial_run_id} has no caller-held lease token"
             ) from exc
 
-    def _remember_lease(self, spatial_run_id: UUID, epoch: int) -> None:
-        self._lease_tokens[spatial_run_id] = SpatialLeaseToken(self._owner, epoch)
+    def _remember_lease(
+        self, spatial_run_id: UUID, epoch: int, lease_expires_at: datetime
+    ) -> None:
+        self._lease_tokens[spatial_run_id] = SpatialLeaseToken(
+            self._owner, epoch, lease_expires_at
+        )
 
     def _touch_epoch(self, spatial_run_id: UUID, epoch: int) -> int:
         return touch_writer(

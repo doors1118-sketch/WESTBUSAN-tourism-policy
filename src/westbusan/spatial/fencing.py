@@ -30,6 +30,7 @@ class SpatialLeaseToken:
 
     owner: str
     fence_epoch: int
+    lease_expires_at: datetime
 
 
 @dataclass(slots=True)

@@ -63,8 +63,8 @@ _INTEGRITY_EXCEPTION_CODES = frozenset(
         "SELECTED_REVISION_UNAVAILABLE",
     }
 )
-_PUBLICATION_TRANSACTION_ATTEMPTS = 10
 _PUBLICATION_RETRY_BASE_SECONDS = 0.05
+_PUBLICATION_RETRY_MAX_SECONDS = 0.25
 _MANIFEST_CHUNK_ROWS = 64
 
 
@@ -222,7 +222,9 @@ def load_completed_spatial_summary(
             raise SpatialPublicationError(
                 "completed spatial publication identity is invalid"
             )
-        token = SpatialLeaseToken(str(publishers[0][0]), run.fence_epoch)
+        token = SpatialLeaseToken(
+            str(publishers[0][0]), run.fence_epoch, run.completed_at or current[2]
+        )
         _load_idempotent_publication(
             db,
             spatial_run_id,
@@ -259,22 +261,126 @@ def publish_spatial(
     settings: Settings | None = None,
     stage_hook: Callable[[str, UUID], None] | None = None,
 ) -> SpatialPublicationResult:
-    """Retry bounded transaction conflicts, then validate any committed winner."""
-    for attempt in range(_PUBLICATION_TRANSACTION_ATTEMPTS):
+    """Wait only through this exact lease while validating any committed winner."""
+    configured = settings or Settings.load(Path(__file__).resolve().parents[3])
+    retry_deadline = _monotonic_lease_deadline(lease_token.lease_expires_at)
+    retry_delay = _PUBLICATION_RETRY_BASE_SECONDS
+    while True:
         try:
             return _publish_spatial_once(
                 db,
                 spatial_run_id,
                 rollback_reason,
                 lease_token=lease_token,
-                settings=settings,
+                settings=configured,
                 stage_hook=stage_hook,
             )
-        except duckdb.TransactionException:
-            if attempt == _PUBLICATION_TRANSACTION_ATTEMPTS - 1:
-                raise
-            time.sleep(_PUBLICATION_RETRY_BASE_SECONDS * (attempt + 1))
-    raise AssertionError("spatial publication transaction retries exhausted")
+        except duckdb.TransactionException as conflict:
+            state = _publication_conflict_state(
+                db,
+                spatial_run_id,
+                configured,
+                lease_token,
+                rollback_reason,
+            )
+            if isinstance(state, SpatialPublicationResult):
+                return state
+            retry_deadline = max(
+                retry_deadline, _monotonic_lease_deadline(state)
+            )
+            remaining = retry_deadline - time.monotonic()
+            if remaining <= 0:
+                raise SpatialFenceError(
+                    f"spatial run {spatial_run_id} publication lease expired"
+                ) from conflict
+            time.sleep(min(retry_delay, remaining))
+            retry_delay = min(
+                retry_delay * 2, _PUBLICATION_RETRY_MAX_SECONDS
+            )
+
+
+def _monotonic_lease_deadline(lease_expires_at: datetime) -> float:
+    normalized = (
+        lease_expires_at.astimezone(UTC)
+        if lease_expires_at.tzinfo is not None
+        else lease_expires_at.replace(tzinfo=UTC)
+    )
+    remaining = max(0.0, (normalized - datetime.now(UTC)).total_seconds())
+    return time.monotonic() + remaining
+
+
+def _publication_conflict_state(
+    db: Database,
+    spatial_run_id: UUID,
+    settings: Settings,
+    lease_token: SpatialLeaseToken,
+    rollback_reason: str | None,
+) -> SpatialPublicationResult | datetime:
+    """Observe a conflict without accepting any owner or epoch other than caller's."""
+    began = False
+    try:
+        db.connection.execute("begin transaction")
+        began = True
+        current = _current_pointer(db)
+        if current is not None and current[0] == spatial_run_id:
+            result = _load_idempotent_publication(
+                db,
+                spatial_run_id,
+                settings,
+                lease_token,
+                current,
+                rollback_reason,
+            )
+            db.connection.execute("commit")
+            began = False
+            return result
+        rows = db.query(
+            """select run.status, run.owner, run.fence_epoch,
+                      run.lease_expires_at, writer.owner, writer.fence_epoch,
+                      writer.lease_expires_at
+               from spatial_run as run
+               join spatial_writer_lease as writer
+                 on writer.lease_key = 'writer'
+                and writer.spatial_run_id = run.spatial_run_id
+               where run.spatial_run_id = ?""",
+            [spatial_run_id],
+        )
+        if len(rows) != 1:
+            raise SpatialFenceError(
+                f"spatial run {spatial_run_id} retry ownership was lost"
+            )
+        (
+            status,
+            run_owner,
+            run_epoch,
+            run_expires_at,
+            writer_owner,
+            writer_epoch,
+            writer_expires_at,
+        ) = rows[0]
+        if (
+            status != "RUNNING"
+            or run_owner != lease_token.owner
+            or writer_owner != lease_token.owner
+            or int(run_epoch) != lease_token.fence_epoch
+            or int(writer_epoch) != lease_token.fence_epoch
+            or run_expires_at is None
+            or writer_expires_at is None
+        ):
+            raise SpatialFenceError(
+                f"spatial run {spatial_run_id} retry ownership changed"
+            )
+        lease_expires_at = min(run_expires_at, writer_expires_at)
+        if lease_expires_at <= datetime.now(UTC):
+            raise SpatialFenceError(
+                f"spatial run {spatial_run_id} retry lease expired"
+            )
+        db.connection.execute("commit")
+        began = False
+        return lease_expires_at
+    except Exception:
+        rollback(db, began)
+        raise
 
 
 def _publish_spatial_once(
