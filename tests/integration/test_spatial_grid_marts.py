@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -460,6 +461,92 @@ def test_partial_room_and_age_samples_never_extrapolate_component_points(
     }
 
 
+def test_positive_stock_with_no_known_room_or_age_samples_keeps_counts_unknown(
+    tmp_path: Path,
+) -> None:
+    """Catches absence of known samples being published as factual zero counts."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    _seed_district(
+        db,
+        base,
+        spatial,
+        total=3,
+        mapped=3,
+        rooms=[None, None, None],
+        ages=[None, None, None],
+    )
+
+    spatial_build.build_grid_marts(db, spatial, lambda: None)
+
+    assert db.query(
+        """select physical_facility_count, room_sum, room_coverage,
+                  small_facility_count, small_facility_share,
+                  age_sample_size, age_coverage, age_20y_facility_count,
+                  age_20y_share, age_30y_facility_count, age_30y_share,
+                  small_scale_rating, small_scale_points,
+                  aged_building_rating, aged_building_points,
+                  district_context_rating, district_context_points,
+                  composite_score, composite_grade
+           from mart_grid_month where spatial_run_id = ?""",
+        [spatial],
+    ) == [
+        (
+            3,
+            None,
+            0.0,
+            None,
+            None,
+            None,
+            0.0,
+            None,
+            None,
+            None,
+            None,
+            "unavailable",
+            None,
+            "unavailable",
+            None,
+            "high",
+            2.0,
+            None,
+            "insufficient_evidence",
+        )
+    ]
+    evidence = {
+        name: (numerator, denominator, coverage, json.loads(evidence_json))
+        for name, numerator, denominator, coverage, evidence_json in db.query(
+            """select metric_name, numerator, denominator, coverage, evidence_json
+               from mart_spatial_evidence
+               where spatial_run_id = ? and metric_name in (
+                   'room_coverage', 'small_facility_count',
+                   'small_facility_share', 'small_scale_points',
+                   'age_sample_size', 'age_20y_facility_count',
+                   'age_20y_share', 'age_30y_facility_count',
+                   'age_30y_share', 'aged_building_points'
+               )""",
+            [spatial],
+        )
+    }
+    for metric in (
+        "room_coverage",
+        "small_facility_count",
+        "small_facility_share",
+        "small_scale_points",
+    ):
+        assert evidence[metric][0] is None
+        assert evidence[metric][3]["missing_reason"] == "no_known_room_sample"
+    for metric in (
+        "age_sample_size",
+        "age_20y_facility_count",
+        "age_20y_share",
+        "age_30y_facility_count",
+        "age_30y_share",
+        "aged_building_points",
+    ):
+        assert evidence[metric][0] is None
+        assert evidence[metric][3]["missing_reason"] == "no_known_age_sample"
+
+
 @pytest.mark.parametrize(
     ("rooms", "ages", "expected_room_band", "expected_age_band"),
     [
@@ -636,6 +723,195 @@ def test_historical_period_never_borrows_a_current_stock_row(tmp_path: Path) -> 
     } == {"2020-01"}
 
 
+def test_unobserved_stock_quarantines_every_facility_derived_metric_and_detail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches Task 4 rows leaking medians/counts when district stock is unknown."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    _seed_district(
+        db,
+        base,
+        spatial,
+        total=3,
+        mapped=3,
+        rooms=[10, 20, 30],
+        ages=[19, 20, 30],
+        registrations_per_mapped=[2, 1, 1],
+        stock_observed=False,
+    )
+    registration_queries: list[str] = []
+    original_query = Database.query
+
+    def tracked_query(
+        database: Database,
+        sql: str,
+        parameters: list[object] | None = None,
+    ) -> list[tuple[object, ...]]:
+        if "from run_facility_license" in sql.lower():
+            registration_queries.append(sql)
+        return original_query(database, sql, parameters)
+
+    monkeypatch.setattr(Database, "query", tracked_query)
+
+    spatial_build.build_grid_marts(db, spatial, lambda: None)
+
+    assert registration_queries == []
+    row = db.query(
+        """select physical_facility_count, legal_registration_count, room_sum,
+                  room_coverage, small_facility_count, small_facility_share,
+                  age_sample_size, age_coverage, age_20y_facility_count,
+                  age_20y_share, age_30y_facility_count, age_30y_share,
+                  coordinate_sample_size, coordinate_coverage,
+                  district_context_rating, district_context_points,
+                  small_scale_rating, small_scale_points,
+                  aged_building_rating, aged_building_points,
+                  composite_score, composite_grade, evidence_json
+           from mart_grid_month where spatial_run_id = ?""",
+        [spatial],
+    )[0]
+    assert row[:14] == (None,) * 14
+    assert row[14:22] == (
+        "unavailable",
+        None,
+        "unavailable",
+        None,
+        "unavailable",
+        None,
+        None,
+        "insufficient_evidence",
+    )
+    grid_evidence = json.loads(row[22])
+    assert grid_evidence["missing_reason"] == "stock_not_observed"
+    for forbidden in (
+        "coordinate",
+        "median",
+        "ordered_ages",
+        "ordered_sample_size",
+        "thresholds",
+        "value",
+    ):
+        assert forbidden not in grid_evidence
+
+    evidence_rows = db.query(
+        """select numerator, denominator, coverage, evidence_json
+           from mart_spatial_evidence
+           where spatial_run_id = ? and subject_type = 'grid'
+           order by metric_name""",
+        [spatial],
+    )
+    assert len(evidence_rows) == len(EXPECTED_GRID_METRICS)
+    for numerator, denominator, coverage, evidence_json in evidence_rows:
+        assert (numerator, denominator, coverage) == (None, None, None)
+        evidence = json.loads(evidence_json)
+        assert evidence["missing_reason"] == "stock_not_observed"
+        for forbidden in (
+            "at_or_below_10_count",
+            "component_bands",
+            "coordinate",
+            "demand_pressure_band",
+            "known_sample_size",
+            "median",
+            "ordered_ages",
+            "ordered_sample_size",
+            "room_supply_band",
+            "thresholds",
+            "value",
+        ):
+            assert forbidden not in evidence
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("grid_id", "g5174_500_999_999"),
+        ("district_code", None),
+        ("district_code", "99999"),
+        ("district_name", None),
+        ("district_name", "해운대구"),
+    ],
+)
+def test_facility_identity_must_match_exact_pinned_grid_before_aggregation(
+    tmp_path: Path,
+    column: str,
+    value: str | None,
+) -> None:
+    """Catches invalid Task 4 identity yielding count/coverage contradictions."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    _seed_district(db, base, spatial, total=1, mapped=1)
+    db.connection.execute(
+        f"""update mart_facility_priority_current set {column} = ?
+             where spatial_run_id = ?""",
+        [value, spatial],
+    )
+
+    with pytest.raises(
+        spatial_build.GridMartBuildError,
+        match="pinned grid identity",
+    ):
+        spatial_build.build_grid_marts(db, spatial, lambda: None)
+
+    assert db.scalar(
+        "select count(*) from mart_grid_month where spatial_run_id = ?",
+        [spatial],
+    ) == 0
+    assert db.scalar(
+        "select count(*) from mart_spatial_evidence where spatial_run_id = ?",
+        [spatial],
+    ) == 0
+
+
+def test_facility_grid_from_another_boundary_cannot_enter_pinned_run(
+    tmp_path: Path,
+) -> None:
+    """Catches accepting a real grid ID that exists only under another boundary."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    _seed_district(db, base, spatial, total=1, mapped=1)
+    other_boundary = uuid4()
+    other_grid = "g5174_500_999_998"
+    _add_grid(db, other_boundary, grid_id=other_grid)
+    db.connection.execute(
+        """update mart_facility_priority_current set grid_id = ?
+           where spatial_run_id = ?""",
+        [other_grid, spatial],
+    )
+
+    with pytest.raises(
+        spatial_build.GridMartBuildError,
+        match="pinned grid identity",
+    ):
+        spatial_build.build_grid_marts(db, spatial, lambda: None)
+
+    assert db.scalar(
+        "select count(*) from mart_grid_month where spatial_run_id = ?",
+        [spatial],
+    ) == 0
+
+
+def test_facility_row_with_wrong_base_run_cannot_be_silently_ignored(
+    tmp_path: Path,
+) -> None:
+    """Catches filtering a malformed Task 4 row before validating its pinned base."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    _seed_district(db, base, spatial, total=1, mapped=1)
+    db.connection.execute(
+        """update mart_facility_priority_current
+           set base_published_run_id = ? where spatial_run_id = ?""",
+        [uuid4(), spatial],
+    )
+
+    with pytest.raises(
+        spatial_build.GridMartBuildError,
+        match="pinned grid identity",
+    ):
+        spatial_build.build_grid_marts(db, spatial, lambda: None)
+
+    assert db.scalar(
+        "select count(*) from mart_grid_month where spatial_run_id = ?",
+        [spatial],
+    ) == 0
+
+
 def test_inconsistent_mapped_count_fails_closed_with_explicit_reason(
     tmp_path: Path,
 ) -> None:
@@ -748,6 +1024,61 @@ def test_malformed_or_inconsistent_stock_evidence_fails_closed_without_leaking(
     assert source_identity == "inventory.full_snapshot_membership"
     assert json.loads(evidence_json)["missing_reason"] == "invalid_stock_evidence"
     assert "secret-token" not in evidence_json
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("stock_observed", 1),
+        ("numerator", True),
+        ("numerator", "3"),
+        ("numerator", -1),
+        ("numerator", math.nan),
+        ("numerator", math.inf),
+        ("denominator", True),
+        ("denominator", "1"),
+        ("denominator", -1),
+        ("denominator", math.nan),
+        ("denominator", math.inf),
+        ("coverage", True),
+        ("coverage", "1"),
+        ("coverage", -0.1),
+        ("coverage", 1.1),
+        ("coverage", math.nan),
+        ("coverage", math.inf),
+    ],
+)
+def test_stock_evidence_rejects_nonfinite_bool_string_and_out_of_range_scalars(
+    tmp_path: Path,
+    field: str,
+    invalid_value: object,
+) -> None:
+    """Catches Python bool equality and non-finite JSON bypassing stock gates."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    _seed_district(db, base, spatial, total=3, mapped=3)
+    document = json.loads(
+        db.scalar(
+            """select metric_evidence_json from mart_region_month
+               where run_id = ? and district = ? and period = ?""",
+            [base, DISTRICT, PERIOD],
+        )
+    )
+    document["physical_facility_count"][field] = invalid_value
+    db.connection.execute(
+        """update mart_region_month set metric_evidence_json = ?
+           where run_id = ? and district = ? and period = ?""",
+        [json.dumps(document, separators=(",", ":")), base, DISTRICT, PERIOD],
+    )
+
+    spatial_build.build_grid_marts(db, spatial, lambda: None)
+
+    count, evidence_json = db.query(
+        """select physical_facility_count, evidence_json
+           from mart_grid_month where spatial_run_id = ?""",
+        [spatial],
+    )[0]
+    assert count is None
+    assert json.loads(evidence_json)["missing_reason"] == "invalid_stock_evidence"
 
 
 def test_all_pinned_grids_rerun_deterministically_and_purge_only_target_grid_rows(

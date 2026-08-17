@@ -35,6 +35,30 @@ from westbusan.spatial.ratings import (
 )
 
 _STOCK_SOURCE_IDENTITY = "inventory.full_snapshot_membership"
+_GRID_METRIC_NAMES = (
+    "age_20y_facility_count",
+    "age_20y_share",
+    "age_30y_facility_count",
+    "age_30y_share",
+    "age_coverage",
+    "age_sample_size",
+    "aged_building_points",
+    "aged_building_rating",
+    "composite_grade",
+    "composite_score",
+    "coordinate_coverage",
+    "coordinate_sample_size",
+    "district_context_points",
+    "district_context_rating",
+    "legal_registration_count",
+    "physical_facility_count",
+    "room_coverage",
+    "room_sum",
+    "small_facility_count",
+    "small_facility_share",
+    "small_scale_points",
+    "small_scale_rating",
+)
 
 
 class FacilityBuildError(RuntimeError):
@@ -146,45 +170,45 @@ def build_grid_marts(
         raise GridMartBuildError("pinned grid is missing a district identity")
 
     facility_rows = db.query(
-        """select facility_id, grid_id, district_name, room_count,
-                  use_approval_age_years, small_scale_rating,
+        """select facility_id, base_published_run_id, grid_id,
+                  district_code, district_name,
+                  room_count, use_approval_age_years, small_scale_rating,
                   aged_building_rating
            from mart_facility_priority_current
-           where spatial_run_id = ? and base_published_run_id = ?
+           where spatial_run_id = ?
            order by grid_id, facility_id""",
-        [run.spatial_run_id, run.base_run_id],
+        [run.spatial_run_id],
     )
+    grid_identities = {grid.grid_id: grid for grid in grids}
     by_grid: dict[str, list[tuple[object, ...]]] = {}
     mapped_by_district: dict[str, set[object]] = {}
     for facility in facility_rows:
-        by_grid.setdefault(str(facility[1]), []).append(facility)
-        mapped_by_district.setdefault(str(facility[2]), set()).add(facility[0])
-    registration_counts = {
-        row[0]: int(row[1])
-        for row in db.query(
-            """select facility_id, count(*)
-               from run_facility_license where run_id = ?
-               group by facility_id order by facility_id""",
-            [run.base_run_id],
-        )
-    }
+        grid = grid_identities.get(str(facility[2]))
+        if (
+            facility[1] != run.base_run_id
+            or grid is None
+            or facility[3] is None
+            or facility[4] is None
+            or str(facility[3]) != grid.district_code
+            or str(facility[4]) != grid.district_name
+        ):
+            raise GridMartBuildError(
+                "Task 4 facility row does not match the exact pinned grid identity"
+            )
+        by_grid.setdefault(str(facility[2]), []).append(facility)
+        mapped_by_district.setdefault(str(facility[4]), set()).add(facility[0])
     snapshots = {
         district: _load_stock_snapshot(db, run, district, period)
         for district in sorted({grid.district_name for grid in grids})
     }
-    grid_rows: list[tuple[object, ...]] = []
-    evidence_rows: list[tuple[object, ...]] = []
-    for grid in grids:
-        progress()
-        facilities = by_grid.get(grid.grid_id, [])
-        snapshot = snapshots[grid.district_name]
-        district_mapped = len(mapped_by_district.get(grid.district_name, set()))
+    for district, snapshot in tuple(snapshots.items()):
+        district_mapped = len(mapped_by_district.get(district, set()))
         if (
             snapshot.observed
             and snapshot.total_facilities is not None
             and district_mapped > snapshot.total_facilities
         ):
-            snapshot = _StockSnapshot(
+            snapshots[district] = _StockSnapshot(
                 observed=False,
                 total_facilities=None,
                 demand_pressure_band=None,
@@ -193,11 +217,35 @@ def build_grid_marts(
                 source_period=snapshot.source_period,
                 missing_reason="mapped_facilities_exceed_observed_stock",
             )
-        observed = (
-            snapshot.observed
-            and snapshot.total_facilities is not None
-            and district_mapped <= snapshot.total_facilities
-        )
+    registration_facilities = sorted(
+        (
+            facility[0]
+            for facility in facility_rows
+            if snapshots[str(facility[4])].observed
+        ),
+        key=str,
+    )
+    registration_counts: dict[object, int] = {}
+    if registration_facilities:
+        placeholders = ",".join("?" for _ in registration_facilities)
+        registration_counts = {
+            row[0]: int(row[1])
+            for row in db.query(
+                f"""select facility_id, count(*)
+                    from run_facility_license
+                    where run_id = ? and facility_id in ({placeholders})
+                    group by facility_id order by facility_id""",
+                [run.base_run_id, *registration_facilities],
+            )
+        }
+    grid_rows: list[tuple[object, ...]] = []
+    evidence_rows: list[tuple[object, ...]] = []
+    for grid in grids:
+        progress()
+        facilities = by_grid.get(grid.grid_id, [])
+        snapshot = snapshots[grid.district_name]
+        district_mapped = len(mapped_by_district.get(grid.district_name, set()))
+        observed = snapshot.observed and snapshot.total_facilities is not None
         mapped_count = len(facilities) if observed else None
         legal_count = (
             sum(registration_counts.get(row[0], 0) for row in facilities)
@@ -212,20 +260,46 @@ def build_grid_marts(
             if observed and snapshot.total_facilities
             else None
         )
-        room_values = [float(row[3]) for row in facilities if row[3] is not None]
-        age_values = [float(row[4]) for row in facilities if row[4] is not None]
-        room_known = len(room_values) if observed else None
-        age_known = len(age_values) if observed else None
+        room_values = (
+            [float(row[5]) for row in facilities if row[5] is not None]
+            if observed
+            else []
+        )
+        age_values = (
+            [float(row[6]) for row in facilities if row[6] is not None]
+            if observed
+            else []
+        )
+        room_known_count = len(room_values) if observed else None
+        age_known_count = len(age_values) if observed else None
+        room_known = (
+            None
+            if mapped_count is not None
+            and mapped_count > 0
+            and room_known_count == 0
+            else room_known_count
+        )
+        age_known = (
+            None
+            if mapped_count is not None
+            and mapped_count > 0
+            and age_known_count == 0
+            else age_known_count
+        )
         room_coverage = (
-            room_known / mapped_count
-            if mapped_count is not None and mapped_count > 0 and room_known is not None
+            room_known_count / mapped_count
+            if mapped_count is not None
+            and mapped_count > 0
+            and room_known_count is not None
             else 1.0
             if mapped_count == 0
             else None
         )
         age_coverage = (
-            age_known / mapped_count
-            if mapped_count is not None and mapped_count > 0 and age_known is not None
+            age_known_count / mapped_count
+            if mapped_count is not None
+            and mapped_count > 0
+            and age_known_count is not None
             else 1.0
             if mapped_count == 0
             else None
@@ -239,17 +313,17 @@ def build_grid_marts(
         )
         small_count = (
             sum(value <= settings.spatial.room_scale_breaks[1] for value in room_values)
-            if observed
+            if observed and room_known is not None
             else None
         )
         age_20_count = (
             sum(value >= settings.spatial.age_year_breaks[0] for value in age_values)
-            if observed
+            if observed and age_known is not None
             else None
         )
         age_30_count = (
             sum(value >= settings.spatial.age_year_breaks[1] for value in age_values)
-            if observed
+            if observed and age_known is not None
             else None
         )
         small_share = small_count / room_known if room_known else None
@@ -299,17 +373,22 @@ def build_grid_marts(
             grid,
             period,
             snapshot,
+            include_thresholds=observed,
         )
-        grid_evidence = {
-            **common_evidence,
-            "coordinate": {
-                "coverage": coordinate_coverage,
-                "denominator": snapshot.total_facilities if observed else None,
-                "sample_size": coordinate_sample,
-                "scope": "district",
-            },
-            "missing_reason": None if observed else snapshot.missing_reason,
-        }
+        grid_evidence = (
+            {
+                **common_evidence,
+                "coordinate": {
+                    "coverage": coordinate_coverage,
+                    "denominator": snapshot.total_facilities,
+                    "sample_size": coordinate_sample,
+                    "scope": "district",
+                },
+                "missing_reason": None,
+            }
+            if observed
+            else {**common_evidence, "missing_reason": snapshot.missing_reason}
+        )
         grid_rows.append(
             (
                 run.spatial_run_id,
@@ -859,7 +938,10 @@ def _load_stock_snapshot(
         stock = evidence["physical_facility_count"]
         if not isinstance(stock, dict):
             raise TypeError("physical facility stock evidence must be an object")
-        observed = stock.get("stock_observed") is True
+        observed_value = stock["stock_observed"]
+        if not isinstance(observed_value, bool):
+            raise TypeError("stock_observed must be a JSON boolean")
+        observed = observed_value
         source_identity = stock["metric_source_identity"]
         source_period = str(stock["source_period"])
         if source_identity != _STOCK_SOURCE_IDENTITY:
@@ -876,6 +958,22 @@ def _load_stock_snapshot(
         )
     valid_total = isinstance(total, int) and not isinstance(total, bool) and total >= 0
     if not observed:
+        if (
+            source_period != period
+            or stock.get("numerator") is not None
+            or stock.get("denominator") is not None
+            or stock.get("coverage") is not None
+            or stock.get("quality_band") != "insufficient"
+        ):
+            return _StockSnapshot(
+                False,
+                None,
+                None,
+                None,
+                _STOCK_SOURCE_IDENTITY,
+                period,
+                "invalid_stock_evidence",
+            )
         return _StockSnapshot(
             False,
             None,
@@ -885,16 +983,27 @@ def _load_stock_snapshot(
             period,
             "stock_not_observed",
         )
-    numerator = stock.get("numerator")
-    denominator = stock.get("denominator")
-    coverage = stock.get("coverage")
+    try:
+        numerator = _strict_json_number(stock.get("numerator"), minimum=0.0)
+        denominator = _strict_json_number(stock.get("denominator"), minimum=0.0)
+        coverage = _strict_json_number(
+            stock.get("coverage"), minimum=0.0, maximum=1.0
+        )
+    except (TypeError, ValueError):
+        return _StockSnapshot(
+            False,
+            None,
+            None,
+            None,
+            _STOCK_SOURCE_IDENTITY,
+            period,
+            "invalid_stock_evidence",
+        )
     quality_band = stock.get("quality_band")
     consistent_evidence = (
         valid_total
         and source_period == period
-        and isinstance(numerator, (int, float))
-        and not isinstance(numerator, bool)
-        and float(numerator) == float(total)
+        and numerator == float(total)
         and denominator == 1.0
         and coverage == 1.0
         and quality_band == "good"
@@ -920,14 +1029,32 @@ def _load_stock_snapshot(
     )
 
 
+def _strict_json_number(
+    value: object,
+    *,
+    minimum: float,
+    maximum: float | None = None,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("evidence scalar must be a JSON number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("evidence scalar must be finite")
+    if number < minimum or (maximum is not None and number > maximum):
+        raise ValueError("evidence scalar is outside its valid range")
+    return number
+
+
 def _grid_public_evidence(
     run: _RunInput,
     config: SpatialConfig,
     grid: _GridMartDimension,
     period: str,
     snapshot: _StockSnapshot,
+    *,
+    include_thresholds: bool,
 ) -> dict[str, object]:
-    return {
+    evidence: dict[str, object] = {
         "boundary_version": str(run.boundary_version_id),
         "context_label": "district_context",
         "district": grid.district_name,
@@ -941,13 +1068,15 @@ def _grid_public_evidence(
         "policy_version": run.policy_version,
         "source_identity": snapshot.source_identity,
         "source_period": snapshot.source_period,
-        "thresholds": {
+    }
+    if include_thresholds:
+        evidence["thresholds"] = {
             "age_year_breaks": list(config.age_year_breaks),
             "coordinate_coverage_min": config.coordinate_coverage_min,
             "grid_min_facilities": config.grid_min_facilities,
             "room_scale_breaks": list(config.room_scale_breaks),
-        },
-    }
+        }
+    return evidence
 
 
 def _grid_metric_evidence_rows(
@@ -986,6 +1115,32 @@ def _grid_metric_evidence_rows(
     below_coordinate_guard: bool,
     config: SpatialConfig,
 ) -> list[tuple[object, ...]]:
+    if not observed:
+        return [
+            (
+                run.spatial_run_id,
+                run.base_run_id,
+                "grid",
+                grid.grid_id,
+                period,
+                metric_name,
+                snapshot.source_identity,
+                snapshot.source_period,
+                None,
+                None,
+                None,
+                "insufficient_evidence",
+                _canonical_json(
+                    {
+                        **common,
+                        "missing_reason": snapshot.missing_reason,
+                        "metric_name": metric_name,
+                        "stock_status": "unobserved",
+                    }
+                ),
+            )
+            for metric_name in _GRID_METRIC_NAMES
+        ]
     district_total = snapshot.total_facilities if observed else None
     stock_status = (
         "complete_empty"
@@ -1017,21 +1172,37 @@ def _grid_metric_evidence_rows(
         component_quality = "complete_empty"
     room_median = median(room_values) if room_values else None
     age_median = median(age_values) if age_values else None
+    room_missing_reason = (
+        "no_known_room_sample"
+        if mapped_count is not None and mapped_count > 0 and not room_values
+        else None
+    )
+    age_missing_reason = (
+        "no_known_age_sample"
+        if mapped_count is not None and mapped_count > 0 and not age_values
+        else None
+    )
     small_10_count = (
         sum(value <= config.room_scale_breaks[0] for value in room_values)
-        if observed
+        if observed and room_known is not None
         else None
     )
     room_details = {
         "known_sample_size": room_known,
         "median": room_median,
-        "ordered_sample_size": len(room_values) if observed else None,
+        "missing_reason": room_missing_reason,
+        "ordered_sample_size": len(room_values)
+        if observed and room_known is not None
+        else None,
         "summary": "median mapped facility",
     }
     age_details = {
         "median": age_median,
-        "ordered_ages": sorted(age_values),
-        "ordered_sample_size": len(age_values) if observed else None,
+        "missing_reason": age_missing_reason,
+        "ordered_ages": sorted(age_values) if age_known is not None else None,
+        "ordered_sample_size": len(age_values)
+        if observed and age_known is not None
+        else None,
         "summary": "median mapped facility",
     }
     specs: dict[
@@ -1181,7 +1352,8 @@ def _grid_metric_evidence_rows(
             component_quality if small_points is not None else "insufficient_evidence",
             {
                 **room_details,
-                "missing_reason": "incomplete_mapped_room_sample"
+                "missing_reason": room_missing_reason
+                or "incomplete_mapped_room_sample"
                 if small_band == "unavailable" and observed
                 else missing_reason,
             },
@@ -1199,6 +1371,8 @@ def _grid_metric_evidence_rows(
                 if no_mapped_facilities
                 else "coordinate_coverage_below_threshold"
                 if below_coordinate_guard
+                else room_missing_reason
+                if room_missing_reason is not None
                 else "incomplete_mapped_room_sample"
                 if small_points is None and observed
                 else missing_reason,
@@ -1213,7 +1387,8 @@ def _grid_metric_evidence_rows(
             component_quality if age_points is not None else "insufficient_evidence",
             {
                 **age_details,
-                "missing_reason": "incomplete_mapped_age_sample"
+                "missing_reason": age_missing_reason
+                or "incomplete_mapped_age_sample"
                 if age_band == "unavailable" and observed
                 else missing_reason,
             },
@@ -1231,6 +1406,8 @@ def _grid_metric_evidence_rows(
                 if no_mapped_facilities
                 else "coordinate_coverage_below_threshold"
                 if below_coordinate_guard
+                else age_missing_reason
+                if age_missing_reason is not None
                 else "incomplete_mapped_age_sample"
                 if age_points is None and observed
                 else missing_reason,

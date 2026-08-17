@@ -1,5 +1,65 @@
 # Task 5 report — evidence-gated 500m grid marts
 
+## Review round 1 hardening
+
+- Unknown, missing, invalid, or internally inconsistent district stock now
+  quarantines every grid stock/count/sample/room/age/coordinate metric. Grid
+  points and score remain `NULL`; component labels are `unavailable`; grade is
+  `insufficient_evidence`.
+- The unknown-stock path no longer calculates or serializes facility room/age
+  medians, sums, ordered values, count numerators, or policy thresholds as
+  applied. Every evidence-table numerator, denominator, and coverage is
+  `NULL`; JSON retains only safe provenance, metric identity, stock state, and
+  the explicit safe missing reason. Complete-empty observed stock remains the
+  sole path that emits factual zero samples/counts. Districts without valid
+  observed stock are also excluded before the legal-registration count query,
+  so even an unused facility-derived numerator is not calculated.
+- Every Task 4 facility row for the target spatial run is now revalidated before
+  aggregation. Its base published run must match, its grid must exist in the
+  exact boundary pinned by `spatial_run`, and its non-null district code/name
+  must equal that grid. Missing, wrong, or other-boundary identities block the
+  stage before any grid/evidence write, preventing `0 count / 1.0 coverage`
+  contradictions.
+- Observed positive stock with no known room sample now keeps room sum,
+  small-facility count/share, and their evidence numerators `NULL`, with
+  `no_known_room_sample`. The corresponding age sample/count/share fields use
+  `NULL` and `no_known_age_sample`. Their factual coverage remains `0.0`; a
+  partially known positive sample still retains its factual known metrics but
+  cannot produce a component point.
+- Exact stock evidence parsing now requires a real JSON boolean for
+  `stock_observed` and real finite, non-boolean JSON numbers for numerator,
+  denominator, and coverage. Strings, booleans, negative values, out-of-range
+  coverage, `NaN`, and infinity fail closed as `invalid_stock_evidence`.
+- Migrations 027–034 were not edited.
+
+Review-round RED evidence:
+
+1. Three mapped facilities under unobserved stock leaked `room_sum=60`,
+   medians, ordered ages, thresholds, and facility-derived evidence values;
+   a query spy also proved that the registration `COUNT` was still executed.
+2. Five null/wrong/nonexistent grid/district identities, a grid belonging only
+   to another boundary, and a mismatched base-run row all aggregated instead of
+   blocking.
+3. Positive stock with zero known room/age samples emitted zero small/20y/30y
+   counts and zero age sample size.
+4. Integer `1` for `stock_observed` was mislabeled merely unobserved, while
+   JSON `true` passed as denominator and coverage because Python boolean
+   equality matched `1.0`.
+
+Review-round GREEN evidence:
+
+- Unknown-stock quarantine/query-elision and stock-consistency guardrails:
+  **3 passed in 8.62s**.
+- Pinned facility identity revalidation: **7 passed**.
+- Strict JSON scalar matrix: **17 passed in 41.98s**.
+- Complete Task 5 integration suite, including real two-connection takeover:
+  **46 passed in 148.04s**.
+- Final combined Task 1–5 spatial regression: **173 passed in 246.09s**.
+- Analytics compatibility: **74 passed in 807.24s**.
+- Full database migration suite: **12 passed in 12.56s**.
+- Full Ruff, diff, migration immutability/version, conflict-marker,
+  production-secret/phone, public-evidence, and PowerShell parse scans: clean.
+
 ## Outcome
 
 - Implemented `build_grid_marts(db, spatial_run_id, progress) -> GridMartResult`
