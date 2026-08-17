@@ -167,6 +167,82 @@ def test_boundary_approval_audit_migration_upgrades_applied_030_database(
     }
 
 
+def test_spatial_rating_points_allow_unavailable_null_semantics(tmp_path: Path) -> None:
+    """Catches unavailable ratings being coerced to zero by NOT NULL columns."""
+    db = Database(tmp_path / "nullable-spatial-ratings.duckdb", Path("sql"))
+    db.migrate()
+
+    expected_nullable = {
+        ("mart_facility_priority_current", "small_scale_points"),
+        ("mart_facility_priority_current", "aged_building_points"),
+        ("mart_facility_priority_current", "district_context_points"),
+        ("mart_facility_priority_current", "composite_score"),
+        ("mart_grid_month", "small_scale_points"),
+        ("mart_grid_month", "aged_building_points"),
+        ("mart_grid_month", "district_context_points"),
+        ("mart_grid_month", "composite_score"),
+    }
+    actual_nullable = {
+        (table_name, column_name)
+        for table_name, column_name, is_nullable in db.query(
+            """select table_name, column_name, is_nullable
+               from information_schema.columns
+               where table_schema = 'main'
+                 and table_name in (
+                     'mart_facility_priority_current', 'mart_grid_month'
+                 )"""
+        )
+        if is_nullable == "YES"
+    }
+
+    assert expected_nullable <= actual_nullable
+
+
+def test_nullable_spatial_ratings_upgrade_applied_032_database(tmp_path: Path) -> None:
+    """Catches migration 033 rewriting checksums or requiring an empty database."""
+    migrations_032 = tmp_path / "migrations-032"
+    migrations_032.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name <= "032_spatial_transactional_fence_touch.sql":
+            copy2(migration, migrations_032 / migration.name)
+    path = tmp_path / "applied-032.duckdb"
+    original = Database(path, migrations_032)
+    original.migrate()
+    original_checksums = dict(
+        original.query("select version, checksum from schema_migrations")
+    )
+    original.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+
+    assert dict(upgraded.query("select version, checksum from schema_migrations")).items() >= (
+        original_checksums.items()
+    )
+    assert upgraded.query(
+        """select table_name, column_name, is_nullable
+           from information_schema.columns
+           where table_schema = 'main'
+             and table_name in (
+                 'mart_facility_priority_current', 'mart_grid_month'
+             )
+             and column_name in (
+                 'small_scale_points', 'aged_building_points',
+                 'district_context_points', 'composite_score'
+             )
+           order by table_name, column_name"""
+    ) == [
+        ("mart_facility_priority_current", "aged_building_points", "YES"),
+        ("mart_facility_priority_current", "composite_score", "YES"),
+        ("mart_facility_priority_current", "district_context_points", "YES"),
+        ("mart_facility_priority_current", "small_scale_points", "YES"),
+        ("mart_grid_month", "aged_building_points", "YES"),
+        ("mart_grid_month", "composite_score", "YES"),
+        ("mart_grid_month", "district_context_points", "YES"),
+        ("mart_grid_month", "small_scale_points", "YES"),
+    ]
+
+
 def test_migrations_are_idempotent(tmp_path: Path) -> None:
     db = Database(tmp_path / "test.duckdb", Path("sql"))
     db.migrate()
