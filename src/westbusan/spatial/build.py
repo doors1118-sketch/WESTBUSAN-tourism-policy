@@ -187,9 +187,11 @@ def build_grid_marts(
         if (
             facility[1] != run.base_run_id
             or grid is None
-            or facility[3] is None
             or facility[4] is None
-            or str(facility[3]) != grid.district_code
+            or (
+                str(facility[3]) if facility[3] is not None else None
+            )
+            != grid.district_code
             or str(facility[4]) != grid.district_name
         ):
             raise GridMartBuildError(

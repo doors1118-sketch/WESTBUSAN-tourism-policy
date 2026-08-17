@@ -718,8 +718,11 @@ def _validate_core_input(db: Database, run: _RunPublicationInput) -> None:
            from pipeline_run where run_id = ?""",
         [run.base_run_id],
     )
-    if len(core) != 1 or core[0][0] != "PUBLISHED":
-        raise SpatialPublicationError("base core run status is not PUBLISHED")
+    if len(core) != 1 or core[0][0] not in {
+        "PUBLISHED",
+        "PUBLISHED_WITH_WARNINGS",
+    }:
+        raise SpatialPublicationError("base core run status is not published")
     if core[0][1] is not True:
         raise SpatialPublicationError("base core run is not rebuildable")
     if core[0][2] is None or run.business_date < core[0][2]:

@@ -53,6 +53,11 @@ class SpatialRunSummary:
     started_at: datetime
     completed_at: datetime
 
+    @property
+    def published(self) -> bool:
+        """Report the terminal publication state without exposing DB internals."""
+        return self.status == "COMPLETED"
+
 
 class SpatialPipeline:
     """Own one fenced spatial attempt without mutating its core input run."""
@@ -591,8 +596,11 @@ class SpatialPipeline:
                from pipeline_run where run_id = ?""",
             [base_run_id],
         )
-        if len(rows) != 1 or rows[0][0] != "PUBLISHED":
-            raise SpatialInputError("base core run must have exact status PUBLISHED")
+        if len(rows) != 1 or rows[0][0] not in {
+            "PUBLISHED",
+            "PUBLISHED_WITH_WARNINGS",
+        }:
+            raise SpatialInputError("base core run must have a PUBLISHED status")
         if rows[0][1] is not True:
             raise SpatialInputError("base core run must be rebuildable")
         if rows[0][2] is None or business_date < rows[0][2]:

@@ -52,7 +52,204 @@ def test_cli_help_lists_all_operational_commands() -> None:
         "daily",
         "quality",
         "export",
+        "spatial-boundary-inspect",
+        "spatial-boundary-approve",
+        "spatial-run",
+        "spatial-export",
     } <= set(result.stdout.split())
+
+
+@pytest.mark.parametrize(
+    "command",
+    (
+        "spatial-boundary-inspect",
+        "spatial-boundary-approve",
+        "spatial-run",
+        "spatial-export",
+    ),
+)
+def test_spatial_cli_help_constructs_each_operator_command(command: str) -> None:
+    """Catches an unusable spatial command signature before any DB mutation."""
+    result = CliRunner().invoke(app, [command, "--help"])
+
+    assert result.exit_code == 0
+
+
+def test_spatial_boundary_inspection_prints_only_review_summary(
+    monkeypatch,
+) -> None:
+    """Catches raw boundary bytes or configured credentials leaking to stdout."""
+    secret = "CLI-PRIVATE-CREDENTIAL-MUST-NOT-PRINT"
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", secret)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "spatial-boundary-inspect",
+            "tests/fixtures/spatial/busan_dongs.geojson",
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+    output = json.loads(result.stdout)
+
+    assert result.exit_code == 1
+    assert output == {
+        "bounds": [128.9, 35.05, 128.916, 35.066],
+        "content_hash": (
+            "91e3b3226f20d3de893e6897ccb1ac57"
+            "cd5f27d6bd2625c19c366b1abbbcb4e2"
+        ),
+        "crs": "EPSG:4326",
+        "district_count": 16,
+        "dong_count": 17,
+        "feature_count": 17,
+        "geometry_valid": True,
+        "status": "REVIEW_REQUIRED",
+    }
+    assert "FeatureCollection" not in result.stdout
+    assert secret not in result.stdout
+
+
+def test_spatial_boundary_missing_file_does_not_echo_internal_path(
+    tmp_path: Path,
+) -> None:
+    """Catches framework validation disclosing a private operator inbox path."""
+    private_path = tmp_path / "PRIVATE-INBOX-PATH-MUST-NOT-PRINT.geojson"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "spatial-boundary-inspect",
+            str(private_path),
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "reason": "boundary_inspection_failed",
+        "status": "BLOCKED",
+    }
+    assert "PRIVATE-INBOX-PATH-MUST-NOT-PRINT" not in result.output
+
+
+def test_spatial_boundary_approval_rejects_hash_mismatch_without_leaking_input(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches CLI approval bypassing the reviewed hash or echoing sensitive input."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+    secret = "CLI-REVIEW-NOTE-MUST-NOT-PRINT"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "spatial-boundary-approve",
+            "tests/fixtures/spatial/busan_dongs.geojson",
+            "--sha256",
+            "0" * 64,
+            "--approver",
+            "operator-1",
+            "--rationale",
+            secret,
+            "--source-org",
+            "부산광역시",
+            "--source-url",
+            "https://data.busan.go.kr/boundary",
+            "--source-date",
+            "2026-08-01",
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "reason": "boundary_approval_failed",
+        "status": "BLOCKED",
+    }
+    assert secret not in result.stdout
+    assert "FeatureCollection" not in result.stdout
+    assert pipeline.db.scalar("select count(*) from spatial_boundary_version") == 0
+
+
+def test_spatial_run_cli_rejects_a_nonpublished_base(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches the CLI deriving map evidence from an invisible core attempt."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    base_run_id = uuid4()
+    pipeline.db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'test', now(), 'RUNNING', '2026-08-16', true)""",
+        [base_run_id],
+    )
+    pipeline.db.connection.execute(
+        """insert into publication_state (publication_key, published_run_id)
+           values ('current', ?)""",
+        [base_run_id],
+    )
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "spatial-run",
+            "--base-run-id",
+            str(base_run_id),
+            "--boundary-version-id",
+            str(uuid4()),
+            "--business-date",
+            "2026-08-17",
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "reason": "spatial_run_blocked",
+        "status": "BLOCKED",
+    }
+    assert pipeline.db.scalar("select count(*) from spatial_run") == 0
+
+
+def test_spatial_export_cli_fails_closed_without_current_pointer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches export manufacturing a bundle without a current spatial publication."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "spatial-export",
+            "--date",
+            "2026-08-17",
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "reason": "spatial_export_blocked",
+        "status": "BLOCKED",
+    }
+    assert not (pipeline.settings.data_dir / "spatial_exports").exists()
 
 
 def test_quality_defaults_to_latest_attempt_not_prior_publication(

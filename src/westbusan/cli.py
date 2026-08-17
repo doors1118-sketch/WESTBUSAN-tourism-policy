@@ -14,6 +14,11 @@ import typer
 from westbusan.db import migrate_legacy_run
 from westbusan.orchestrator import Pipeline, RunSummary, export_current, redact_for_log
 from westbusan.quality.checks import approve_schema_baseline, observed_schema_contracts
+from westbusan.spatial.boundary import approve_boundary, inspect_boundary
+from westbusan.spatial.export import export_spatial_current
+from westbusan.spatial.grid import build_grid
+from westbusan.spatial.models import BoundaryMetadata
+from westbusan.spatial.orchestrator import SpatialPipeline
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -264,6 +269,173 @@ def export(
         _print_json({"status": "BLOCKED", "reason": str(error)})
         raise typer.Exit(1) from error
     _print_json({"status": "exported", "paths": [str(path) for path in paths]})
+
+
+@app.command("spatial-boundary-inspect")
+def spatial_boundary_inspect(
+    boundary_file: Annotated[
+        Path,
+        typer.Argument(help="Official Busan administrative-boundary GeoJSON."),
+    ],
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Validate exact boundary bytes and print a redacted review summary."""
+    try:
+        pipeline = _pipeline(root)
+        inspection = inspect_boundary(boundary_file, pipeline.settings.regions)
+    except Exception as error:
+        _print_json({"status": "BLOCKED", "reason": "boundary_inspection_failed"})
+        raise typer.Exit(1) from error
+    _print_json(
+        {
+            "status": "REVIEW_REQUIRED",
+            "content_hash": inspection.content_hash,
+            "feature_count": inspection.feature_count,
+            "district_count": inspection.district_count,
+            "dong_count": inspection.dong_count,
+            "crs": inspection.crs,
+            "bounds": inspection.bounds,
+            "geometry_valid": inspection.geometry_valid,
+        }
+    )
+    raise typer.Exit(1)
+
+
+@app.command("spatial-boundary-approve")
+def spatial_boundary_approve(
+    boundary_file: Annotated[
+        Path,
+        typer.Argument(help="Exact inspected Busan boundary GeoJSON."),
+    ],
+    sha256: Annotated[str, typer.Option(help="Exact SHA-256 printed by inspection.")],
+    approver: Annotated[str, typer.Option(help="Non-secret reviewer identity.")],
+    rationale: Annotated[
+        str, typer.Option(help="Brief review rationale without secrets.")
+    ],
+    source_org: Annotated[str, typer.Option(help="Official source organization.")],
+    source_url: Annotated[str, typer.Option(help="Official HTTPS source URL.")],
+    source_date: Annotated[str, typer.Option(help="Official source date (YYYY-MM-DD).")],
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Approve one exact boundary hash and materialize its deterministic grid."""
+    try:
+        pipeline = _pipeline(root)
+        pipeline.db.migrate()
+        parsed_source_date = _parse_date(source_date, "source-date")
+        inspection = inspect_boundary(boundary_file, pipeline.settings.regions)
+        boundary_version_id = approve_boundary(
+            pipeline.db,
+            pipeline.raw_store,
+            boundary_file,
+            inspection,
+            sha256,
+            approver,
+            rationale,
+            BoundaryMetadata(
+                source_org,
+                source_url,
+                parsed_source_date,
+                parsed_source_date.isoformat(),
+            ),
+        )
+        grid = build_grid(
+            pipeline.db, boundary_version_id, pipeline.settings.spatial
+        )
+    except typer.BadParameter:
+        raise
+    except Exception as error:
+        _print_json({"status": "BLOCKED", "reason": "boundary_approval_failed"})
+        raise typer.Exit(1) from error
+    _print_json(
+        {
+            "status": "APPROVED",
+            "boundary_version_id": boundary_version_id,
+            "content_hash": inspection.content_hash,
+            "grid_cell_count": grid.cell_count,
+            "grid_row_digest": grid.row_digest,
+        }
+    )
+
+
+@app.command("spatial-run")
+def spatial_run(
+    base_run_id: Annotated[UUID, typer.Option(help="Current published core run.")],
+    boundary_version_id: Annotated[
+        UUID, typer.Option(help="Reviewed boundary version.")
+    ],
+    business_date: Annotated[
+        str, typer.Option(help="Spatial business date (YYYY-MM-DD).")
+    ],
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Build and atomically publish all spatial marts for exact inputs."""
+    try:
+        pipeline = _pipeline(root)
+        pipeline.db.migrate()
+        summary = SpatialPipeline(pipeline.db, pipeline.settings).run(
+            base_run_id,
+            boundary_version_id,
+            _parse_date(business_date, "business-date"),
+        )
+    except typer.BadParameter:
+        raise
+    except Exception as error:
+        _print_json({"status": "BLOCKED", "reason": "spatial_run_blocked"})
+        raise typer.Exit(1) from error
+    _print_json(
+        {
+            "status": summary.status,
+            "published": summary.published,
+            "spatial_run_id": summary.spatial_run_id,
+            "base_run_id": summary.base_published_run_id,
+            "boundary_version_id": summary.boundary_version_id,
+            "business_date": summary.business_date,
+        }
+    )
+
+
+@app.command("spatial-export")
+def spatial_export(
+    export_date: Annotated[
+        str, typer.Option("--date", help="Export partition date (YYYY-MM-DD).")
+    ],
+    rebuild: Annotated[
+        bool,
+        typer.Option(
+            "--rebuild",
+            help="Replace a same-date bundle only after verification fails.",
+        ),
+    ] = False,
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Export the verified current spatial publication as an offline bundle."""
+    try:
+        pipeline = _pipeline(root)
+        pipeline.db.migrate()
+        bundle = export_spatial_current(
+            pipeline.db,
+            pipeline.settings.data_dir,
+            _parse_date(export_date, "date"),
+            rebuild=rebuild,
+        )
+        base_run_id = pipeline.db.scalar(
+            """select base_published_run_id from spatial_run
+               where spatial_run_id = ?""",
+            [bundle.spatial_run_id],
+        )
+    except typer.BadParameter:
+        raise
+    except Exception as error:
+        _print_json({"status": "BLOCKED", "reason": "spatial_export_blocked"})
+        raise typer.Exit(1) from error
+    _print_json(
+        {
+            "status": "exported",
+            "spatial_run_id": bundle.spatial_run_id,
+            "base_run_id": base_run_id,
+            "files": [path.name for path in bundle.paths],
+        }
+    )
 
 
 def _finish(summary: RunSummary) -> None:

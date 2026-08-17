@@ -14,6 +14,14 @@ Cloud 작업 공간이 폐기되면 함께 사라질 수 있습니다. 지속 �
 `config/regions.yaml`에서 옵니다. 품질 게이트는 필수 증거가 없거나 바뀌면
 반드시 닫혀야 합니다.
 
+500m 공간 지도는 core와 분리된 `spatial_run`·manifest·현재 포인터를 사용합니다.
+공간 run이나 export 실패는 core 또는 이전 공간 last-known-good를 교체하지
+않습니다. 첫 release의 수요는 grid에 배분하지 않은 `district context`이고,
+지도 등급은 안전·위생·법규 준수·부동산 상태 판정이 아닙니다. 현재 공간 bundle은
+내부 관광 TF 검토용입니다. 공개 사업체명·주소·점 위치·정책 우선순위는 법률 및
+공개 검토, 접근통제, 정정 창구가 승인되기 전에는 Cloud나 공개 도메인에 배포하지
+마십시오.
+
 1741000 숙박 `info` 여섯 원천은 전국 현행 snapshot이며 모든 page에 부산
 관할필터 `cond[OPN_ATMY_GRP_CD::EQ]=6260000`이 필요합니다. 반환 행 관할도
 재검증합니다. 원천별 history operation은 아직 inspection·승인되지 않았으므로
@@ -98,13 +106,40 @@ Linux 기반 환경이면 마지막 세 명령의 interpreter를 `.venv/bin/pyth
 .\.venv\Scripts\python.exe -m westbusan.cli daily --as-of 2026-08-17
 ```
 
+## 공간 지도 인수인계
+
+공식 부산 행정동 GeoJSON을 credential과 분리된 검토 inbox에 전달한 뒤 아래 순서로
+실행합니다. 검사 명령의 종료 코드 1은 유효한 파일도 아직 승인되지 않았다는
+`REVIEW_REQUIRED` 의미입니다. 출력된 hash를 원문과 독립 대조해야 하며 hash,
+출처 기관·HTTPS URL·기준일, 운영자와 사유를 모두 명시합니다. 승인 시 기준일이
+경계 source version label로도 고정됩니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-boundary-inspect C:\secure-inbox\busan-dong.geojson
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-boundary-approve C:\secure-inbox\busan-dong.geojson --sha256 <검사값> --approver <운영자> --rationale "공식 경계 검토" --source-org <기관> --source-url https://example.go.kr/boundary --source-date 2026-08-01
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-run --base-run-id <현재 게시 run UUID> --boundary-version-id <승인 결과 UUID> --business-date 2026-08-17
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-export --date 2026-08-17
+```
+
+Cloud 작업에는 공식 경계 inbox, `data/raw`, DuckDB와 spatial export의 지속성을
+별도로 설계해야 합니다. `index.html`은 tile server·CDN·API key 없이 로컬에서
+열리지만, 그것이 공개 배포 승인을 뜻하지는 않습니다. 같은 날짜 bundle은 기존
+manifest와 파일 hash가 모두 맞으면 재사용되고, 불일치할 때만 검토 후
+`spatial-export --date YYYY-MM-DD --rebuild`로 backup/rollback 경로를 실행합니다.
+상세 운영·파일·등급·정정 계약은 `docs/SPATIAL_MAP_OPERATIONS.md`를 따릅니다.
+
 ## 이어서 확인할 명령
 
 ```powershell
 git status --short
 git log -5 --oneline
 .\.venv\Scripts\python.exe -m westbusan.cli --help
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-boundary-inspect --help
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-boundary-approve --help
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-run --help
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-export --help
 .\.venv\Scripts\python.exe -m pytest tests/integration/test_end_to_end.py -v
+.\.venv\Scripts\python.exe -m pytest tests/integration/test_spatial_end_to_end.py -v
 .\.venv\Scripts\python.exe -m pytest -v
 .\.venv\Scripts\python.exe -m ruff check .
 ```
@@ -113,24 +148,74 @@ git log -5 --oneline
 `task-12-report.md`를 기준으로 확인하십시오. 아직 원격 push나 Cloud 배포가
 완료됐다고 표현하면 안 됩니다.
 
+## Known core concurrency blocker (2026-08-17)
+
+Task 8 공간 경로 밖의 기존 core 동시성 test 6개가 현재 실패합니다. 이 상태를
+전체 release 통과로 해석하지 마십시오. 정확한 실패 node는 다음과 같습니다.
+
+- `tests/integration/test_transactional_fencing.py::test_each_paused_mart_stage_conflicts_with_two_connection_takeover`의
+  `facility-3`, `region-5`, `comparison-7`, `signal-9`, `manifest-11` 다섯 parameter
+- `tests/unit/test_quality_hardening.py::test_concurrent_publishers_converge_on_the_same_run_without_rewriting_it`
+
+외부 원천이나 credential 없이 다음 명령 하나로 여섯 건을 재현할 수 있습니다.
+
+```powershell
+$taskPython = '.\.venv\Scripts\python.exe'
+& $taskPython -m pytest `
+  tests/integration/test_transactional_fencing.py::test_each_paused_mart_stage_conflicts_with_two_connection_takeover `
+  tests/unit/test_quality_hardening.py::test_concurrent_publishers_converge_on_the_same_run_without_rewriting_it `
+  -vv
+```
+
+독립 focused 재현에서도 6 failed였습니다. mart fencing test는 pause/release
+handshake가 10초 안에 끝나지 않아 worker `Future` timeout 또는
+`paused.wait(10)` 실패가 발생합니다. quality test는 두 publisher가 비어 있는
+singleton `publication_state`를 동시에 `ON CONFLICT` upsert할 때 DuckDB
+`ConstraintException`(duplicate key)을 냅니다. 현재 retry 분류는 transaction
+conflict만 다루므로 이 예외에서 같은 run으로 수렴하지 않습니다.
+
+추정 원인은 두 가지이며 수정 전에 instrumentation으로 확인해야 합니다. 첫째,
+pause된 mart transaction과 두 번째 connection의 writer-lease 갱신 사이 DuckDB
+lock/transaction 진행 순서가 test handshake의 즉시 conflict 가정과 다를 수
+있습니다. 둘째, 비어 있는 singleton에 대한 동시 최초 insert 충돌은 일반
+transaction conflict가 아니라 constraint error로 노출됩니다. Task 8 diff는 이
+test나 `westbusan.quality.publish`/core lease 구현을 수정하지 않았습니다.
+
+후속 수정은 다음 불변조건을 약화하면 안 됩니다.
+
+- owner token과 fence epoch가 맞지 않는 stale writer는 mart 또는 포인터를
+  commit하지 못합니다.
+- 모든 quality evidence와 core mart manifest를 같은 fresh transaction에서 다시
+  검증한 뒤에만 singleton current pointer를 원자적으로 전진시킵니다.
+- 실패나 경쟁 손실은 이전 last-known-good pointer와 산출물을 그대로 둡니다.
+- 같은 run의 동시 publisher는 rewrite 없이 같은 포인터로 수렴해야 합니다.
+- constraint error 전체를 retry 대상으로 넓히지 않습니다. 안전한 singleton
+  최초-insert race만 구분하고 retry마다 fence, quality, manifest와 current
+  pointer를 다시 읽습니다.
+
+권장 TDD 순서는 기존 여섯 node를 RED로 단독 재현하고 transaction 경계별
+pause/lock/exception을 기록하는 것부터 시작합니다. 그다음 mart stage 하나의
+handshake 또는 production fencing 원인을 최소 변경으로 고쳐 다섯 parameter를
+GREEN으로 만들고, singleton 최초-insert race와 무관한 constraint error가
+propagate되는 별도 test를 추가한 뒤 quality race를 GREEN으로 만듭니다. 마지막에
+core fencing·quality focused suite, 전체 pytest와 Ruff를 새 process에서 차례로
+실행합니다.
+
 ## 로컬 검증 상태 (2026-08-17)
 
-- 전체 pytest: 380 passed, 3 skipped. Skip은 opt-in live 원천 검사입니다.
-- 교통 파일 CSV/XLSX는 원본 해시와 네이티브 스키마를 검증하고 요청 기간의
-  정확한 fact identity/value까지 대조합니다. ODCloud portal metadata는
-  provenance·해시·revision lineage에는 포함하지만 data page 수에는 포함하지
-  않으며, 실제 data page의 paging·총계·fact는 별도로 엄격 대조합니다.
-- 빈 DuckDB: 31개 migration 적용, main schema table 56개 생성.
-- legacy/DB migration focused: 5 passed.
+- 전체 pytest: 661 passed, 3 skipped, 위 core 동시성 6 failed. Skip은 opt-in live
+  원천 검사입니다.
+- Task 8 CLI unit file: 22 passed. 실제 fixture core→경계 승인/grid→공간 게시→
+  offline bundle 통합 test: 1 passed. 기존 spatial orchestrator/publication 회귀:
+  84 passed.
+- 빈 DuckDB: 41개 migration 적용, main schema table 69개 생성. migration 026
+  upgrade copy도 41개까지 적용됐고 spatial grid table을 확인했습니다.
 - Ruff: all checks passed.
-- CLI `--help`: `schema-approve`, `migrate-legacy`, `export --rebuild`를 포함한
-  운영 명령과 옵션 표시, 모두 exit 0.
-- 임시 DB `init-db`: exit 0.
-- 데이터 없는 임시 DB `quality`: fail-closed JSON, exit 1.
-- 관측 데이터 없는 임시 DB `schema-approve`: review-required JSON, exit 1.
-- PowerShell parser: 두 스크립트 모두 오류 0.
-- `git diff --check`: exit 0.
-- tracked 파일 conflict marker, 64자리 16진수 값 및 secret assignment 패턴: 0건.
+- root와 네 spatial CLI `--help`: 모두 exit 0.
+- PowerShell parser: 두 scheduling script 모두 오류 0.
+- `git diff --check`: exit 0. migration, `data`, `logs` 변경은 없습니다.
+- tracked credential 값, Task 8 절대 로컬 경로, public spatial 전화 필드는 없습니다.
+  두 기존 64자리 16진수 literal은 spatial fixture의 policy-version SHA-256입니다.
 
 이 수치는 fixture/offline 검증이며 실제 key를 사용한 live probe나 bulk backfill,
 원격 push, Cloud 실행 또는 예약 작업 등록의 증거가 아닙니다.

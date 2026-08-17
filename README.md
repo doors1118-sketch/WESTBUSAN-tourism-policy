@@ -131,6 +131,36 @@ NULL/insufficient로 표시합니다. 현행 재고는 원천별 마지막 완�
 `data/raw`, DuckDB 기본값은 `data/westbusan.duckdb`, JSONL 로그 기본값은
 `logs`입니다. 이 경로는 모두 Git에서 제외됩니다.
 
+## 500m 공간 우선순위 지도
+
+공간 지도는 현재 게시된 core run을 변경하지 않는 별도 파생 게시물입니다. 먼저
+공식 부산 행정동 경계 GeoJSON(EPSG:4326, 16개 구·군)을 검사합니다. 유효한
+검사도 사람의 승인이 남기 전에는 `REVIEW_REQUIRED`와 종료 코드 1을 반환합니다.
+출력된 SHA-256과 원문·출처 메타데이터를 대조한 뒤 같은 파일과 hash만 승인합니다.
+승인 명령은 불변 원문을 보존하고 결정적 EPSG:5174 500m grid도 함께 만듭니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-boundary-inspect C:\secure-inbox\busan-dong.geojson
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-boundary-approve C:\secure-inbox\busan-dong.geojson --sha256 <검사값> --approver <운영자> --rationale "공식 경계 검토" --source-org <기관> --source-url https://example.go.kr/boundary --source-date 2026-08-01
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-run --base-run-id <현재 게시 run UUID> --boundary-version-id <승인 결과 UUID> --business-date 2026-08-17
+.\.venv\Scripts\python.exe -m westbusan.cli spatial-export --date 2026-08-17
+```
+
+공간 run은 현재 포인터가 가리키고 manifest가 온전한 `PUBLISHED` 또는
+`PUBLISHED_WITH_WARNINGS` core run만 사용합니다. 실패·실행 중·비가시 run은
+거부합니다. 공간 실패는 core 게시나 이전 공간 last-known-good 포인터를 바꾸지
+않습니다. export는 `data/spatial_exports/export_date=YYYY-MM-DD` 아래 GeoJSON,
+CSV, Parquet, `manifest.json`, 네트워크가 필요 없는 3패널 `index.html`을 원자적으로
+만듭니다. 같은 날짜 bundle이 검증에 실패하면 `--rebuild`를 명시해야 합니다.
+
+지도 등급은 안전·위생·법규 준수·부동산 상태 평가가 아니라
+`policy-support priority`입니다. 건물 연령, 소규모, 수요 대비 공급을 분리해
+표시하며 첫 release의 수요는 grid 추정치가 아닌 `district context`입니다. 공개
+사업체명·주소·좌표·등급은 대외 cloud 배포 전에 별도의 법률·공개 검토가 필요하며,
+현재 배포 대상은 내부 관광 TF뿐입니다. 파일별 의미, coverage·소표본 guard,
+정정 절차와 release 2 입력 계약은
+[`docs/SPATIAL_MAP_OPERATIONS.md`](docs/SPATIAL_MAP_OPERATIONS.md)에 있습니다.
+
 ## 매일 실행과 예약
 
 검토 후 수동 실행은 `scripts/run_daily.ps1`입니다. 이 wrapper는 `.venv`의
