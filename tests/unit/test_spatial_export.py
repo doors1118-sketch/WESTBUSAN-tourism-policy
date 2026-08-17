@@ -16,7 +16,6 @@ from westbusan.spatial import export as spatial_export
 from westbusan.spatial.boundary import approve_boundary, inspect_boundary
 from westbusan.spatial.export import (
     SpatialExportError,
-    _sanitize_public_evidence,
     export_spatial_current,
     validate_spatial_bundle,
 )
@@ -43,7 +42,10 @@ def _settings(tmp_path: Path, db_path: Path) -> Settings:
 
 
 def _published_fixture(
-    tmp_path: Path, *, metric_evidence: dict[str, object] | None = None
+    tmp_path: Path,
+    *,
+    metric_evidence: dict[str, object] | None = None,
+    source_identity: str = "inventory.full_snapshot_membership",
 ) -> tuple[Database, Settings, UUID]:
     db_path = tmp_path / "export.duckdb"
     db = Database(db_path, Path("sql"))
@@ -117,8 +119,8 @@ def _published_fixture(
                 base_run_id,
                 facility_id,
                 grid_id,
-                f"공개 숙소 {index}",
-                f"부산 공개로 {index}",
+                f"공개/숙소 {index}",
+                f"부산 공개로 {index}/상가",
                 lon + index / 10000,
                 lat + index / 10000,
                 10.0 + index,
@@ -170,12 +172,13 @@ def _published_fixture(
                period, metric_name, source_identity, source_period, numerator,
                denominator, coverage, quality_band, evidence_json
            ) values (?, ?, 'grid', ?, '2026-08', 'coordinate_coverage',
-                     'inventory.full_snapshot_membership', '2026-08', 2.0, 2.0,
+                     ?, '2026-08', 2.0, 2.0,
                      1.0, 'good', ?)""",
         [
             spatial_run_id,
             base_run_id,
             grid_id,
+            source_identity,
             json.dumps(
                 metric_evidence
                 or {
@@ -242,6 +245,14 @@ def test_spatial_bundle_has_exact_files_schemas_counts_and_hashes(
     assert {
         feature["properties"]["period"] for feature in facilities["features"]
     } == {"2026-08"}
+    assert [
+        feature["properties"]["public_name"]
+        for feature in facilities["features"]
+    ] == ["공개/숙소 2", "공개/숙소 1"]
+    assert [
+        feature["properties"]["public_address"]
+        for feature in facilities["features"]
+    ] == ["부산 공개로 2/상가", "부산 공개로 1/상가"]
     evidence = parquet.ParquetFile(bundle.evidence_parquet).read()
     assert evidence.num_rows == 1
     assert evidence.column_names == [
@@ -292,44 +303,59 @@ def test_public_bundle_excludes_sensitive_and_internal_fields(tmp_path: Path) ->
         assert forbidden not in combined
 
 
-def test_public_evidence_rejects_sensitive_values_before_writing(
+def test_db_evidence_free_text_is_never_a_public_export_input(
     tmp_path: Path,
 ) -> None:
-    """Catches secrets and local paths hidden under otherwise public-safe keys."""
+    """Catches arbitrary DB JSON being sanitized and republished as public evidence."""
     db, settings, _run_id = _published_fixture(
         tmp_path,
         metric_evidence={
             "context_label": "district_coordinate_coverage",
             "scope": "district",
-            "summary": "C:\\Users\\analyst\\secrets.txt",
-            "interpretation_limits": [
-                "/home/analyst/.ssh/id_rsa",
-                "password=hunter2",
-                "Bearer private-token-value",
-            ],
+            "summary": "xoxb-" + "private-slack-token",
+            "interpretation_limits": ["/workspace/private/source.json"],
+            "unknown_nested": {"unknown_key": "must never be projected"},
         },
     )
 
-    with pytest.raises(SpatialExportError, match="unsafe public evidence value"):
-        export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+    bundle = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+    evidence = parquet.ParquetFile(bundle.evidence_parquet).read().to_pylist()
+    combined = bundle.index_html.read_text(encoding="utf-8") + json.dumps(
+        evidence, ensure_ascii=False
+    )
 
-    assert not (settings.data_dir / "spatial_exports").exists()
+    assert "xoxb-" + "private-slack-token" not in combined
+    assert "/workspace/private/source.json" not in combined
+    assert "unknown_nested" not in combined
+    projected = json.loads(evidence[0]["evidence_json"])
+    assert set(projected) == {
+        "boundary_version",
+        "business_date",
+        "interpretation",
+        "policy_version",
+    }
+    assert projected["interpretation"] == "policy-support priority"
 
 
 @pytest.mark.parametrize(
-    "value",
+    "source_identity",
     [
-        "ghp_" + "abcdefghijklmnopqrstuvwxyz123456",
-        "AKIA" + "ABCDEFGHIJKLMNOP",
-        "sk-" + "abcdefghijklmnopqrstuvwxyz123456",
-        "AIza" + "abcdefghijklmnopqrstuvwxyz1234567890",
-        "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiIxIn0.signaturevalue",
+        "glpat-private-token-value",
+        "C:\\internal\\source.txt",
+        "../workspace/private",
+        "https://internal.example/source",
     ],
 )
-def test_public_evidence_rejects_common_credential_shapes(value: str) -> None:
-    """Catches credential-shaped values that lack an explicit key or assignment."""
-    with pytest.raises(SpatialExportError, match="unsafe public evidence value"):
-        _sanitize_public_evidence({"summary": value})
+def test_typed_public_evidence_strings_fail_closed(
+    tmp_path: Path, source_identity: str
+) -> None:
+    """Catches typed evidence strings being silently redacted instead of rejected."""
+    db, settings, _run_id = _published_fixture(
+        tmp_path, source_identity=source_identity
+    )
+
+    with pytest.raises(SpatialExportError, match="unsafe public evidence string"):
+        export_spatial_current(db, settings.data_dir, EXPORT_DATE)
 
 
 def test_valid_same_run_bundle_is_idempotent_and_deterministic(tmp_path: Path) -> None:

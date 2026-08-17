@@ -102,70 +102,61 @@ _EVIDENCE_FIELDS = (
     "quality_band",
     "evidence_json",
 )
-_PRIVATE_KEY_PARTS = (
-    "phone",
-    "credential",
-    "password",
-    "passwd",
-    "secret",
-    "token",
-    "path",
-    "servicekey",
-    "api_key",
-    "raw_payload",
-    "duplicate_review",
-    "review_flags",
-    "review_note",
-    "building_id",
-    "version_run_id",
-    "artifact_id",
-    "local_path",
-)
-_PUBLIC_EVIDENCE_KEYS = frozenset(
+_PUBLIC_METRICS = frozenset(
     {
-        "age_year_breaks",
-        "at_or_below_10_count",
-        "boundary_version",
-        "component_bands",
-        "context_label",
-        "coordinate_coverage_min",
-        "count_basis",
-        "demand_pressure_band",
-        "district",
-        "grid_id",
-        "grid_min_facilities",
-        "interpretation_limits",
-        "known_sample_size",
-        "median",
-        "metric_name",
-        "missing_reason",
-        "ordered_ages",
-        "ordered_sample_size",
-        "period",
-        "policy_version",
-        "room_scale_breaks",
-        "room_supply_band",
-        "scope",
-        "source_identity",
-        "source_period",
-        "stock_status",
-        "summary",
-        "thresholds",
-        "value",
+        "age_20y_facility_count",
+        "age_20y_share",
+        "age_30y_facility_count",
+        "age_30y_share",
+        "age_coverage",
+        "age_sample_size",
+        "aged_building_points",
+        "aged_building_rating",
+        "composite_grade",
+        "composite_score",
+        "coordinate_coverage",
+        "coordinate_sample_size",
+        "district_context_points",
+        "district_context_rating",
+        "legal_registration_count",
+        "physical_facility_count",
+        "room_coverage",
+        "room_sum",
+        "small_facility_count",
+        "small_facility_share",
+        "small_scale_points",
+        "small_scale_rating",
     }
 )
+_RATING_VALUES = frozenset({"high", "medium", "low", "unavailable"})
+_GRADE_VALUES = frozenset(
+    {
+        "general",
+        "insufficient_evidence",
+        "monitor",
+        "priority_1",
+        "priority_2",
+        "small_sample",
+    }
+)
+_QUALITY_VALUES = frozenset(
+    {"complete_empty", "good", "insufficient_evidence", "warning"}
+)
+_DISPLAY_VALUES = frozenset({"public", "review_required"})
 _WINDOWS_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/])")
 _UNIX_PATH = re.compile(
-    r"(?<![A-Za-z0-9])/(?:home|Users|tmp|var|etc|opt|root|mnt|srv|private)(?:/|\\)",
-    re.IGNORECASE,
+    r"(?<![A-Za-z0-9])/(?:[A-Za-z0-9._~-]+(?:/|$))"
 )
+_TRAVERSAL = re.compile(r"(?:^|[\\/])\.\.(?:[\\/]|$)")
+_URL = re.compile(r"(?:https?|ftp|file)://|\bwww\.", re.IGNORECASE)
 _CREDENTIAL_VALUE = re.compile(
     r"(?:password|passwd|secret|token|api[_-]?key|servicekey|authorization)"
     r"\s*[:=]\s*\S+|\bbearer\s+[A-Za-z0-9._~+/=-]+|"
     r"\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]+|"
     r"\bgh[pousr]_[A-Za-z0-9]{20,255}\b|\bAKIA[0-9A-Z]{16}\b|"
     r"\bsk-[A-Za-z0-9_-]{16,}\b|\bAIza[0-9A-Za-z_-]{30,}\b|"
-    r"\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{8,}\b",
+    r"\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{8,}\b|"
+    r"\bglpat-[A-Za-z0-9_-]{8,}\b|\b(?:xox[a-z]?|xapp)-[A-Za-z0-9-]{8,}\b",
     re.IGNORECASE,
 )
 
@@ -552,6 +543,30 @@ def _load_grids(
         geometry = json.loads(row[-1])
         _validate_geometry(geometry)
         values = {key: row[index] for index, key in enumerate(_GRID_FIELDS)}
+        for field in (
+            "grid_id",
+            "district_code",
+            "district_name",
+            "primary_dong_code",
+            "primary_dong_name",
+        ):
+            values[field] = _validated_optional_public_string(values[field], field)
+        values["period"] = _validated_public_string(
+            values["period"], "period", pattern=r"\d{4}-\d{2}"
+        )
+        for field in (
+            "district_context_rating",
+            "small_scale_rating",
+            "aged_building_rating",
+        ):
+            values[field] = _validated_public_string(
+                values[field], field, allowed=_RATING_VALUES
+            )
+        values["composite_grade"] = _validated_public_string(
+            values["composite_grade"],
+            "composite_grade",
+            allowed=_GRADE_VALUES,
+        )
         values["geometry"] = geometry
         result.append(values)
     return result
@@ -571,7 +586,7 @@ def _load_facilities(
                   facility.district_context_rating,
                   facility.district_context_points, facility.composite_score,
                   facility.composite_grade, facility.display_status,
-                  facility.evidence_json, grid.primary_dong_name
+                  grid.primary_dong_name
            from mart_facility_priority_current as facility
            join dim_spatial_grid_500m as grid
              on grid.boundary_version_id = ?
@@ -586,41 +601,60 @@ def _load_facilities(
         )
     result: list[dict[str, Any]] = []
     keys: dict[str, str] = {}
+    source_dates_by_facility: dict[str, set[str]] = {}
+    for facility_id, observed_on in db.query(
+        """select facility_id, selected_observed_on
+           from run_facility_license where run_id = ?
+           order by facility_id, selected_observed_on""",
+        [identity.base_run_id],
+    ):
+        if observed_on is not None:
+            source_dates_by_facility.setdefault(str(facility_id), set()).add(
+                observed_on.isoformat()
+            )
     for index, row in enumerate(rows, start=1):
         facility_key = f"facility-{index:06d}"
         keys[str(row[0])] = facility_key
         longitude, latitude = _public_coordinate(row[4], row[5])
-        evidence = _safe_json_object(row[19])
-        selected = evidence.get("selected_revisions", [])
-        source_dates = sorted(
-            {
-                str(item["observed_on"])
-                for item in selected
-                if isinstance(item, dict) and item.get("observed_on")
-            }
-        )
+        source_dates = sorted(source_dates_by_facility.get(str(row[0]), set()))
         values = {
             "facility_key": facility_key,
-            "grid_id": row[1],
+            "grid_id": _validated_public_string(row[1], "grid_id"),
             "public_name": row[2],
             "public_address": row[3],
             "public_longitude": longitude,
             "public_latitude": latitude,
             "room_count": row[6],
             "use_approval_age_years": row[7],
-            "district_code": row[8],
-            "district_name": row[9],
-            "primary_dong_name": row[20],
+            "district_code": _validated_optional_public_string(
+                row[8], "district_code"
+            ),
+            "district_name": _validated_optional_public_string(
+                row[9], "district_name"
+            ),
+            "primary_dong_name": _validated_optional_public_string(
+                row[19], "primary_dong_name"
+            ),
             "period": identity.business_date.strftime("%Y-%m"),
-            "small_scale_rating": row[10],
+            "small_scale_rating": _validated_public_string(
+                row[10], "small_scale_rating", allowed=_RATING_VALUES
+            ),
             "small_scale_points": row[11],
-            "aged_building_rating": row[12],
+            "aged_building_rating": _validated_public_string(
+                row[12], "aged_building_rating", allowed=_RATING_VALUES
+            ),
             "aged_building_points": row[13],
-            "district_context_rating": row[14],
+            "district_context_rating": _validated_public_string(
+                row[14], "district_context_rating", allowed=_RATING_VALUES
+            ),
             "district_context_points": row[15],
             "composite_score": row[16],
-            "composite_grade": row[17],
-            "display_status": row[18],
+            "composite_grade": _validated_public_string(
+                row[17], "composite_grade", allowed=_GRADE_VALUES
+            ),
+            "display_status": _validated_public_string(
+                row[18], "display_status", allowed=_DISPLAY_VALUES
+            ),
             "source_dates": source_dates,
         }
         result.append(values)
@@ -636,7 +670,7 @@ def _load_evidence(
     rows = db.query(
         """select subject_type, subject_id, period, metric_name,
                   source_identity, source_period, numerator, denominator,
-                  coverage, quality_band, evidence_json
+                  coverage, quality_band
            from mart_spatial_evidence where spatial_run_id = ?
            order by subject_type, subject_id, period, metric_name""",
         [identity.spatial_run_id],
@@ -649,7 +683,10 @@ def _load_evidence(
     grid_keys = {str(row["grid_id"]) for row in grids}
     result: list[dict[str, Any]] = []
     for row in rows:
-        subject_type, subject_id = str(row[0]), str(row[1])
+        subject_type = _validated_public_string(
+            row[0], "subject_type", allowed=frozenset({"facility", "grid"})
+        )
+        subject_id = str(row[1])
         if subject_type == "grid" and subject_id in grid_keys:
             public_key = subject_id
         elif subject_type == "facility" and subject_id in facility_keys:
@@ -658,21 +695,47 @@ def _load_evidence(
             raise SpatialExportError(
                 "current spatial publication evidence subject is invalid"
             )
-        safe_evidence = _sanitize_public_evidence(_safe_json_object(row[10]))
+        period = _validated_public_string(
+            row[2], "period", pattern=r"\d{4}-\d{2}"
+        )
+        metric_name = _validated_public_string(
+            row[3], "metric_name", allowed=_PUBLIC_METRICS
+        )
+        source_identity = _validated_public_string(
+            row[4], "source_identity", pattern=r"[A-Za-z0-9._:-]{1,128}"
+        )
+        source_period = _validated_public_string(
+            row[5], "source_period", pattern=r"\d{4}-\d{2}(?:-\d{2})?"
+        )
+        quality_band = _validated_public_string(
+            row[9], "quality_band", allowed=_QUALITY_VALUES
+        )
+        projected_evidence = {
+            "boundary_version": _validated_public_string(
+                identity.boundary_version, "boundary_version"
+            ),
+            "business_date": identity.business_date.isoformat(),
+            "interpretation": "policy-support priority",
+            "policy_version": _validated_public_string(
+                identity.policy_version, "policy_version"
+            ),
+        }
         result.append(
             {
                 "subject_type": subject_type,
                 "public_subject_key": public_key,
-                "period": str(row[2]),
-                "metric_name": str(row[3]),
-                "source_identity": _safe_source_identity(row[4]),
-                "source_period": str(row[5]),
-                "numerator": _finite_or_none(row[6]),
-                "denominator": _finite_or_none(row[7]),
-                "coverage": _finite_or_none(row[8]),
-                "quality_band": str(row[9]),
+                "period": period,
+                "metric_name": metric_name,
+                "source_identity": source_identity,
+                "source_period": source_period,
+                "numerator": _public_evidence_number(row[6], "numerator"),
+                "denominator": _public_evidence_number(row[7], "denominator"),
+                "coverage": _public_evidence_number(
+                    row[8], "coverage", maximum=1.0
+                ),
+                "quality_band": quality_band,
                 "evidence_json": json.dumps(
-                    safe_evidence,
+                    projected_evidence,
                     ensure_ascii=False,
                     sort_keys=True,
                     separators=(",", ":"),
@@ -783,70 +846,41 @@ def _arrow_schema(schema: pa.Schema) -> list[dict[str, object]]:
     ]
 
 
-def _safe_json_object(value: object) -> dict[str, Any]:
-    try:
-        parsed = json.loads(str(value))
-    except (TypeError, json.JSONDecodeError) as error:
-        raise SpatialExportError("public spatial evidence JSON is invalid") from error
-    if not isinstance(parsed, dict):
-        raise SpatialExportError("public spatial evidence JSON is not an object")
-    return parsed
-
-
-def _sanitize_public_evidence(value: object) -> object:
-    _reject_sensitive_evidence(value)
-    return _allowlisted_evidence(value)
-
-
-def _allowlisted_evidence(value: object) -> object:
-    if isinstance(value, dict):
-        return {
-            str(key): _allowlisted_evidence(item)
-            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if str(key) in _PUBLIC_EVIDENCE_KEYS
-        }
-    if isinstance(value, list):
-        return [_allowlisted_evidence(item) for item in value]
-    if isinstance(value, float) and not math.isfinite(value):
-        raise SpatialExportError("public evidence contains a nonfinite number")
-    return value
-
-
-def _reject_sensitive_evidence(value: object) -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            if _private_key(str(key)):
-                raise SpatialExportError("unsafe public evidence value")
-            _reject_sensitive_evidence(item)
-        return
-    if isinstance(value, list):
-        for item in value:
-            _reject_sensitive_evidence(item)
-        return
-    if isinstance(value, str) and (
-        _WINDOWS_PATH.search(value)
-        or _UNIX_PATH.search(value)
-        or _CREDENTIAL_VALUE.search(value)
-    ):
-        raise SpatialExportError("unsafe public evidence value")
-
-
-def _private_key(key: str) -> bool:
-    normalized = key.casefold().replace("-", "_")
-    return any(part in normalized for part in _PRIVATE_KEY_PARTS)
-
-
-def _safe_source_identity(value: object) -> str:
+def _validated_public_string(
+    value: object,
+    field: str,
+    *,
+    allowed: frozenset[str] | None = None,
+    pattern: str | None = None,
+) -> str:
     text = str(value)
-    lowered = text.casefold()
     if (
         not text
-        or len(text) > 128
-        or any(part in lowered for part in _PRIVATE_KEY_PARTS)
-        or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-" for character in text)
+        or _WINDOWS_PATH.search(text)
+        or _UNIX_PATH.search(text)
+        or _TRAVERSAL.search(text)
+        or _URL.search(text)
+        or _CREDENTIAL_VALUE.search(text)
+        or (allowed is not None and text not in allowed)
+        or (pattern is not None and re.fullmatch(pattern, text) is None)
     ):
-        return "redacted.public_source"
+        raise SpatialExportError(f"unsafe public evidence string: {field}")
     return text
+
+
+def _validated_optional_public_string(value: object, field: str) -> str | None:
+    if value is None:
+        return None
+    return _validated_public_string(value, field)
+
+
+def _public_evidence_number(
+    value: object, field: str, *, maximum: float | None = None
+) -> float | None:
+    number = _finite_or_none(value)
+    if number is not None and (number < 0 or (maximum is not None and number > maximum)):
+        raise SpatialExportError(f"unsafe public evidence number: {field}")
+    return number
 
 
 def _finite_or_none(value: object) -> float | None:
