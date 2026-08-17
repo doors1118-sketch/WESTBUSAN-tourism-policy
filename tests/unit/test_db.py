@@ -29,6 +29,7 @@ def test_empty_database_migration_creates_spatial_schema_tables(tmp_path: Path) 
         "mart_spatial_exception",
         "spatial_publication_current",
         "spatial_publication_audit",
+        "spatial_run_summary",
     }
     actual_tables = {
         row[0]
@@ -302,6 +303,46 @@ def test_nullable_spatial_grid_counts_upgrade_applied_033_database(
         ("coordinate_sample_size", "YES"),
         ("legal_registration_count", "YES"),
         ("physical_facility_count", "YES"),
+    ]
+
+
+def test_spatial_run_summary_upgrade_applied_034_database(tmp_path: Path) -> None:
+    """Catches migration 035 rewriting old checksums or requiring an empty DB."""
+    migrations_034 = tmp_path / "migrations-034"
+    migrations_034.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name <= "034_spatial_nullable_grid_counts.sql":
+            copy2(migration, migrations_034 / migration.name)
+    path = tmp_path / "applied-034.duckdb"
+    original = Database(path, migrations_034)
+    original.migrate()
+    original_checksums = dict(
+        original.query("select version, checksum from schema_migrations")
+    )
+    original.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+
+    assert dict(upgraded.query("select version, checksum from schema_migrations")).items() >= (
+        original_checksums.items()
+    )
+    assert upgraded.query(
+        """select column_name, is_nullable
+           from information_schema.columns
+           where table_schema = 'main' and table_name = 'spatial_run_summary'
+           order by ordinal_position"""
+    ) == [
+        ("spatial_run_id", "NO"),
+        ("base_published_run_id", "NO"),
+        ("boundary_version_id", "NO"),
+        ("policy_version", "NO"),
+        ("business_date", "NO"),
+        ("table_counts_json", "NO"),
+        ("table_digests_json", "NO"),
+        ("started_at", "NO"),
+        ("completed_at", "NO"),
+        ("published_at", "NO"),
     ]
 
 

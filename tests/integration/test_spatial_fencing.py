@@ -115,6 +115,7 @@ def _active_pipelines(
             "2026-08-official",
         ),
     )
+    build_grid(first_db, boundary_version_id, SpatialConfig.default())
     second_db = Database(db_path, Path("sql"))
     settings = _settings(tmp_path, db_path)
     first = SpatialPipeline(first_db, settings, stage_hook=stage_hook)
@@ -227,6 +228,11 @@ def test_active_pipeline_lease_blocks_direct_grid_build(tmp_path: Path) -> None:
         "select boundary_version_id from spatial_run where spatial_run_id = ?",
         [spatial_run_id],
     )
+    before_count = second_db.scalar(
+        """select count(*) from dim_spatial_grid_500m
+           where boundary_version_id = ?""",
+        [boundary_version_id],
+    )
 
     with pytest.raises(SpatialLeaseError, match="active"):
         build_grid(second_db, boundary_version_id, SpatialConfig.default())
@@ -235,7 +241,7 @@ def test_active_pipeline_lease_blocks_direct_grid_build(tmp_path: Path) -> None:
         """select count(*) from dim_spatial_grid_500m
            where boundary_version_id = ?""",
         [boundary_version_id],
-    ) == 0
+    ) == before_count
 
 
 def test_active_pipeline_lease_blocks_direct_boundary_approval(
@@ -389,7 +395,7 @@ def test_stale_boundary_owner_cannot_write_raw_file_after_takeover(
     assert not store.raw_dir.exists() or not list(store.raw_dir.rglob("*.geojson"))
 
 
-@pytest.mark.parametrize("failure_stage", ["prepared", "fenced_stage"])
+@pytest.mark.parametrize("failure_stage", ["boundary", "manifest"])
 def test_crash_retry_purges_only_incomplete_target_and_preserves_pointers(
     tmp_path: Path, failure_stage: str
 ) -> None:
@@ -441,6 +447,12 @@ def test_crash_retry_purges_only_incomplete_target_and_preserves_pointers(
     assert first_db.scalar(
         "select status from spatial_run where spatial_run_id = ?", [spatial_run_id]
     ) == "FAILED"
+    assert first_db.query(
+        "select * from publication_state where publication_key = 'current'"
+    ) == core_pointer
+    assert first_db.query(
+        "select * from spatial_publication_current where publication_key = 'current'"
+    ) == spatial_pointer
     _insert_named_exception(first_db, spatial_run_id, base_run_id, "partial", "PARTIAL")
     retry = SpatialPipeline(first_db, first.settings)
     summary = retry.run(base_run_id, boundary_version_id, BUSINESS_DATE)
@@ -460,9 +472,10 @@ def test_crash_retry_purges_only_incomplete_target_and_preserves_pointers(
     assert first_db.query(
         "select * from publication_state where publication_key = 'current'"
     ) == core_pointer
-    assert first_db.query(
-        "select * from spatial_publication_current where publication_key = 'current'"
-    ) == spatial_pointer
+    assert first_db.scalar(
+        """select spatial_run_id from spatial_publication_current
+           where publication_key = 'current'"""
+    ) == spatial_run_id
 
 
 def _insert_named_exception(

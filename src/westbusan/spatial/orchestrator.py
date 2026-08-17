@@ -16,6 +16,7 @@ import duckdb
 from westbusan.analytics.build import mart_manifest_is_valid
 from westbusan.config import Settings
 from westbusan.db import Database, ensure_run_rebuildable
+from westbusan.spatial.build import build_facility_priority, build_grid_marts
 from westbusan.spatial.fencing import (
     SpatialFenceError,
     SpatialLeaseError,
@@ -25,6 +26,7 @@ from westbusan.spatial.fencing import (
     touch_writer,
 )
 from westbusan.spatial.policy import spatial_policy_version
+from westbusan.spatial.publish import publish_spatial, write_spatial_manifest
 
 _LEASE_DURATION = timedelta(minutes=15)
 _T = TypeVar("_T")
@@ -184,7 +186,7 @@ class SpatialPipeline:
         boundary_version_id: UUID,
         business_date: date,
     ) -> SpatialRunSummary:
-        """Execute the Task 3 fenced control stage and finalize atomically."""
+        """Build every real spatial stage and publish its manifest atomically."""
         spatial_run_id = self.prepare(
             base_run_id, boundary_version_id, business_date
         )
@@ -196,14 +198,50 @@ class SpatialPipeline:
         )
         if status == "COMPLETED":
             return self._load_summary(spatial_run_id)
-        stage = "prepared"
+        stage = "boundary"
         try:
-            self._stage_hook(stage, spatial_run_id)
             self.refresh_lease(spatial_run_id)
-            self._commit_stage(spatial_run_id, lambda: None)
-            stage = "fenced_stage"
+            self._validate_grid_projection(spatial_run_id)
             self._stage_hook(stage, spatial_run_id)
-            return self._complete_run(spatial_run_id)
+
+            stage = "facility"
+            build_facility_priority(
+                self.db,
+                spatial_run_id,
+                lambda: self.refresh_lease(spatial_run_id),
+            )
+            self._stage_hook(stage, spatial_run_id)
+
+            stage = "grid"
+            build_grid_marts(
+                self.db,
+                spatial_run_id,
+                lambda: self.refresh_lease(spatial_run_id),
+            )
+            self._stage_hook(stage, spatial_run_id)
+
+            stage = "evidence"
+            self._validate_evidence_stage(spatial_run_id)
+            self._stage_hook(stage, spatial_run_id)
+
+            stage = "manifest"
+            write_spatial_manifest(self.db, spatial_run_id)
+            self._stage_hook(stage, spatial_run_id)
+
+            stage = "finalizer"
+
+            def finalizer_hook(finalizer_stage: str, run_id: UUID) -> None:
+                nonlocal stage
+                stage = finalizer_stage
+                self._stage_hook(finalizer_stage, run_id)
+
+            publish_spatial(
+                self.db,
+                spatial_run_id,
+                settings=self.settings,
+                stage_hook=finalizer_hook,
+            )
+            return self._load_summary(spatial_run_id)
         except Exception as error:
             self._record_failure(spatial_run_id, stage, error)
             raise
@@ -327,40 +365,6 @@ class SpatialPipeline:
             _rollback(self.db, began)
             raise
 
-    def _complete_run(self, spatial_run_id: UUID) -> SpatialRunSummary:
-        began = False
-        try:
-            completed_at = datetime.now(UTC)
-            self.db.connection.execute("begin transaction")
-            began = True
-            epoch = self._assert_fence(spatial_run_id)
-            updated = self.db.query(
-                """update spatial_run
-                   set status = 'COMPLETED', completed_at = ?, owner = null,
-                       lease_expires_at = null, failure_evidence_json = null
-                   where spatial_run_id = ? and status = 'RUNNING' and owner = ?
-                     and fence_epoch = ? returning spatial_run_id""",
-                [completed_at, spatial_run_id, self._owner, epoch],
-            )
-            released = self.db.query(
-                """update spatial_writer_lease
-                   set spatial_run_id = null, owner = null, lease_expires_at = null,
-                       fence_touch = coalesce(fence_touch, 0) + 1
-                   where lease_key = 'writer' and spatial_run_id = ? and owner = ?
-                     and fence_epoch = ? returning lease_key""",
-                [spatial_run_id, self._owner, epoch],
-            )
-            if len(updated) != 1 or len(released) != 1:
-                raise SpatialFenceError(
-                    f"spatial run {spatial_run_id} could not finalize ownership"
-                )
-            self.db.connection.execute("commit")
-            began = False
-        except Exception:
-            _rollback(self.db, began)
-            raise
-        return self._load_summary(spatial_run_id)
-
     def _record_failure(
         self, spatial_run_id: UUID, stage: str, error: Exception
     ) -> None:
@@ -402,9 +406,19 @@ class SpatialPipeline:
 
     def _load_summary(self, spatial_run_id: UUID) -> SpatialRunSummary:
         rows = self.db.query(
-            """select spatial_run_id, base_published_run_id, boundary_version_id,
-                      business_date, status, started_at, completed_at
-               from spatial_run where spatial_run_id = ?""",
+            """select run.spatial_run_id, run.base_published_run_id,
+                      run.boundary_version_id, run.business_date, run.status,
+                      run.started_at, run.completed_at
+               from spatial_run as run
+               join spatial_run_summary as summary
+                 on summary.spatial_run_id = run.spatial_run_id
+                and summary.base_published_run_id = run.base_published_run_id
+                and summary.boundary_version_id = run.boundary_version_id
+                and summary.business_date = run.business_date
+                and summary.started_at = run.started_at
+                and summary.completed_at = run.completed_at
+                and summary.published_at = run.completed_at
+               where run.spatial_run_id = ?""",
             [spatial_run_id],
         )
         if len(rows) != 1 or rows[0][6] is None:
@@ -412,6 +426,10 @@ class SpatialPipeline:
         return SpatialRunSummary(*rows[0])
 
     def _purge_run_outputs(self, spatial_run_id: UUID) -> None:
+        self.db.connection.execute(
+            "delete from spatial_run_summary where spatial_run_id = ?",
+            [spatial_run_id],
+        )
         self.db.connection.execute(
             """delete from spatial_mart_completion_manifest
                where spatial_run_id = ?""",
@@ -426,6 +444,78 @@ class SpatialPipeline:
             self.db.connection.execute(
                 f"delete from {table} where spatial_run_id = ?", [spatial_run_id]
             )
+
+    def _validate_grid_projection(self, spatial_run_id: UUID) -> None:
+        """Require the exact deterministic grid already pinned to this run."""
+        boundary_version_id = self.db.scalar(
+            """select boundary_version_id from spatial_run
+               where spatial_run_id = ? and status = 'RUNNING'""",
+            [spatial_run_id],
+        )
+        rows = self.db.query(
+            """select grid_id, x_index, y_index, district_name
+               from dim_spatial_grid_500m where boundary_version_id = ?
+               order by grid_id""",
+            [boundary_version_id],
+        )
+        valid_districts = {
+            *self.settings.regions.west,
+            *self.settings.regions.east,
+            *self.settings.regions.other,
+        }
+        if not rows or any(
+            str(grid_id) != f"g5174_500_{int(x_index)}_{int(y_index)}"
+            or district_name not in valid_districts
+            for grid_id, x_index, y_index, district_name in rows
+        ):
+            raise SpatialInputError("pinned boundary grid projection is invalid")
+
+    def _validate_evidence_stage(self, spatial_run_id: UUID) -> None:
+        """Bind grid rows and metric evidence before the completion manifest."""
+        expected_grids = int(
+            self.db.scalar(
+                """select count(*)
+                   from dim_spatial_grid_500m as grid
+                   join spatial_run as run
+                     on run.boundary_version_id = grid.boundary_version_id
+                   where run.spatial_run_id = ?""",
+                [spatial_run_id],
+            )
+        )
+        actual_grids = int(
+            self.db.scalar(
+                "select count(*) from mart_grid_month where spatial_run_id = ?",
+                [spatial_run_id],
+            )
+        )
+        evidenced_grids = int(
+            self.db.scalar(
+                """select count(distinct subject_id || ':' || period)
+                   from mart_spatial_evidence
+                   where spatial_run_id = ? and subject_type = 'grid'""",
+                [spatial_run_id],
+            )
+        )
+        orphan_evidence = int(
+            self.db.scalar(
+                """select count(*) from mart_spatial_evidence as evidence
+                   where evidence.spatial_run_id = ? and evidence.subject_type = 'grid'
+                     and not exists (
+                       select 1 from mart_grid_month as grid
+                       where grid.spatial_run_id = evidence.spatial_run_id
+                         and grid.grid_id = evidence.subject_id
+                         and grid.period = evidence.period
+                     )""",
+                [spatial_run_id],
+            )
+        )
+        if (
+            expected_grids <= 0
+            or actual_grids != expected_grids
+            or evidenced_grids != expected_grids
+            or orphan_evidence
+        ):
+            raise SpatialInputError("spatial grid evidence stage is incomplete")
 
     @property
     def _policy_version(self) -> str:

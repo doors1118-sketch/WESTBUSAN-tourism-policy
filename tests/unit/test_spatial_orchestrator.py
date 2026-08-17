@@ -10,6 +10,7 @@ from westbusan.analytics.build import write_mart_manifest
 from westbusan.config import PolicyConfig, RegionConfig, Settings, SpatialConfig
 from westbusan.db import Database
 from westbusan.spatial.boundary import approve_boundary, inspect_boundary
+from westbusan.spatial.grid import build_grid
 from westbusan.spatial.models import BoundaryMetadata
 from westbusan.spatial.orchestrator import (
     SpatialInputError,
@@ -78,7 +79,7 @@ def _seed_core_run(
 
 def _approve_boundary(db: Database, tmp_path: Path) -> UUID:
     inspection = inspect_boundary(BOUNDARY_FIXTURE, RegionConfig.default())
-    return approve_boundary(
+    boundary_version_id = approve_boundary(
         db,
         RawStore(tmp_path / "raw"),
         BOUNDARY_FIXTURE,
@@ -93,6 +94,8 @@ def _approve_boundary(db: Database, tmp_path: Path) -> UUID:
             "2026-08-official",
         ),
     )
+    build_grid(db, boundary_version_id, SpatialConfig.default())
+    return boundary_version_id
 
 
 @pytest.mark.parametrize("status", ["RUNNING", "BLOCKED", "HTTP_FAILED"])

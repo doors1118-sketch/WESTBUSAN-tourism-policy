@@ -608,7 +608,7 @@ def test_distinct_registration_coordinates_emit_one_ambiguous_exception(
     ) == [
         (
             "AMBIGUOUS_COORDINATES",
-            "open",
+            "unresolved",
             json.dumps(
                 {
                     "candidate_count": 2,

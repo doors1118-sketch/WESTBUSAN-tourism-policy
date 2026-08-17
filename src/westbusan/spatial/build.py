@@ -1627,7 +1627,7 @@ def _exception_row(
         str(facility_id),
         code,
         _canonical_json(evidence),
-        "open",
+        "unresolved",
     )
 
 
