@@ -8,6 +8,7 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import tempfile
 from collections.abc import Mapping, Sequence
@@ -75,6 +76,8 @@ _FACILITY_FIELDS = (
     "use_approval_age_years",
     "district_code",
     "district_name",
+    "primary_dong_name",
+    "period",
     "small_scale_rating",
     "small_scale_points",
     "aged_building_rating",
@@ -101,6 +104,12 @@ _EVIDENCE_FIELDS = (
 )
 _PRIVATE_KEY_PARTS = (
     "phone",
+    "credential",
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "path",
     "servicekey",
     "api_key",
     "raw_payload",
@@ -111,6 +120,53 @@ _PRIVATE_KEY_PARTS = (
     "version_run_id",
     "artifact_id",
     "local_path",
+)
+_PUBLIC_EVIDENCE_KEYS = frozenset(
+    {
+        "age_year_breaks",
+        "at_or_below_10_count",
+        "boundary_version",
+        "component_bands",
+        "context_label",
+        "coordinate_coverage_min",
+        "count_basis",
+        "demand_pressure_band",
+        "district",
+        "grid_id",
+        "grid_min_facilities",
+        "interpretation_limits",
+        "known_sample_size",
+        "median",
+        "metric_name",
+        "missing_reason",
+        "ordered_ages",
+        "ordered_sample_size",
+        "period",
+        "policy_version",
+        "room_scale_breaks",
+        "room_supply_band",
+        "scope",
+        "source_identity",
+        "source_period",
+        "stock_status",
+        "summary",
+        "thresholds",
+        "value",
+    }
+)
+_WINDOWS_PATH = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/])")
+_UNIX_PATH = re.compile(
+    r"(?<![A-Za-z0-9])/(?:home|Users|tmp|var|etc|opt|root|mnt|srv|private)(?:/|\\)",
+    re.IGNORECASE,
+)
+_CREDENTIAL_VALUE = re.compile(
+    r"(?:password|passwd|secret|token|api[_-]?key|servicekey|authorization)"
+    r"\s*[:=]\s*\S+|\bbearer\s+[A-Za-z0-9._~+/=-]+|"
+    r"\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]+|"
+    r"\bgh[pousr]_[A-Za-z0-9]{20,255}\b|\bAKIA[0-9A-Z]{16}\b|"
+    r"\bsk-[A-Za-z0-9_-]{16,}\b|\bAIza[0-9A-Za-z_-]{30,}\b|"
+    r"\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{8,}\b",
+    re.IGNORECASE,
 )
 
 
@@ -273,6 +329,8 @@ def validate_spatial_bundle(
             or manifest.get("boundary_version") != identity.boundary_version
             or manifest.get("policy_version") != identity.policy_version
             or not isinstance(manifest.get("export_date"), str)
+            or directory.name
+            != f"export_date={manifest.get('export_date')}"
         ):
             return False
         public_data, expected = _build_artifacts(db, identity)
@@ -503,16 +561,23 @@ def _load_facilities(
     db: Database, identity: _PublicationIdentity
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     rows = db.query(
-        """select facility_id, grid_id, public_name, public_address,
-                  public_longitude, public_latitude, room_count,
-                  use_approval_age_years, district_code, district_name,
-                  small_scale_rating, small_scale_points, aged_building_rating,
-                  aged_building_points, district_context_rating,
-                  district_context_points, composite_score, composite_grade,
-                  display_status, evidence_json
-           from mart_facility_priority_current where spatial_run_id = ?
-           order by facility_id""",
-        [identity.spatial_run_id],
+        """select facility.facility_id, facility.grid_id,
+                  facility.public_name, facility.public_address,
+                  facility.public_longitude, facility.public_latitude,
+                  facility.room_count, facility.use_approval_age_years,
+                  facility.district_code, facility.district_name,
+                  facility.small_scale_rating, facility.small_scale_points,
+                  facility.aged_building_rating, facility.aged_building_points,
+                  facility.district_context_rating,
+                  facility.district_context_points, facility.composite_score,
+                  facility.composite_grade, facility.display_status,
+                  facility.evidence_json, grid.primary_dong_name
+           from mart_facility_priority_current as facility
+           join dim_spatial_grid_500m as grid
+             on grid.boundary_version_id = ?
+            and grid.grid_id = facility.grid_id
+           where facility.spatial_run_id = ? order by facility.facility_id""",
+        [identity.boundary_version_id, identity.spatial_run_id],
     )
     expected = identity.table_counts.get("mart_facility_priority_current")
     if expected != len(rows):
@@ -545,6 +610,8 @@ def _load_facilities(
             "use_approval_age_years": row[7],
             "district_code": row[8],
             "district_name": row[9],
+            "primary_dong_name": row[20],
+            "period": identity.business_date.strftime("%Y-%m"),
             "small_scale_rating": row[10],
             "small_scale_points": row[11],
             "aged_building_rating": row[12],
@@ -591,7 +658,7 @@ def _load_evidence(
             raise SpatialExportError(
                 "current spatial publication evidence subject is invalid"
             )
-        safe_evidence = _sanitize_json(_safe_json_object(row[10]))
+        safe_evidence = _sanitize_public_evidence(_safe_json_object(row[10]))
         result.append(
             {
                 "subject_type": subject_type,
@@ -726,18 +793,42 @@ def _safe_json_object(value: object) -> dict[str, Any]:
     return parsed
 
 
-def _sanitize_json(value: object) -> object:
+def _sanitize_public_evidence(value: object) -> object:
+    _reject_sensitive_evidence(value)
+    return _allowlisted_evidence(value)
+
+
+def _allowlisted_evidence(value: object) -> object:
     if isinstance(value, dict):
         return {
-            str(key): _sanitize_json(item)
+            str(key): _allowlisted_evidence(item)
             for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if not _private_key(str(key))
+            if str(key) in _PUBLIC_EVIDENCE_KEYS
         }
     if isinstance(value, list):
-        return [_sanitize_json(item) for item in value]
+        return [_allowlisted_evidence(item) for item in value]
     if isinstance(value, float) and not math.isfinite(value):
         raise SpatialExportError("public evidence contains a nonfinite number")
     return value
+
+
+def _reject_sensitive_evidence(value: object) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _private_key(str(key)):
+                raise SpatialExportError("unsafe public evidence value")
+            _reject_sensitive_evidence(item)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _reject_sensitive_evidence(item)
+        return
+    if isinstance(value, str) and (
+        _WINDOWS_PATH.search(value)
+        or _UNIX_PATH.search(value)
+        or _CREDENTIAL_VALUE.search(value)
+    ):
+        raise SpatialExportError("unsafe public evidence value")
 
 
 def _private_key(key: str) -> bool:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import date
 from pathlib import Path
 from uuid import UUID, uuid4
@@ -15,6 +16,7 @@ from westbusan.spatial import export as spatial_export
 from westbusan.spatial.boundary import approve_boundary, inspect_boundary
 from westbusan.spatial.export import (
     SpatialExportError,
+    _sanitize_public_evidence,
     export_spatial_current,
     validate_spatial_bundle,
 )
@@ -40,7 +42,9 @@ def _settings(tmp_path: Path, db_path: Path) -> Settings:
     )
 
 
-def _published_fixture(tmp_path: Path) -> tuple[Database, Settings, UUID]:
+def _published_fixture(
+    tmp_path: Path, *, metric_evidence: dict[str, object] | None = None
+) -> tuple[Database, Settings, UUID]:
     db_path = tmp_path / "export.duckdb"
     db = Database(db_path, Path("sql"))
     db.migrate()
@@ -167,10 +171,25 @@ def _published_fixture(tmp_path: Path) -> tuple[Database, Settings, UUID]:
                denominator, coverage, quality_band, evidence_json
            ) values (?, ?, 'grid', ?, '2026-08', 'coordinate_coverage',
                      'inventory.full_snapshot_membership', '2026-08', 2.0, 2.0,
-                     1.0, 'good',
-                     '{"stock_observed":true,"serviceKey":"private",'
-                     '"nested":{"raw_payload":"private"}}')""",
-        [spatial_run_id, base_run_id, grid_id],
+                     1.0, 'good', ?)""",
+        [
+            spatial_run_id,
+            base_run_id,
+            grid_id,
+            json.dumps(
+                metric_evidence
+                or {
+                    "context_label": "district_coordinate_coverage",
+                    "future_field": "must not be published",
+                    "scope": "district",
+                    "thresholds": {
+                        "coordinate_coverage_min": 0.8,
+                        "future_nested_field": "must not be published",
+                    },
+                },
+                ensure_ascii=False,
+            ),
+        ],
     )
     token = pipeline.lease_token(spatial_run_id)
     write_spatial_manifest(db, spatial_run_id, lease_token=token)
@@ -216,6 +235,13 @@ def test_spatial_bundle_has_exact_files_schemas_counts_and_hashes(
         "facility-000001",
         "facility-000002",
     ]
+    assert {
+        feature["properties"]["primary_dong_name"]
+        for feature in facilities["features"]
+    } == {grids["features"][0]["properties"]["primary_dong_name"]}
+    assert {
+        feature["properties"]["period"] for feature in facilities["features"]
+    } == {"2026-08"}
     evidence = parquet.ParquetFile(bundle.evidence_parquet).read()
     assert evidence.num_rows == 1
     assert evidence.column_names == [
@@ -256,12 +282,54 @@ def test_public_bundle_excludes_sensitive_and_internal_fields(tmp_path: Path) ->
         "review_flags",
         "serviceKey",
         "raw_payload",
+        "future_field",
+        "future_nested_field",
         "base_published_run_id",
         "building_id",
         str(base_run_id),
         str(tmp_path),
     ):
         assert forbidden not in combined
+
+
+def test_public_evidence_rejects_sensitive_values_before_writing(
+    tmp_path: Path,
+) -> None:
+    """Catches secrets and local paths hidden under otherwise public-safe keys."""
+    db, settings, _run_id = _published_fixture(
+        tmp_path,
+        metric_evidence={
+            "context_label": "district_coordinate_coverage",
+            "scope": "district",
+            "summary": "C:\\Users\\analyst\\secrets.txt",
+            "interpretation_limits": [
+                "/home/analyst/.ssh/id_rsa",
+                "password=hunter2",
+                "Bearer private-token-value",
+            ],
+        },
+    )
+
+    with pytest.raises(SpatialExportError, match="unsafe public evidence value"):
+        export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+
+    assert not (settings.data_dir / "spatial_exports").exists()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "ghp_" + "abcdefghijklmnopqrstuvwxyz123456",
+        "AKIA" + "ABCDEFGHIJKLMNOP",
+        "sk-" + "abcdefghijklmnopqrstuvwxyz123456",
+        "AIza" + "abcdefghijklmnopqrstuvwxyz1234567890",
+        "eyJhbGciOiJIUzI1NiJ9." + "eyJzdWIiOiIxIn0.signaturevalue",
+    ],
+)
+def test_public_evidence_rejects_common_credential_shapes(value: str) -> None:
+    """Catches credential-shaped values that lack an explicit key or assignment."""
+    with pytest.raises(SpatialExportError, match="unsafe public evidence value"):
+        _sanitize_public_evidence({"summary": value})
 
 
 def test_valid_same_run_bundle_is_idempotent_and_deterministic(tmp_path: Path) -> None:
@@ -330,6 +398,20 @@ def test_bundle_validation_detects_export_tampering(tmp_path: Path) -> None:
     bundle.facility_geojson.write_text("{}", encoding="utf-8")
 
     assert validate_spatial_bundle(db, bundle) is False
+
+
+def test_copied_bundle_is_bound_to_manifest_date_and_partition_directory(
+    tmp_path: Path,
+) -> None:
+    """Catches a valid prior-date directory being accepted under another date."""
+    db, settings, _run_id = _published_fixture(tmp_path)
+    bundle = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+    copied = bundle.directory.parent / "export_date=2026-08-18"
+    shutil.copytree(bundle.directory, copied)
+
+    assert validate_spatial_bundle(db, copied) is False
+    with pytest.raises(SpatialExportError, match="bundle mismatch"):
+        export_spatial_current(db, settings.data_dir, date(2026, 8, 18))
 
 
 def test_failed_post_promotion_verification_restores_prior_bundle(

@@ -82,7 +82,8 @@ def _render_svg(
             '<path class="grid-feature grade-{grade}" d="{path}" tabindex="0" '
             'role="button" aria-label="{label}" data-kind="grid" '
             'data-key="{key}" data-grade="{grade}" data-district="{district}" '
-            'data-dong="{dong}" data-small-scale="{small}" data-aged="{aged}" '
+            'data-dong="{dong}" data-period="{period}" '
+            'data-small-scale="{small}" data-aged="{aged}" '
             'data-context="{context}"/>'.format(
                 grade=_attribute(grade),
                 path=_attribute(path_data),
@@ -92,6 +93,7 @@ def _render_svg(
                 key=_attribute(properties.get("grid_id")),
                 district=_attribute(properties.get("district_name")),
                 dong=_attribute(properties.get("primary_dong_name")),
+                period=_attribute(properties.get("period")),
                 small=_attribute(properties.get("small_scale_rating")),
                 aged=_attribute(properties.get("aged_building_rating")),
                 context=_attribute(properties.get("district_context_rating")),
@@ -108,7 +110,7 @@ def _render_svg(
             'cy="{y:.3f}" r="6" tabindex="0" role="button" '
             'aria-label="{label}" data-kind="facility" data-key="{key}" '
             'data-grade="{grade}" data-district="{district}" data-dong="{dong}" '
-            'data-small-scale="{small}" data-aged="{aged}" '
+            'data-period="{period}" data-small-scale="{small}" data-aged="{aged}" '
             'data-context="{context}"/>'.format(
                 grade=_attribute(grade),
                 x=x,
@@ -119,6 +121,7 @@ def _render_svg(
                 key=_attribute(properties.get("facility_key")),
                 district=_attribute(properties.get("district_name")),
                 dong=_attribute(properties.get("primary_dong_name")),
+                period=_attribute(properties.get("period")),
                 small=_attribute(properties.get("small_scale_rating")),
                 aged=_attribute(properties.get("aged_building_rating")),
                 context=_attribute(properties.get("district_context_rating")),

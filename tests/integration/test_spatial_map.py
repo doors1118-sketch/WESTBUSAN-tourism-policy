@@ -47,6 +47,8 @@ def _map_data() -> PublicSpatialData:
                     "public_name": "공개 숙소",
                     "public_address": "부산 공개로 1",
                     "district_name": "사하구",
+                    "primary_dong_name": "하단동",
+                    "period": "2026-08",
                     "room_count": 10.0,
                     "use_approval_age_years": 31.0,
                     "small_scale_rating": "high",
@@ -112,6 +114,7 @@ def test_map_has_filters_interactions_keyboard_labels_and_caveats() -> None:
     for marker in (
         'id="district-filter"',
         'id="dong-filter"',
+        'id="period-filter"',
         'id="component-filter"',
         'id="grade-filter"',
         'id="visible-grid-count"',
@@ -132,6 +135,16 @@ def test_map_has_filters_interactions_keyboard_labels_and_caveats() -> None:
         "원천기관에 정정 요청",
     ):
         assert marker in rendered
+
+
+def test_dong_and_period_filters_have_matching_facility_attributes() -> None:
+    """Catches facilities disappearing when their pinned dong or period is selected."""
+    rendered = render_map(_map_data())
+    circle = rendered.split("<circle", 1)[1].split("/>", 1)[0]
+
+    assert 'data-dong="하단동"' in circle
+    assert 'data-period="2026-08"' in circle
+    assert 'id="period-filter"' in rendered
 
 
 def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None:
