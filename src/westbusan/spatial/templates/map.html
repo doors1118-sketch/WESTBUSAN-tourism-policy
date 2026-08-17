@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>부산 숙박업 정책지원 우선도</title>
+<style>{{STYLE}}</style>
+</head>
+<body>
+<header>
+  <div><p class="eyebrow">WEST BUSAN · OFFLINE SPATIAL EVIDENCE</p>
+  <h1>부산 숙박업 정책지원 우선도</h1></div>
+  <div class="freshness" aria-label="자료 기준">
+    <span>기준일 <strong>{{BUSINESS_DATE}}</strong></span>
+    <span>경계 <strong>{{BOUNDARY_VERSION}}</strong></span>
+    <span>정책 <strong>{{POLICY_VERSION}}</strong></span>
+  </div>
+</header>
+<main class="three-panel">
+  <aside id="filters-panel" aria-label="지도 필터">
+    <h2>필터와 현황</h2>
+    <label>자치구<select id="district-filter"><option value="">전체</option></select></label>
+    <label>행정동<select id="dong-filter"><option value="">전체</option></select></label>
+    <label>구성요소<select id="component-filter">
+      <option value="">전체</option><option value="small-scale">소규모</option>
+      <option value="aged">노후도</option><option value="context">district context</option>
+    </select></label>
+    <label>등급<select id="grade-filter"><option value="">전체</option>
+      <option value="priority_1">Priority 1</option><option value="priority_2">Priority 2</option>
+      <option value="monitor">Monitor</option><option value="general">General</option>
+      <option value="small_sample">Small sample</option>
+      <option value="insufficient_evidence">Insufficient evidence</option>
+    </select></label>
+    <div class="kpis"><div><strong id="visible-grid-count">{{GRID_COUNT}}</strong><span>표시 격자</span></div>
+      <div><strong id="visible-facility-count">{{FACILITY_COUNT}}</strong><span>표시 시설</span></div></div>
+    <h3>등급 범례</h3>
+    <ul class="legend">
+      <li><i class="priority-1"></i><span>Priority 1 · 최우선 검토</span></li>
+      <li><i class="priority-2"></i><span>Priority 2 · 우선 검토</span></li>
+      <li><i class="monitor"></i><span>Monitor · 모니터링</span></li>
+      <li><i class="general"></i><span>General · 일반</span></li>
+      <li><i class="insufficient"></i><span>Small sample / Insufficient evidence</span></li>
+    </ul>
+  </aside>
+  <section id="map-panel" aria-label="정책지원 우선도 지도">
+    <div class="map-toolbar"><button id="zoom-in" aria-label="지도 확대">+</button>
+      <button id="zoom-out" aria-label="지도 축소">−</button>
+      <button id="zoom-reset" aria-label="지도 원래 크기">초기화</button></div>
+    {{SVG}}
+    <p class="map-note">색상과 텍스트 등급을 함께 제공합니다. 기본 화면은 Priority 1 위치를 먼저 보여줍니다.</p>
+  </section>
+  <aside id="evidence-panel" aria-live="polite" aria-label="선택 대상 근거">
+    <h2>선택 대상 근거</h2><dl id="selected-evidence">{{DEFAULT_EVIDENCE}}</dl>
+    <section><h3>해석 범위</h3>
+      <p><strong>district context</strong>는 구 단위 수요·공급 맥락이며 격자 점유율이 아닙니다.</p>
+      <p>이 결과는 정책지원 검토용이며 안전·위생·법적 적합성 평가가 아닙니다.</p>
+      <p>numerator, denominator, coverage와 source period를 함께 확인하세요.</p>
+    </section>
+    <section><h3>자료 정정</h3><p>명칭·주소·객실·사용승인 정보는 해당 원천기관에 정정 요청 후 다음 공식 갱신에 반영됩니다.</p></section>
+  </aside>
+</main>
+<script id="bundle-data" type="application/json">{{BUNDLE_DATA}}</script>
+<script>{{SCRIPT}}</script>
+</body>
+</html>

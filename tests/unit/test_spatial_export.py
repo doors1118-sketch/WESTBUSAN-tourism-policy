@@ -1,0 +1,348 @@
+from __future__ import annotations
+
+import json
+from datetime import date
+from pathlib import Path
+from uuid import UUID, uuid4
+
+import pytest
+from pyarrow import parquet
+
+from westbusan.analytics.build import write_mart_manifest
+from westbusan.config import PolicyConfig, RegionConfig, Settings, SpatialConfig
+from westbusan.db import Database
+from westbusan.spatial import export as spatial_export
+from westbusan.spatial.boundary import approve_boundary, inspect_boundary
+from westbusan.spatial.export import (
+    SpatialExportError,
+    export_spatial_current,
+    validate_spatial_bundle,
+)
+from westbusan.spatial.grid import build_grid
+from westbusan.spatial.models import BoundaryMetadata
+from westbusan.spatial.orchestrator import SpatialPipeline
+from westbusan.spatial.publish import publish_spatial, write_spatial_manifest
+from westbusan.storage import RawStore
+
+BOUNDARY_FIXTURE = Path("tests/fixtures/spatial/busan_dongs.geojson")
+EXPORT_DATE = date(2026, 8, 17)
+
+
+def _settings(tmp_path: Path, db_path: Path) -> Settings:
+    return Settings(
+        service_key="",
+        data_dir=tmp_path / "data",
+        db_path=db_path,
+        log_dir=tmp_path / "logs",
+        regions=RegionConfig.default(),
+        policy=PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+        spatial=SpatialConfig.default(),
+    )
+
+
+def _published_fixture(tmp_path: Path) -> tuple[Database, Settings, UUID]:
+    db_path = tmp_path / "export.duckdb"
+    db = Database(db_path, Path("sql"))
+    db.migrate()
+    settings = _settings(tmp_path, db_path)
+    base_run_id = uuid4()
+    db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'test', ?, 'PUBLISHED', ?, true)""",
+        [base_run_id, date(2026, 8, 16), date(2026, 8, 16)],
+    )
+    db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [base_run_id, base_run_id],
+    )
+    db.connection.execute(
+        """insert into publication_state (publication_key, published_run_id)
+           values ('current', ?)""",
+        [base_run_id],
+    )
+    write_mart_manifest(db, base_run_id)
+
+    inspection = inspect_boundary(BOUNDARY_FIXTURE, RegionConfig.default())
+    boundary_id = approve_boundary(
+        db,
+        RawStore(tmp_path / "raw"),
+        BOUNDARY_FIXTURE,
+        inspection,
+        inspection.content_hash,
+        "export-reviewer@example.org",
+        "Reviewed for deterministic public export tests.",
+        BoundaryMetadata(
+            "부산광역시",
+            "https://data.busan.go.kr/boundary",
+            date(2026, 8, 1),
+            "2026-08-official",
+        ),
+    )
+    build_grid(db, boundary_id, settings.spatial)
+    pipeline = SpatialPipeline(db, settings)
+    spatial_run_id = pipeline.prepare(base_run_id, boundary_id, EXPORT_DATE)
+    grid = db.query(
+        """select grid_id, district_code, district_name, primary_dong_code,
+                  primary_dong_name, centroid_wgs84_longitude,
+                  centroid_wgs84_latitude
+           from dim_spatial_grid_500m where boundary_version_id = ?
+           order by grid_id limit 1""",
+        [boundary_id],
+    )[0]
+    grid_id, district_code, district_name, dong_code, dong_name, lon, lat = grid
+    facility_ids = [
+        UUID("00000000-0000-0000-0000-000000000002"),
+        UUID("00000000-0000-0000-0000-000000000001"),
+    ]
+    for index, facility_id in enumerate(facility_ids, start=1):
+        db.connection.execute(
+            """insert into mart_facility_priority_current (
+                   spatial_run_id, base_published_run_id, facility_id, grid_id,
+                   public_name, public_address, public_longitude, public_latitude,
+                   room_count, use_approval_age_years, district_code, district_name,
+                   small_scale_rating, small_scale_points, aged_building_rating,
+                   aged_building_points, district_context_rating,
+                   district_context_points, composite_score, composite_grade,
+                   display_status, evidence_json
+               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'high', 2.0,
+                         'high', 2.0, 'medium', 1.0, 5.0, 'priority_1', 'public',
+                         ?)""",
+            [
+                spatial_run_id,
+                base_run_id,
+                facility_id,
+                grid_id,
+                f"공개 숙소 {index}",
+                f"부산 공개로 {index}",
+                lon + index / 10000,
+                lat + index / 10000,
+                10.0 + index,
+                30.0 + index,
+                district_code,
+                district_name,
+                json.dumps(
+                    {
+                        "selected_revisions": [{"observed_on": "2026-08-01"}],
+                        "interpretation": {
+                            "public_label": "policy-support priority"
+                        },
+                        "normalized_phone": "010-0000-0000",
+                        "duplicate_review": {"review_flags": ["private"]},
+                    },
+                    ensure_ascii=False,
+                ),
+            ],
+        )
+    db.connection.execute(
+        """insert into mart_grid_month (
+               spatial_run_id, base_published_run_id, grid_id, district_code,
+               district_name, primary_dong_code, primary_dong_name, period,
+               physical_facility_count, legal_registration_count, room_sum,
+               room_coverage, small_facility_count, small_facility_share,
+               age_sample_size, age_coverage, age_20y_facility_count,
+               age_20y_share, age_30y_facility_count, age_30y_share,
+               coordinate_sample_size, coordinate_coverage,
+               district_context_rating, district_context_points,
+               small_scale_rating, small_scale_points, aged_building_rating,
+               aged_building_points, composite_score, composite_grade,
+               evidence_json
+           ) values (?, ?, ?, ?, ?, ?, ?, '2026-08', 2, 2, 23.0, 1.0, 2,
+                     1.0, 2, 1.0, 2, 1.0, 2, 1.0, 2, 1.0, 'medium', 1.0,
+                     'high', 2.0, 'high', 2.0, 5.0, 'priority_1', '{}')""",
+        [
+            spatial_run_id,
+            base_run_id,
+            grid_id,
+            district_code,
+            district_name,
+            dong_code,
+            dong_name,
+        ],
+    )
+    db.connection.execute(
+        """insert into mart_spatial_evidence (
+               spatial_run_id, base_published_run_id, subject_type, subject_id,
+               period, metric_name, source_identity, source_period, numerator,
+               denominator, coverage, quality_band, evidence_json
+           ) values (?, ?, 'grid', ?, '2026-08', 'coordinate_coverage',
+                     'inventory.full_snapshot_membership', '2026-08', 2.0, 2.0,
+                     1.0, 'good',
+                     '{"stock_observed":true,"serviceKey":"private",'
+                     '"nested":{"raw_payload":"private"}}')""",
+        [spatial_run_id, base_run_id, grid_id],
+    )
+    token = pipeline.lease_token(spatial_run_id)
+    write_spatial_manifest(db, spatial_run_id, lease_token=token)
+    publish_spatial(
+        db, spatial_run_id, lease_token=token, settings=settings
+    )
+    return db, settings, spatial_run_id
+
+
+def test_spatial_bundle_has_exact_files_schemas_counts_and_hashes(
+    tmp_path: Path,
+) -> None:
+    """Catches omitted files, unsafe schemas, wrong counts, and unbound bytes."""
+    db, settings, spatial_run_id = _published_fixture(tmp_path)
+
+    bundle = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+
+    assert {path.name for path in bundle.paths} == {
+        "grid_500m.geojson",
+        "facility_priority.geojson",
+        "grid_priority.csv",
+        "facility_priority.csv",
+        "spatial_evidence.parquet",
+        "index.html",
+        "manifest.json",
+    }
+    manifest = json.loads(bundle.manifest.read_text(encoding="utf-8"))
+    assert manifest["published_spatial_run_id"] == str(spatial_run_id)
+    assert manifest["export_date"] == "2026-08-17"
+    assert set(manifest["files"]) == {path.name for path in bundle.paths} - {
+        "manifest.json"
+    }
+    assert validate_spatial_bundle(db, bundle)
+    assert bundle.grid_csv.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert bundle.facility_csv.read_bytes().startswith(b"\xef\xbb\xbf")
+    grids = json.loads(bundle.grid_geojson.read_text(encoding="utf-8"))
+    facilities = json.loads(bundle.facility_geojson.read_text(encoding="utf-8"))
+    assert grids["type"] == "FeatureCollection"
+    assert "crs" not in grids  # RFC 7946 fixes coordinates to WGS84.
+    assert len(grids["features"]) == 1
+    assert len(facilities["features"]) == 2
+    assert [feature["properties"]["facility_key"] for feature in facilities["features"]] == [
+        "facility-000001",
+        "facility-000002",
+    ]
+    evidence = parquet.ParquetFile(bundle.evidence_parquet).read()
+    assert evidence.num_rows == 1
+    assert evidence.column_names == [
+        "subject_type",
+        "public_subject_key",
+        "period",
+        "metric_name",
+        "source_identity",
+        "source_period",
+        "numerator",
+        "denominator",
+        "coverage",
+        "quality_band",
+        "evidence_json",
+    ]
+
+
+def test_public_bundle_excludes_sensitive_and_internal_fields(tmp_path: Path) -> None:
+    """Catches private source, review, credential, path, or entity IDs leaking."""
+    db, settings, spatial_run_id = _published_fixture(tmp_path)
+    base_run_id = db.scalar(
+        "select base_published_run_id from spatial_run where spatial_run_id = ?",
+        [spatial_run_id],
+    )
+    bundle = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+    parquet_text = json.dumps(
+        parquet.ParquetFile(bundle.evidence_parquet).read().to_pylist(),
+        ensure_ascii=False,
+    )
+    text = "\n".join(
+        path.read_text("utf-8-sig", errors="ignore") for path in bundle.text_paths
+    )
+    combined = text + parquet_text
+
+    for forbidden in (
+        "normalized_phone",
+        "duplicate_review",
+        "review_flags",
+        "serviceKey",
+        "raw_payload",
+        "base_published_run_id",
+        "building_id",
+        str(base_run_id),
+        str(tmp_path),
+    ):
+        assert forbidden not in combined
+
+
+def test_valid_same_run_bundle_is_idempotent_and_deterministic(tmp_path: Path) -> None:
+    """Catches repeated export rewriting bytes or changing the bundle identity."""
+    db, settings, _run_id = _published_fixture(tmp_path)
+    first = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+    original = {path.name: path.read_bytes() for path in first.paths}
+
+    second = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+
+    assert second.directory == first.directory
+    assert {path.name: path.read_bytes() for path in second.paths} == original
+
+
+@pytest.mark.parametrize("mutation", ["pointer", "manifest"])
+def test_export_rejects_invalid_current_publication(
+    tmp_path: Path, mutation: str
+) -> None:
+    """Catches export from a missing pointer or a mart changed after publication."""
+    db, settings, run_id = _published_fixture(tmp_path)
+    if mutation == "pointer":
+        db.connection.execute("delete from spatial_publication_current")
+    else:
+        db.connection.execute(
+            """update mart_grid_month set physical_facility_count = 99
+               where spatial_run_id = ?""",
+            [run_id],
+        )
+
+    with pytest.raises(SpatialExportError, match="current spatial publication"):
+        export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+
+
+def test_tampered_bundle_requires_rebuild_and_failed_rebuild_restores_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches mismatched reuse and loss of the prior directory during replacement."""
+    db, settings, _run_id = _published_fixture(tmp_path)
+    bundle = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+    bundle.grid_csv.write_text("tampered", encoding="utf-8")
+    prior = {path.name: path.read_bytes() for path in bundle.paths}
+    with pytest.raises(SpatialExportError, match="bundle mismatch"):
+        export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+
+    real_replace = spatial_export.os.replace
+
+    def fail_new_promotion(source: str | Path, target: str | Path) -> None:
+        if Path(source).name.startswith(".spatial-export-"):
+            raise OSError("injected promotion failure")
+        real_replace(source, target)
+
+    monkeypatch.setattr(spatial_export.os, "replace", fail_new_promotion)
+    with pytest.raises(OSError, match="injected"):
+        export_spatial_current(
+            db, settings.data_dir, EXPORT_DATE, rebuild=True
+        )
+
+    assert {path.name: path.read_bytes() for path in bundle.paths} == prior
+    assert not list(bundle.directory.parent.glob(".spatial-backup-*"))
+
+
+def test_bundle_validation_detects_export_tampering(tmp_path: Path) -> None:
+    """Catches valid DB evidence masking modified public export bytes."""
+    db, settings, _run_id = _published_fixture(tmp_path)
+    bundle = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+    bundle.facility_geojson.write_text("{}", encoding="utf-8")
+
+    assert validate_spatial_bundle(db, bundle) is False
+
+
+def test_failed_post_promotion_verification_restores_prior_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches backup deletion before the promoted directory earns verification."""
+    db, settings, _run_id = _published_fixture(tmp_path)
+    bundle = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+    bundle.grid_csv.write_text("prior bundle", encoding="utf-8")
+    prior = {path.name: path.read_bytes() for path in bundle.paths}
+
+    monkeypatch.setattr(spatial_export, "validate_spatial_bundle", lambda *_: False)
+    with pytest.raises(SpatialExportError, match="failed verification"):
+        export_spatial_current(db, settings.data_dir, EXPORT_DATE, rebuild=True)
+
+    assert {path.name: path.read_bytes() for path in bundle.paths} == prior
