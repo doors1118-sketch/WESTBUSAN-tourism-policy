@@ -24,6 +24,14 @@ class SpatialFenceError(RuntimeError):
     """A spatial write was attempted with lost ownership or a stale epoch."""
 
 
+@dataclass(frozen=True, slots=True)
+class SpatialLeaseToken:
+    """Caller-held identity for one exact spatial writer epoch."""
+
+    owner: str
+    fence_epoch: int
+
+
 @dataclass(slots=True)
 class SpatialOperationLease:
     """Short-lived exclusive lease for direct boundary and grid operations."""
@@ -188,11 +196,16 @@ def touch_writer(
     owner: str,
     *,
     require_spatial_run: bool,
+    expected_epoch: int | None = None,
 ) -> int:
     """Perform the conditional write that conflicts with stale owners."""
     now = datetime.now(UTC)
     run_guard = ""
+    epoch_guard = ""
     parameters: list[object] = [subject_id, owner, now]
+    if expected_epoch is not None:
+        epoch_guard = "and writer.fence_epoch = ?"
+        parameters.append(expected_epoch)
     if require_spatial_run:
         run_guard = """
                  and exists (
@@ -209,6 +222,7 @@ def touch_writer(
                where writer.lease_key = 'writer'
                  and writer.spatial_run_id = ? and writer.owner = ?
                  and writer.lease_expires_at > ?
+                 {epoch_guard}
                  {run_guard}
                returning writer.fence_epoch""",
         parameters,
@@ -218,6 +232,43 @@ def touch_writer(
             f"spatial subject {subject_id} ownership or writer fence was lost"
         )
     return int(rows[0][0])
+
+
+def refresh_spatial_run_writer(
+    db: Database,
+    subject_id: UUID,
+    owner: str,
+    expected_epoch: int,
+    *,
+    duration: timedelta = _LEASE_DURATION,
+) -> int:
+    """Touch and extend both exact run and writer leases in the caller transaction."""
+    epoch = touch_writer(
+        db,
+        subject_id,
+        owner,
+        require_spatial_run=True,
+        expected_epoch=expected_epoch,
+    )
+    lease_expires_at = datetime.now(UTC) + duration
+    writer = db.query(
+        """update spatial_writer_lease
+           set lease_expires_at = ?
+           where lease_key = 'writer' and spatial_run_id = ? and owner = ?
+             and fence_epoch = ? returning fence_epoch""",
+        [lease_expires_at, subject_id, owner, expected_epoch],
+    )
+    run = db.query(
+        """update spatial_run set lease_expires_at = ?
+           where spatial_run_id = ? and status = 'RUNNING' and owner = ?
+             and fence_epoch = ? returning fence_epoch""",
+        [lease_expires_at, subject_id, owner, expected_epoch],
+    )
+    if writer != [(epoch,)] or run != [(epoch,)]:
+        raise SpatialFenceError(
+            f"spatial subject {subject_id} lease refresh fence was lost"
+        )
+    return epoch
 
 
 def parse_datetime(value: object) -> datetime | None:

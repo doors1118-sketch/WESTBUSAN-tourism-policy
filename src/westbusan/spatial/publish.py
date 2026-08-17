@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID
 
@@ -16,7 +18,12 @@ import duckdb
 from westbusan.analytics.build import mart_manifest_is_valid
 from westbusan.config import Settings
 from westbusan.db import Database, ensure_run_rebuildable
-from westbusan.spatial.fencing import SpatialFenceError, rollback, touch_writer
+from westbusan.spatial.fencing import (
+    SpatialFenceError,
+    SpatialLeaseToken,
+    refresh_spatial_run_writer,
+    rollback,
+)
 from westbusan.spatial.policy import spatial_policy_version
 
 _SPATIAL_MART_KEYS: dict[str, tuple[str, ...]] = {
@@ -56,6 +63,9 @@ _INTEGRITY_EXCEPTION_CODES = frozenset(
         "SELECTED_REVISION_UNAVAILABLE",
     }
 )
+_PUBLICATION_TRANSACTION_ATTEMPTS = 10
+_PUBLICATION_RETRY_BASE_SECONDS = 0.05
+_MANIFEST_CHUNK_ROWS = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,6 +117,7 @@ def write_spatial_manifest(
     db: Database,
     spatial_run_id: UUID,
     *,
+    lease_token: SpatialLeaseToken,
     stage_hook: Callable[[str, UUID], None] | None = None,
 ) -> SpatialManifest:
     """Replace only this run's completion rows, last, in one fenced transaction."""
@@ -115,15 +126,24 @@ def write_spatial_manifest(
     try:
         db.connection.execute("begin transaction")
         began = True
-        owner = _active_owner(db, spatial_run_id)
 
         def fence() -> int:
-            return touch_writer(
-                db, spatial_run_id, owner, require_spatial_run=True
+            return refresh_spatial_run_writer(
+                db,
+                spatial_run_id,
+                lease_token.owner,
+                lease_token.fence_epoch,
             )
 
         fence()
-        entries = _manifest_entries(db, spatial_run_id, progress=fence)
+        entries = _manifest_entries(
+            db,
+            spatial_run_id,
+            progress=fence,
+            on_chunk=lambda table: after_stage(
+                f"manifest_chunk:{table}", spatial_run_id
+            ),
+        )
         fence()
         db.connection.execute(
             """delete from spatial_mart_completion_manifest
@@ -168,7 +188,7 @@ def spatial_manifest_is_valid(db: Database, spatial_run_id: UUID) -> bool:
         return False
     try:
         observed = _manifest_entries(db, spatial_run_id)
-    except (ValueError, duckdb.Error):
+    except (TypeError, ValueError, duckdb.Error):
         return False
     expected = {
         (entry.table_name, entry.row_count, entry.row_digest, entry.schema_version)
@@ -181,38 +201,126 @@ def spatial_manifest_is_valid(db: Database, spatial_run_id: UUID) -> bool:
     return actual == expected and len(stored) == len(_SPATIAL_MART_KEYS)
 
 
+def load_completed_spatial_summary(
+    db: Database,
+    spatial_run_id: UUID,
+    settings: Settings,
+) -> tuple[UUID, UUID, UUID, date, str, datetime, datetime]:
+    """Transactionally validate and load one immutable completed publication."""
+    began = False
+    try:
+        db.connection.execute("begin transaction")
+        began = True
+        run = _load_run(db, spatial_run_id, require_running=False)
+        current = _current_pointer(db)
+        publishers = db.query(
+            """select publisher from spatial_run_summary
+               where spatial_run_id = ?""",
+            [spatial_run_id],
+        )
+        if current is None or current[0] != spatial_run_id or len(publishers) != 1:
+            raise SpatialPublicationError(
+                "completed spatial publication identity is invalid"
+            )
+        token = SpatialLeaseToken(str(publishers[0][0]), run.fence_epoch)
+        _load_idempotent_publication(
+            db,
+            spatial_run_id,
+            settings,
+            token,
+            current,
+            None,
+        )
+        if run.completed_at is None:
+            raise SpatialPublicationError("completed spatial run timestamp is missing")
+        summary = (
+            run.spatial_run_id,
+            run.base_run_id,
+            run.boundary_version_id,
+            run.business_date,
+            run.status,
+            run.started_at,
+            run.completed_at,
+        )
+        db.connection.execute("commit")
+        began = False
+        return summary
+    except Exception:
+        rollback(db, began)
+        raise
+
+
 def publish_spatial(
     db: Database,
     spatial_run_id: UUID,
     rollback_reason: str | None = None,
     *,
+    lease_token: SpatialLeaseToken,
+    settings: Settings | None = None,
+    stage_hook: Callable[[str, UUID], None] | None = None,
+) -> SpatialPublicationResult:
+    """Retry bounded transaction conflicts, then validate any committed winner."""
+    for attempt in range(_PUBLICATION_TRANSACTION_ATTEMPTS):
+        try:
+            return _publish_spatial_once(
+                db,
+                spatial_run_id,
+                rollback_reason,
+                lease_token=lease_token,
+                settings=settings,
+                stage_hook=stage_hook,
+            )
+        except duckdb.TransactionException:
+            if attempt == _PUBLICATION_TRANSACTION_ATTEMPTS - 1:
+                raise
+            time.sleep(_PUBLICATION_RETRY_BASE_SECONDS * (attempt + 1))
+    raise AssertionError("spatial publication transaction retries exhausted")
+
+
+def _publish_spatial_once(
+    db: Database,
+    spatial_run_id: UUID,
+    rollback_reason: str | None = None,
+    *,
+    lease_token: SpatialLeaseToken,
     settings: Settings | None = None,
     stage_hook: Callable[[str, UUID], None] | None = None,
 ) -> SpatialPublicationResult:
     """Atomically publish one exact manifest-bound RUNNING spatial attempt."""
     configured = settings or Settings.load(Path(__file__).resolve().parents[3])
     after_stage = stage_hook or (lambda _stage, _run_id: None)
-    idempotent = _load_idempotent_publication(db, spatial_run_id, configured)
-    if idempotent is not None:
-        return idempotent
-
     began = False
     try:
         db.connection.execute("begin transaction")
         began = True
+        current = _current_pointer(db)
+        if current is not None and current[0] == spatial_run_id:
+            result = _load_idempotent_publication(
+                db,
+                spatial_run_id,
+                configured,
+                lease_token,
+                current,
+                rollback_reason,
+            )
+            db.connection.execute("commit")
+            began = False
+            return result
         run = _load_run(db, spatial_run_id, require_running=True)
-        owner = _active_owner(db, spatial_run_id)
+        owner = lease_token.owner
 
         def fence() -> int:
-            return touch_writer(
-                db, spatial_run_id, owner, require_spatial_run=True
+            return refresh_spatial_run_writer(
+                db,
+                spatial_run_id,
+                owner,
+                lease_token.fence_epoch,
             )
 
         fence()
         entries = _validate_publication_eligibility(
             db, run, configured, progress=fence
         )
-        current = _current_pointer(db)
         previous_run_id = current[0] if current is not None else None
         reason = "automatic spatial publication"
         action = "publish"
@@ -233,6 +341,7 @@ def publish_spatial(
                 action = "replace"
 
         published_at = datetime.now(UTC)
+        event_id = _audit_event_id(spatial_run_id, published_at)
         fence()
         _write_pointer(db, spatial_run_id, run.business_date, published_at)
         after_stage("pointer", spatial_run_id)
@@ -245,7 +354,7 @@ def publish_spatial(
                    reason, business_date, event_at
                ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
-                _audit_event_id(spatial_run_id, published_at),
+                event_id,
                 spatial_run_id,
                 run.base_run_id,
                 previous_run_id,
@@ -265,8 +374,10 @@ def publish_spatial(
             """insert into spatial_run_summary (
                    spatial_run_id, base_published_run_id, boundary_version_id,
                    policy_version, business_date, table_counts_json,
-                   table_digests_json, started_at, completed_at, published_at
-               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   table_digests_json, started_at, completed_at, published_at,
+                   publication_event_id, publisher, previous_spatial_run_id,
+                   publication_action, publication_reason
+               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 spatial_run_id,
                 run.base_run_id,
@@ -278,6 +389,11 @@ def publish_spatial(
                 run.started_at,
                 published_at,
                 published_at,
+                event_id,
+                owner,
+                previous_run_id,
+                action,
+                reason,
             ],
         )
         after_stage("summary", spatial_run_id)
@@ -319,52 +435,53 @@ def publish_spatial(
         raise
 
 
-def _active_owner(db: Database, spatial_run_id: UUID) -> str:
-    rows = db.query(
-        """select run.owner
-           from spatial_run as run
-           join spatial_writer_lease as writer
-             on writer.lease_key = 'writer'
-            and writer.spatial_run_id = run.spatial_run_id
-            and writer.owner = run.owner
-            and writer.fence_epoch = run.fence_epoch
-           where run.spatial_run_id = ? and run.status = 'RUNNING'
-             and run.owner is not null and run.lease_expires_at > now()
-             and writer.lease_expires_at > now()""",
-        [spatial_run_id],
-    )
-    if len(rows) != 1:
-        raise SpatialFenceError(
-            f"spatial run {spatial_run_id} has no active manifest owner"
-        )
-    return str(rows[0][0])
-
-
 def _manifest_entries(
     db: Database,
     spatial_run_id: UUID,
     *,
     progress: Callable[[], object] | None = None,
+    on_chunk: Callable[[str], None] | None = None,
 ) -> tuple[SpatialManifestEntry, ...]:
     timestamp = datetime.now(UTC)
     heartbeat = progress or (lambda: None)
+    chunk_observed = on_chunk or (lambda _table: None)
     entries: list[SpatialManifestEntry] = []
     for table_name, primary_key in _SPATIAL_MART_KEYS.items():
         heartbeat()
         schema_version = _schema_fingerprint(db, table_name)
         order_by = ", ".join(primary_key)
-        rows = db.query(
-            f"""select * from {table_name}
-                where spatial_run_id = ? order by {order_by}""",
-            [spatial_run_id],
-        )
-        digest = hashlib.sha256(
-            canonical_spatial_json(rows).encode("utf-8")
-        ).hexdigest()
+        digest_builder = hashlib.sha256()
+        digest_builder.update(b"[")
+        row_count = 0
+        offset = 0
+        first_row = True
+        while True:
+            heartbeat()
+            rows = db.query(
+                f"""select * from {table_name}
+                    where spatial_run_id = ? order by {order_by}
+                    limit ? offset ?""",
+                [spatial_run_id, _MANIFEST_CHUNK_ROWS, offset],
+            )
+            if not rows:
+                break
+            for row in rows:
+                if not first_row:
+                    digest_builder.update(b",")
+                digest_builder.update(canonical_spatial_json(row).encode("utf-8"))
+                first_row = False
+            row_count += len(rows)
+            offset += len(rows)
+            chunk_observed(table_name)
+            heartbeat()
+            if len(rows) < _MANIFEST_CHUNK_ROWS:
+                break
+        digest_builder.update(b"]")
+        digest = digest_builder.hexdigest()
         entries.append(
             SpatialManifestEntry(
                 table_name,
-                len(rows),
+                row_count,
                 digest,
                 schema_version,
                 timestamp,
@@ -405,6 +522,12 @@ def _canonical_value(value: object) -> object:
             raise ValueError("nonfinite spatial value cannot be manifested")
         normalized = 0.0 if value == 0.0 else value
         return {"$float": normalized.hex()}
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("nonfinite spatial value cannot be manifested")
+        return {"$decimal": format(value, "f")}
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return {"$blob": bytes(value).hex()}
     if isinstance(value, (list, tuple)):
         return [_canonical_value(item) for item in value]
     if isinstance(value, dict):
@@ -422,6 +545,7 @@ class _RunPublicationInput:
     status: str
     started_at: datetime
     completed_at: datetime | None
+    fence_epoch: int
 
 
 def _load_run(
@@ -429,7 +553,8 @@ def _load_run(
 ) -> _RunPublicationInput:
     rows = db.query(
         """select spatial_run_id, base_published_run_id, boundary_version_id,
-                  policy_version, business_date, status, started_at, completed_at
+                  policy_version, business_date, status, started_at, completed_at,
+                  fence_epoch
            from spatial_run where spatial_run_id = ?""",
         [spatial_run_id],
     )
@@ -684,18 +809,28 @@ def _summary_payload(
 
 
 def _load_idempotent_publication(
-    db: Database, spatial_run_id: UUID, settings: Settings
-) -> SpatialPublicationResult | None:
-    current = _current_pointer(db)
-    if current is None or current[0] != spatial_run_id:
-        return None
+    db: Database,
+    spatial_run_id: UUID,
+    settings: Settings,
+    lease_token: SpatialLeaseToken,
+    current: tuple[UUID, date, datetime],
+    rollback_reason: str | None,
+) -> SpatialPublicationResult:
     run = _load_run(db, spatial_run_id, require_running=False)
+    if (
+        current[1] != run.business_date
+        or current[2] != run.completed_at
+        or lease_token.fence_epoch != run.fence_epoch
+    ):
+        raise SpatialPublicationError("persisted spatial pointer or run is invalid")
     entries = _validate_publication_eligibility(db, run, settings)
     counts_json, digests_json = _summary_payload(entries)
     summaries = db.query(
         """select base_published_run_id, boundary_version_id, policy_version,
                   business_date, table_counts_json, table_digests_json,
-                  completed_at, published_at
+                  started_at, completed_at, published_at,
+                  publication_event_id, publisher, previous_spatial_run_id,
+                  publication_action, publication_reason
            from spatial_run_summary where spatial_run_id = ?""",
         [spatial_run_id],
     )
@@ -706,26 +841,83 @@ def _load_idempotent_publication(
         run.business_date,
         counts_json,
         digests_json,
+        run.started_at,
+        run.completed_at,
         current[2],
-        current[2],
+        summaries[0][9] if summaries else None,
+        lease_token.owner,
+        summaries[0][11] if summaries else None,
+        summaries[0][12] if summaries else None,
+        summaries[0][13] if summaries else None,
     ):
         raise SpatialPublicationError("persisted spatial summary is invalid")
-    audits = db.query(
-        """select old_spatial_run_id, action, event_at
-           from spatial_publication_audit
-           where new_spatial_run_id = ? order by event_at desc, event_id desc""",
-        [spatial_run_id],
+    event_id = summaries[0][9]
+    old_run_id = summaries[0][11]
+    expected_action, expected_reason = _expected_audit_semantics(
+        db, run, old_run_id, rollback_reason, str(summaries[0][13])
     )
-    if len(audits) != 1 or audits[0][2] != current[2]:
+    if summaries[0][12:] != (expected_action, expected_reason):
+        raise SpatialPublicationError("persisted spatial summary is invalid")
+    audits = db.query(
+        """select event_id, spatial_run_id, base_published_run_id,
+                  old_spatial_run_id, new_spatial_run_id, action, actor, reason,
+                  business_date, event_at
+           from spatial_publication_audit
+           where event_id = ?""",
+        [event_id],
+    )
+    if len(audits) != 1:
+        raise SpatialPublicationError("spatial publication audit is invalid")
+    audit = audits[0]
+    if audit != (
+        event_id,
+        spatial_run_id,
+        run.base_run_id,
+        old_run_id,
+        spatial_run_id,
+        expected_action,
+        lease_token.owner,
+        expected_reason,
+        run.business_date,
+        current[2],
+    ):
         raise SpatialPublicationError("spatial publication audit is invalid")
     return SpatialPublicationResult(
         True,
         spatial_run_id,
         spatial_run_id,
-        audits[0][0],
-        str(audits[0][1]),
+        old_run_id,
+        expected_action,
         current[2],
     )
+
+
+def _expected_audit_semantics(
+    db: Database,
+    run: _RunPublicationInput,
+    old_run_id: UUID | None,
+    rollback_reason: str | None,
+    persisted_reason: str,
+) -> tuple[str, str]:
+    if old_run_id is None:
+        return "publish", "automatic spatial publication"
+    rows = db.query(
+        """select business_date from spatial_run
+           where spatial_run_id = ? and status = 'COMPLETED'""",
+        [old_run_id],
+    )
+    if len(rows) != 1:
+        raise SpatialPublicationError("prior spatial publication identity is invalid")
+    old_business_date = rows[0][0]
+    if run.business_date < old_business_date:
+        explicit_reason = (rollback_reason or "").strip()
+        reason = explicit_reason or persisted_reason.strip()
+        if not reason or reason == "automatic spatial publication":
+            raise SpatialPublicationError("persisted rollback reason is invalid")
+        return "rollback", reason
+    if run.business_date == old_business_date:
+        return "replace", "automatic spatial publication"
+    return "publish", "automatic spatial publication"
 
 
 def _audit_event_id(spatial_run_id: UUID, published_at: datetime) -> UUID:

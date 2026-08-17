@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from threading import Event
 from uuid import UUID, uuid4
@@ -14,7 +15,7 @@ from westbusan.analytics.build import write_mart_manifest
 from westbusan.config import PolicyConfig, RegionConfig, Settings, SpatialConfig
 from westbusan.db import Database
 from westbusan.spatial.boundary import approve_boundary, inspect_boundary
-from westbusan.spatial.fencing import SpatialFenceError
+from westbusan.spatial.fencing import SpatialFenceError, SpatialLeaseToken
 from westbusan.spatial.grid import build_grid
 from westbusan.spatial.models import BoundaryMetadata
 from westbusan.spatial.orchestrator import SpatialPipeline
@@ -110,6 +111,15 @@ def _active_run(
         base_run_id,
         boundary_version_id,
     )
+
+
+def _lease_token(db: Database, spatial_run_id: UUID) -> SpatialLeaseToken:
+    owner, epoch = db.query(
+        """select owner, fence_epoch from spatial_run
+           where spatial_run_id = ? and status = 'RUNNING'""",
+        [spatial_run_id],
+    )[0]
+    return SpatialLeaseToken(str(owner), int(epoch))
 
 
 def _seed_manifest_rows(
@@ -213,7 +223,7 @@ def test_every_spatial_mart_mutation_invalidates_manifest(
         tmp_path
     )
     _seed_manifest_rows(db, run_id, base_run_id, boundary_id)
-    write_spatial_manifest(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=_lease_token(db, run_id))
     assert spatial_manifest_is_valid(db, run_id)
 
     if mutation == "delete":
@@ -298,7 +308,9 @@ def test_empty_spatial_marts_have_a_valid_exact_manifest(tmp_path: Path) -> None
         tmp_path
     )
 
-    manifest = write_spatial_manifest(db, run_id)
+    manifest = write_spatial_manifest(
+        db, run_id, lease_token=_lease_token(db, run_id)
+    )
 
     assert spatial_manifest_is_valid(db, run_id)
     assert {entry.table_name for entry in manifest.entries} == {
@@ -356,7 +368,7 @@ def test_manifest_requires_exact_rows_counts_digests_and_schema(
         tmp_path
     )
     _seed_manifest_rows(db, run_id, base_run_id, boundary_id)
-    write_spatial_manifest(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=_lease_token(db, run_id))
 
     db.connection.execute(sql, [run_id, *parameters])
 
@@ -380,7 +392,9 @@ def test_manifest_digest_is_independent_of_row_insertion_order(tmp_path: Path) -
         "insert into mart_facility_priority_current values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         second,
     )
-    first_manifest = write_spatial_manifest(db, run_id)
+    first_manifest = write_spatial_manifest(
+        db, run_id, lease_token=_lease_token(db, run_id)
+    )
     first_digest = next(
         entry.row_digest
         for entry in first_manifest.entries
@@ -398,7 +412,9 @@ def test_manifest_digest_is_independent_of_row_insertion_order(tmp_path: Path) -
         "insert into mart_facility_priority_current values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         original,
     )
-    second_manifest = write_spatial_manifest(db, run_id)
+    second_manifest = write_spatial_manifest(
+        db, run_id, lease_token=_lease_token(db, run_id)
+    )
     second_digest = next(
         entry.row_digest
         for entry in second_manifest.entries
@@ -406,6 +422,57 @@ def test_manifest_digest_is_independent_of_row_insertion_order(tmp_path: Path) -
     )
 
     assert second_digest == first_digest
+
+
+def test_large_table_manifest_hashes_in_lease_refreshing_chunks(
+    tmp_path: Path,
+) -> None:
+    """Catches one large mart being materialized without intra-table lease heartbeats."""
+    db, _settings_value, _pipeline, run_id, base_run_id, boundary_id = _active_run(
+        tmp_path
+    )
+    _seed_manifest_rows(db, run_id, base_run_id, boundary_id)
+    original = db.query(
+        """select * from mart_facility_priority_current
+           where spatial_run_id = ?""",
+        [run_id],
+    )[0]
+    extra_rows = []
+    for _index in range(130):
+        row = list(original)
+        row[2] = uuid4()
+        extra_rows.append(row)
+    db.connection.executemany(
+        """insert into mart_facility_priority_current
+           values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        extra_rows,
+    )
+    observed_chunks: list[str] = []
+    delayed = False
+
+    def observe_chunk(stage: str, _run_id: UUID) -> None:
+        nonlocal delayed
+        observed_chunks.append(stage)
+        if stage == "manifest_chunk:mart_facility_priority_current" and not delayed:
+            delayed = True
+            Event().wait(0.7)
+
+    _shorten_lease(db, run_id, milliseconds=500)
+    manifest = write_spatial_manifest(
+        db,
+        run_id,
+        lease_token=_lease_token(db, run_id),
+        stage_hook=observe_chunk,
+    )
+
+    assert next(
+        entry.row_count
+        for entry in manifest.entries
+        if entry.table_name == "mart_facility_priority_current"
+    ) == 131
+    assert observed_chunks.count(
+        "manifest_chunk:mart_facility_priority_current"
+    ) >= 3
 
 
 def test_canonical_spatial_json_adapts_exact_types_and_rejects_nonfinite() -> None:
@@ -416,16 +483,40 @@ def test_canonical_spatial_json_adapts_exact_types_and_rejects_nonfinite() -> No
         datetime(2026, 8, 17, 3, 4, 5, tzinfo=UTC),
         0.1,
         -0.0,
+        Decimal("1.2300"),
+        b"\x00\xff",
         None,
     )
 
     assert canonical_spatial_json(value) == (
         '[{"$uuid":"00000000-0000-0000-0000-000000000001"},'
         '{"$date":"2026-08-17"},{"$datetime":"2026-08-17T03:04:05+00:00"},'
-        '{"$float":"0x1.999999999999ap-4"},{"$float":"0x0.0p+0"},null]'
+        '{"$float":"0x1.999999999999ap-4"},{"$float":"0x0.0p+0"},'
+        '{"$decimal":"1.2300"},{"$blob":"00ff"},null]'
     )
     with pytest.raises(ValueError, match="nonfinite"):
         canonical_spatial_json((float("nan"),))
+
+
+def test_manifest_validation_fails_closed_on_unsupported_duckdb_value(
+    tmp_path: Path,
+) -> None:
+    """Catches unsupported DuckDB values escaping a boolean integrity check."""
+    db, _settings_value, _pipeline, run_id, base_run_id, boundary_id = _active_run(
+        tmp_path
+    )
+    _seed_manifest_rows(db, run_id, base_run_id, boundary_id)
+    write_spatial_manifest(db, run_id, lease_token=_lease_token(db, run_id))
+    db.connection.execute(
+        "alter table mart_facility_priority_current add column unsupported interval"
+    )
+    db.connection.execute(
+        """update mart_facility_priority_current set unsupported = interval '1 day'
+           where spatial_run_id = ?""",
+        [run_id],
+    )
+
+    assert spatial_manifest_is_valid(db, run_id) is False
 
 
 def _seed_previous_spatial_pointer(
@@ -483,9 +574,10 @@ def test_publish_spatial_persists_manifest_bound_summary_and_releases_lease(
     """Catches a pointer advancing without its terminal summary and lease release."""
     db, settings, _pipeline, run_id, base_run_id, boundary_id = _active_run(tmp_path)
     _seed_manifest_rows(db, run_id, base_run_id, boundary_id)
-    write_spatial_manifest(db, run_id)
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
 
-    result = publish_spatial(db, run_id, settings=settings)
+    result = publish_spatial(db, run_id, lease_token=token, settings=settings)
 
     assert result.published is True
     assert result.current_spatial_run_id == run_id
@@ -503,8 +595,16 @@ def test_publish_spatial_persists_manifest_bound_summary_and_releases_lease(
         """select spatial_run_id, owner, lease_expires_at
            from spatial_writer_lease where lease_key = 'writer'"""
     ) == [(None, None, None)]
-    counts_json, digests_json, completed_at, published_at = db.query(
-        """select table_counts_json, table_digests_json, completed_at, published_at
+    (
+        counts_json,
+        digests_json,
+        completed_at,
+        published_at,
+        event_id,
+        publisher,
+    ) = db.query(
+        """select table_counts_json, table_digests_json, completed_at, published_at,
+                  publication_event_id, publisher
            from spatial_run_summary where spatial_run_id = ?""",
         [run_id],
     )[0]
@@ -516,6 +616,12 @@ def test_publish_spatial_persists_manifest_bound_summary_and_releases_lease(
         {table: digest for table, (_count, digest) in manifest.items()}
     ) == digests_json
     assert completed_at == published_at == result.published_at
+    assert publisher == token.owner
+    assert db.query(
+        """select event_id, actor from spatial_publication_audit
+           where spatial_run_id = ?""",
+        [run_id],
+    ) == [(event_id, token.owner)]
     public_summary_text = counts_json + digests_json
     for forbidden in ("phone", "raw", "review", "secret", "api_key", "\\", "/"):
         assert forbidden not in public_summary_text.casefold()
@@ -535,7 +641,8 @@ def test_finalizer_failure_rolls_back_every_publication_mutation_and_retries(
         db, base_run_id, boundary_id, date(2026, 8, 16)
     )
     _seed_manifest_rows(db, run_id, base_run_id, boundary_id)
-    write_spatial_manifest(db, run_id)
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
     before_pointer = db.query("select * from spatial_publication_current")
     before_run = db.query(
         "select * from spatial_run where spatial_run_id = ?", [run_id]
@@ -547,7 +654,9 @@ def test_finalizer_failure_rolls_back_every_publication_mutation_and_retries(
             raise InjectedFinalizerFailure(stage)
 
     with pytest.raises(InjectedFinalizerFailure, match=failure_stage):
-        publish_spatial(db, run_id, settings=settings, stage_hook=fail_at)
+        publish_spatial(
+            db, run_id, lease_token=token, settings=settings, stage_hook=fail_at
+        )
 
     assert db.query("select * from spatial_publication_current") == before_pointer
     assert db.scalar("select count(*) from spatial_publication_audit") == 0
@@ -559,7 +668,7 @@ def test_finalizer_failure_rolls_back_every_publication_mutation_and_retries(
     ) == before_run
     assert db.query("select * from spatial_writer_lease") == before_lease
 
-    retried = publish_spatial(db, run_id, settings=settings)
+    retried = publish_spatial(db, run_id, lease_token=token, settings=settings)
     assert retried.published is True
     assert retried.previous_spatial_run_id == previous_run_id
 
@@ -571,13 +680,14 @@ def test_same_run_publication_is_idempotent_without_timestamp_or_audit_rewrite(
     db, settings, _pipeline, run_id, _base_run_id, _boundary_id = _active_run(
         tmp_path
     )
-    write_spatial_manifest(db, run_id)
-    first = publish_spatial(db, run_id, settings=settings)
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
+    first = publish_spatial(db, run_id, lease_token=token, settings=settings)
     first_run = db.query(
         "select completed_at from spatial_run where spatial_run_id = ?", [run_id]
     )
 
-    second = publish_spatial(db, run_id, settings=settings)
+    second = publish_spatial(db, run_id, lease_token=token, settings=settings)
 
     assert second == first
     assert db.scalar("select count(*) from spatial_publication_audit") == 1
@@ -585,6 +695,220 @@ def test_same_run_publication_is_idempotent_without_timestamp_or_audit_rewrite(
     assert db.query(
         "select completed_at from spatial_run where spatial_run_id = ?", [run_id]
     ) == first_run
+
+
+def test_idempotent_publication_revalidates_every_immutable_identity(
+    tmp_path: Path,
+) -> None:
+    """Catches a same-run retry accepting any detached pointer/run/summary/audit field."""
+    db, settings, _pipeline, run_id, _base_run_id, _boundary_id = _active_run(
+        tmp_path
+    )
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
+    publish_spatial(db, run_id, lease_token=token, settings=settings)
+
+    mutations = [
+        (
+            "spatial_publication_current",
+            "update spatial_publication_current set business_date = date '2026-08-18'",
+        ),
+        (
+            "spatial_publication_current",
+            "update spatial_publication_current set published_at = published_at + interval '1 second'",
+        ),
+        (
+            "spatial_run",
+            "update spatial_run set started_at = started_at + interval '1 second'",
+        ),
+        (
+            "spatial_run",
+            "update spatial_run set completed_at = completed_at + interval '1 second'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set base_published_run_id = '00000000-0000-0000-0000-000000000101'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set boundary_version_id = '00000000-0000-0000-0000-000000000102'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set policy_version = 'detached-policy'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set business_date = date '2026-08-18'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set table_counts_json = '{\"detached\":1}'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set table_digests_json = '{\"detached\":\"digest\"}'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set started_at = started_at + interval '1 second'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set completed_at = completed_at + interval '1 second'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set published_at = published_at + interval '1 second'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set publication_event_id = '00000000-0000-0000-0000-000000000103'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set publisher = 'detached-publisher'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set previous_spatial_run_id = '00000000-0000-0000-0000-000000000108'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set publication_action = 'rollback'",
+        ),
+        (
+            "spatial_run_summary",
+            "update spatial_run_summary set publication_reason = 'detached reason'",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set event_id = '00000000-0000-0000-0000-000000000104'",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set spatial_run_id = '00000000-0000-0000-0000-000000000105'",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set base_published_run_id = '00000000-0000-0000-0000-000000000106'",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set old_spatial_run_id = '00000000-0000-0000-0000-000000000107'",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set new_spatial_run_id = null",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set action = 'rollback'",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set actor = 'detached-actor'",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set reason = 'detached reason'",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set business_date = date '2026-08-18'",
+        ),
+        (
+            "spatial_publication_audit",
+            "update spatial_publication_audit set event_at = event_at + interval '1 second'",
+        ),
+    ]
+    originals = {
+        table: db.query(f"select * from {table}")[0]
+        for table in (
+            "spatial_publication_current",
+            "spatial_run",
+            "spatial_run_summary",
+            "spatial_publication_audit",
+        )
+    }
+
+    for table, mutation in mutations:
+        db.connection.execute(mutation)
+        with pytest.raises(SpatialPublicationError):
+            publish_spatial(db, run_id, lease_token=token, settings=settings)
+        db.connection.execute(f"delete from {table}")
+        row = originals[table]
+        placeholders = ", ".join("?" for _value in row)
+        db.connection.execute(f"insert into {table} values ({placeholders})", row)
+
+
+def test_completed_pipeline_retry_uses_transactional_publication_validation(
+    tmp_path: Path,
+) -> None:
+    """Catches the orchestrator bypassing full validation for a completed run."""
+    db, settings, _pipeline, run_id, base_run_id, boundary_id = _active_run(tmp_path)
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
+    publish_spatial(db, run_id, lease_token=token, settings=settings)
+    db.connection.execute(
+        "update spatial_publication_audit set actor = 'detached-actor'"
+    )
+
+    with pytest.raises(SpatialPublicationError, match="audit"):
+        SpatialPipeline(db, settings).run(base_run_id, boundary_id, BUSINESS_DATE)
+
+
+def test_concurrent_same_run_publish_retries_to_one_immutable_result(
+    tmp_path: Path,
+) -> None:
+    """Catches a same-run transaction conflict escaping instead of validating winner."""
+    first_db, settings, _pipeline, run_id, _base_run_id, _boundary_id = _active_run(
+        tmp_path
+    )
+    token = _lease_token(first_db, run_id)
+    write_spatial_manifest(first_db, run_id, lease_token=token)
+    second_db = Database(settings.db_path, Path("sql"))
+    first_paused = Event()
+    release_first = Event()
+    second_started = Event()
+
+    def pause_first(stage: str, _run_id: UUID) -> None:
+        if stage != "pointer":
+            return
+        first_paused.set()
+        if not release_first.wait(10):
+            raise TimeoutError("first publisher was not released")
+
+    def publish_second() -> object:
+        second_started.set()
+        return publish_spatial(
+            second_db, run_id, lease_token=token, settings=settings
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(
+            publish_spatial,
+            first_db,
+            run_id,
+            lease_token=token,
+            settings=settings,
+            stage_hook=pause_first,
+        )
+        assert first_paused.wait(10)
+        second_future = executor.submit(publish_second)
+        assert second_started.wait(10)
+        Event().wait(0.25)
+        release_first.set()
+        first_result = first_future.result(timeout=20)
+        second_result = second_future.result(timeout=20)
+
+    assert second_result == first_result
+    assert second_db.scalar("select count(*) from spatial_publication_audit") == 1
+    assert second_db.scalar("select count(*) from spatial_run_summary") == 1
+    assert second_db.query(
+        """select completed_at from spatial_run where spatial_run_id = ?""",
+        [run_id],
+    ) == [(first_result.published_at,)]
 
 
 @pytest.mark.parametrize(
@@ -608,11 +932,18 @@ def test_monotonic_pointer_matrix_and_append_only_audit(
     previous_run_id = _seed_previous_spatial_pointer(
         db, base_run_id, boundary_id, previous_date
     )
-    write_spatial_manifest(db, run_id)
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
 
     if blocked:
         with pytest.raises(SpatialPublicationError, match="older"):
-            publish_spatial(db, run_id, settings=settings, rollback_reason=reason)
+            publish_spatial(
+                db,
+                run_id,
+                lease_token=token,
+                settings=settings,
+                rollback_reason=reason,
+            )
         assert db.scalar(
             """select spatial_run_id from spatial_publication_current
                where publication_key = 'current'"""
@@ -620,7 +951,13 @@ def test_monotonic_pointer_matrix_and_append_only_audit(
         assert db.scalar("select count(*) from spatial_publication_audit") == 0
         return
 
-    result = publish_spatial(db, run_id, settings=settings, rollback_reason=reason)
+    result = publish_spatial(
+        db,
+        run_id,
+        lease_token=token,
+        settings=settings,
+        rollback_reason=reason,
+    )
     audit = db.query(
         """select old_spatial_run_id, new_spatial_run_id, action, reason
            from spatial_publication_audit order by event_at, event_id"""
@@ -669,13 +1006,16 @@ def test_exception_policy_allows_only_expected_facility_coordinate_audit_rows(
            ) values (?, ?, ?, 'fixture-subject', ?, '{}', ?)""",
         [run_id, base_run_id, subject_type, exception_code, resolution_status],
     )
-    write_spatial_manifest(db, run_id)
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
 
     if allowed:
-        assert publish_spatial(db, run_id, settings=settings).published is True
+        assert publish_spatial(
+            db, run_id, lease_token=token, settings=settings
+        ).published is True
     else:
         with pytest.raises(SpatialPublicationError, match="exception"):
-            publish_spatial(db, run_id, settings=settings)
+            publish_spatial(db, run_id, lease_token=token, settings=settings)
         assert db.scalar("select count(*) from spatial_publication_current") == 0
 
 
@@ -690,7 +1030,8 @@ def test_publication_revalidates_core_and_policy_without_mutation(
     db, settings, _pipeline, run_id, base_run_id, _boundary_id = _active_run(
         tmp_path
     )
-    write_spatial_manifest(db, run_id)
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
     if tamper == "core_pointer":
         db.connection.execute(
             "update publication_state set published_run_id = ?", [uuid4()]
@@ -716,7 +1057,7 @@ def test_publication_revalidates_core_and_policy_without_mutation(
         )
 
     with pytest.raises(SpatialPublicationError):
-        publish_spatial(db, run_id, settings=settings)
+        publish_spatial(db, run_id, lease_token=token, settings=settings)
 
     assert db.scalar("select count(*) from spatial_publication_current") == 0
     assert db.scalar("select count(*) from spatial_publication_audit") == 0
@@ -729,9 +1070,10 @@ def test_publication_rejects_boundary_bytes_and_spatial_mart_identity_tampering(
     """Catches a valid manifest hiding the wrong base or changed boundary bytes."""
     db, settings, _pipeline, run_id, _base_run_id, boundary_id = _active_run(tmp_path)
     _seed_manifest_rows(db, run_id, uuid4(), boundary_id)
-    write_spatial_manifest(db, run_id)
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
     with pytest.raises(SpatialPublicationError, match="identity"):
-        publish_spatial(db, run_id, settings=settings)
+        publish_spatial(db, run_id, lease_token=token, settings=settings)
     assert db.scalar("select count(*) from spatial_publication_current") == 0
 
     db.connection.execute(
@@ -746,7 +1088,7 @@ def test_publication_rejects_boundary_bytes_and_spatial_mart_identity_tampering(
     db.connection.execute(
         "delete from mart_spatial_exception where spatial_run_id = ?", [run_id]
     )
-    write_spatial_manifest(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
     artifact_path = Path(
         db.scalar(
             """select artifact.path
@@ -759,7 +1101,7 @@ def test_publication_rejects_boundary_bytes_and_spatial_mart_identity_tampering(
     )
     artifact_path.write_bytes(artifact_path.read_bytes() + b"\n")
     with pytest.raises(SpatialPublicationError, match="boundary"):
-        publish_spatial(db, run_id, settings=settings)
+        publish_spatial(db, run_id, lease_token=token, settings=settings)
     assert db.scalar("select count(*) from spatial_publication_current") == 0
 
 
@@ -771,7 +1113,8 @@ def test_publication_rejects_stale_owner_or_epoch_without_mutation(
     db, settings, _pipeline, run_id, _base_run_id, _boundary_id = _active_run(
         tmp_path
     )
-    write_spatial_manifest(db, run_id)
+    token = _lease_token(db, run_id)
+    write_spatial_manifest(db, run_id, lease_token=token)
     if lease_tamper == "owner":
         db.connection.execute(
             "update spatial_writer_lease set owner = 'takeover-owner'"
@@ -782,7 +1125,7 @@ def test_publication_rejects_stale_owner_or_epoch_without_mutation(
         )
 
     with pytest.raises((SpatialPublicationError, SpatialFenceError)):
-        publish_spatial(db, run_id, settings=settings)
+        publish_spatial(db, run_id, lease_token=token, settings=settings)
 
     assert db.scalar("select count(*) from spatial_publication_current") == 0
 
@@ -913,6 +1256,44 @@ def test_real_stage_crash_retry_is_target_only_and_keeps_prior_pointer(
     ) == 1
 
 
+def test_post_evidence_takeover_rejects_stale_pipeline_before_manifest_or_publish(
+    tmp_path: Path,
+) -> None:
+    """Catches stale pipeline A adopting takeover owner B after B purges its outputs."""
+    db, settings, first, run_id, base_run_id, boundary_id = _active_run(tmp_path)
+    previous_run_id = _seed_previous_spatial_pointer(
+        db, base_run_id, boundary_id, date(2026, 8, 16)
+    )
+    second_db = Database(settings.db_path, Path("sql"))
+    second = SpatialPipeline(second_db, settings)
+
+    def take_over_after_evidence(stage: str, observed_run_id: UUID) -> None:
+        if stage != "evidence":
+            return
+        _shorten_lease(db, observed_run_id, milliseconds=-1)
+        second.take_over(observed_run_id)
+
+    first._stage_hook = take_over_after_evidence
+
+    with pytest.raises(SpatialFenceError):
+        first.run(base_run_id, boundary_id, BUSINESS_DATE)
+
+    assert second_db.scalar(
+        """select spatial_run_id from spatial_publication_current
+           where publication_key = 'current'"""
+    ) == previous_run_id
+    assert second_db.scalar(
+        """select count(*) from spatial_mart_completion_manifest
+           where spatial_run_id = ?""",
+        [run_id],
+    ) == 0
+    assert second_db.scalar(
+        "select count(*) from spatial_run_summary where spatial_run_id = ?",
+        [run_id],
+    ) == 0
+    assert second_db.scalar("select count(*) from spatial_publication_audit") == 0
+
+
 def _shorten_lease(
     db: Database, run_id: UUID, *, milliseconds: int = 250
 ) -> None:
@@ -930,10 +1311,10 @@ def _shorten_lease(
     )
 
 
-def test_two_connection_takeover_prevents_stale_manifest_commit(
+def test_two_connection_manifest_heartbeat_conflicts_takeover(
     tmp_path: Path,
 ) -> None:
-    """Catches manifest rows committing after a real second owner takes over."""
+    """Catches a long manifest failing to refresh and fence a second owner."""
     first_db, settings, _first, run_id, _base_run_id, _boundary_id = _active_run(
         tmp_path
     )
@@ -941,10 +1322,12 @@ def test_two_connection_takeover_prevents_stale_manifest_commit(
     second = SpatialPipeline(second_db, settings)
     paused = Event()
     release = Event()
+    token = _lease_token(first_db, run_id)
     _shorten_lease(first_db, run_id, milliseconds=2_000)
 
     def pause_manifest(stage: str, _run_id: UUID) -> None:
-        assert stage == "manifest"
+        if stage != "manifest":
+            return
         paused.set()
         if not release.wait(10):
             raise TimeoutError("manifest transaction was not released")
@@ -954,39 +1337,36 @@ def test_two_connection_takeover_prevents_stale_manifest_commit(
             write_spatial_manifest,
             first_db,
             run_id,
+            lease_token=token,
             stage_hook=pause_manifest,
         )
         assert paused.wait(10)
         Event().wait(2.2)
-        takeover_conflict: duckdb.TransactionException | None = None
-        try:
+        with pytest.raises(duckdb.TransactionException):
             second.take_over(run_id)
-        except duckdb.TransactionException as error:
-            takeover_conflict = error
         release.set()
-        with pytest.raises((SpatialFenceError, duckdb.TransactionException)):
-            future.result(timeout=10)
-        if takeover_conflict is not None:
-            second.take_over(run_id)
+        manifest = future.result(timeout=10)
 
+    assert len(manifest.entries) == 4
     assert second_db.scalar(
         """select count(*) from spatial_mart_completion_manifest
            where spatial_run_id = ?""",
         [run_id],
-    ) == 0
+    ) == 4
 
 
-def test_two_connection_takeover_rolls_back_stale_finalizer_commit(
+def test_two_connection_finalizer_heartbeats_conflict_takeover(
     tmp_path: Path,
 ) -> None:
-    """Catches a stale pointer/audit/summary/terminal transaction surviving."""
+    """Catches finalizer writes failing to refresh and fence a second owner."""
     first_db, settings, _first, run_id, base_run_id, boundary_id = _active_run(
         tmp_path
     )
     previous_run_id = _seed_previous_spatial_pointer(
         first_db, base_run_id, boundary_id, date(2026, 8, 16)
     )
-    write_spatial_manifest(first_db, run_id)
+    token = _lease_token(first_db, run_id)
+    write_spatial_manifest(first_db, run_id, lease_token=token)
     second_db = Database(settings.db_path, Path("sql"))
     second = SpatialPipeline(second_db, settings)
     paused = Event()
@@ -1005,27 +1385,23 @@ def test_two_connection_takeover_rolls_back_stale_finalizer_commit(
             publish_spatial,
             first_db,
             run_id,
+            lease_token=token,
             settings=settings,
             stage_hook=pause_after_pointer,
         )
         assert paused.wait(10)
         Event().wait(2.2)
-        takeover_conflict: duckdb.TransactionException | None = None
-        try:
+        with pytest.raises(duckdb.TransactionException):
             second.take_over(run_id)
-        except duckdb.TransactionException as error:
-            takeover_conflict = error
         release.set()
-        with pytest.raises((SpatialFenceError, duckdb.TransactionException)):
-            future.result(timeout=10)
-        if takeover_conflict is not None:
-            second.take_over(run_id)
+        result = future.result(timeout=10)
 
     assert second_db.scalar(
         """select spatial_run_id from spatial_publication_current
            where publication_key = 'current'"""
-    ) == previous_run_id
-    assert second_db.scalar("select count(*) from spatial_publication_audit") == 0
+    ) == run_id
+    assert result.previous_spatial_run_id == previous_run_id
+    assert second_db.scalar("select count(*) from spatial_publication_audit") == 1
     assert second_db.scalar(
         "select count(*) from spatial_run_summary where spatial_run_id = ?", [run_id]
-    ) == 0
+    ) == 1

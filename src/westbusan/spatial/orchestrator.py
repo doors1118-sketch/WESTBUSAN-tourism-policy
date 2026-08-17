@@ -20,13 +20,18 @@ from westbusan.spatial.build import build_facility_priority, build_grid_marts
 from westbusan.spatial.fencing import (
     SpatialFenceError,
     SpatialLeaseError,
+    SpatialLeaseToken,
     acquire_writer,
     parse_datetime,
     rollback,
     touch_writer,
 )
 from westbusan.spatial.policy import spatial_policy_version
-from westbusan.spatial.publish import publish_spatial, write_spatial_manifest
+from westbusan.spatial.publish import (
+    load_completed_spatial_summary,
+    publish_spatial,
+    write_spatial_manifest,
+)
 
 _LEASE_DURATION = timedelta(minutes=15)
 _T = TypeVar("_T")
@@ -62,6 +67,7 @@ class SpatialPipeline:
         self.db = db
         self.settings = settings
         self._owner = str(uuid4())
+        self._lease_tokens: dict[UUID, SpatialLeaseToken] = {}
         self._stage_hook = stage_hook or (lambda _stage, _run_id: None)
 
     def prepare(
@@ -109,6 +115,7 @@ class SpatialPipeline:
                         self._require_writer_row(spatial_run_id, int(existing[0][7]), now)
                         self.db.connection.execute("commit")
                         began = False
+                        self._remember_lease(spatial_run_id, int(existing[0][7]))
                         return spatial_run_id
                     if status == "COMPLETED":
                         self.db.connection.execute("commit")
@@ -140,10 +147,11 @@ class SpatialPipeline:
                                 spatial_run_id,
                             ],
                         )
-                        self._assert_fence(spatial_run_id)
+                        self._touch_epoch(spatial_run_id, epoch)
                         self._purge_run_outputs(spatial_run_id)
                         self.db.connection.execute("commit")
                         began = False
+                        self._remember_lease(spatial_run_id, epoch)
                         return spatial_run_id
                     raise SpatialLeaseError(
                         f"spatial run {spatial_run_id} cannot prepare from {status}"
@@ -170,6 +178,7 @@ class SpatialPipeline:
                 )
                 self.db.connection.execute("commit")
                 began = False
+                self._remember_lease(spatial_run_id, epoch)
                 return spatial_run_id
             except duckdb.TransactionException:
                 _rollback(self.db, began)
@@ -225,7 +234,10 @@ class SpatialPipeline:
             self._stage_hook(stage, spatial_run_id)
 
             stage = "manifest"
-            write_spatial_manifest(self.db, spatial_run_id)
+            lease_token = self.lease_token(spatial_run_id)
+            write_spatial_manifest(
+                self.db, spatial_run_id, lease_token=lease_token
+            )
             self._stage_hook(stage, spatial_run_id)
 
             stage = "finalizer"
@@ -238,6 +250,7 @@ class SpatialPipeline:
             publish_spatial(
                 self.db,
                 spatial_run_id,
+                lease_token=lease_token,
                 settings=self.settings,
                 stage_hook=finalizer_hook,
             )
@@ -291,10 +304,11 @@ class SpatialPipeline:
                    where spatial_run_id = ? and status = 'RUNNING'""",
                 [self._owner, lease_expires_at, epoch, spatial_run_id],
             )
-            self._assert_fence(spatial_run_id)
+            self._touch_epoch(spatial_run_id, epoch)
             self._purge_run_outputs(spatial_run_id)
             self.db.connection.execute("commit")
             began = False
+            self._remember_lease(spatial_run_id, epoch)
         except Exception:
             _rollback(self.db, began)
             raise
@@ -340,11 +354,34 @@ class SpatialPipeline:
 
     def _assert_fence(self, spatial_run_id: UUID) -> int:
         """Touch the singleton lease row inside the caller's write transaction."""
+        token = self.lease_token(spatial_run_id)
+        return touch_writer(
+            self.db,
+            spatial_run_id,
+            token.owner,
+            require_spatial_run=True,
+            expected_epoch=token.fence_epoch,
+        )
+
+    def lease_token(self, spatial_run_id: UUID) -> SpatialLeaseToken:
+        """Return the caller-captured lease identity without consulting DB ownership."""
+        try:
+            return self._lease_tokens[spatial_run_id]
+        except KeyError as exc:
+            raise SpatialLeaseError(
+                f"spatial run {spatial_run_id} has no caller-held lease token"
+            ) from exc
+
+    def _remember_lease(self, spatial_run_id: UUID, epoch: int) -> None:
+        self._lease_tokens[spatial_run_id] = SpatialLeaseToken(self._owner, epoch)
+
+    def _touch_epoch(self, spatial_run_id: UUID, epoch: int) -> int:
         return touch_writer(
             self.db,
             spatial_run_id,
             self._owner,
             require_spatial_run=True,
+            expected_epoch=epoch,
         )
 
     def _commit_stage(
@@ -405,25 +442,11 @@ class SpatialPipeline:
             _rollback(self.db, began)
 
     def _load_summary(self, spatial_run_id: UUID) -> SpatialRunSummary:
-        rows = self.db.query(
-            """select run.spatial_run_id, run.base_published_run_id,
-                      run.boundary_version_id, run.business_date, run.status,
-                      run.started_at, run.completed_at
-               from spatial_run as run
-               join spatial_run_summary as summary
-                 on summary.spatial_run_id = run.spatial_run_id
-                and summary.base_published_run_id = run.base_published_run_id
-                and summary.boundary_version_id = run.boundary_version_id
-                and summary.business_date = run.business_date
-                and summary.started_at = run.started_at
-                and summary.completed_at = run.completed_at
-                and summary.published_at = run.completed_at
-               where run.spatial_run_id = ?""",
-            [spatial_run_id],
+        return SpatialRunSummary(
+            *load_completed_spatial_summary(
+                self.db, spatial_run_id, self.settings
+            )
         )
-        if len(rows) != 1 or rows[0][6] is None:
-            raise RuntimeError(f"spatial run {spatial_run_id} is not terminal")
-        return SpatialRunSummary(*rows[0])
 
     def _purge_run_outputs(self, spatial_run_id: UUID) -> None:
         self.db.connection.execute(

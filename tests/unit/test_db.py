@@ -343,6 +343,97 @@ def test_spatial_run_summary_upgrade_applied_034_database(tmp_path: Path) -> Non
         ("started_at", "NO"),
         ("completed_at", "NO"),
         ("published_at", "NO"),
+        ("publication_event_id", "NO"),
+        ("publisher", "NO"),
+        ("previous_spatial_run_id", "YES"),
+        ("publication_action", "NO"),
+        ("publication_reason", "NO"),
+    ]
+
+
+def test_spatial_publication_identity_upgrade_applied_035_database(
+    tmp_path: Path,
+) -> None:
+    """Catches migration 036 rewriting 035 or omitting immutable audit identity."""
+    migrations_035 = tmp_path / "migrations-035"
+    migrations_035.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name <= "035_spatial_run_summary.sql":
+            copy2(migration, migrations_035 / migration.name)
+    path = tmp_path / "applied-035.duckdb"
+    original = Database(path, migrations_035)
+    original.migrate()
+    run_id = uuid4()
+    base_run_id = uuid4()
+    boundary_id = uuid4()
+    event_id = uuid4()
+    published_at = datetime(2026, 8, 17, 3, 4, 5, tzinfo=UTC)
+    original.connection.execute(
+        """insert into spatial_publication_audit (
+               event_id, spatial_run_id, base_published_run_id,
+               old_spatial_run_id, new_spatial_run_id, action, actor, reason,
+               business_date, event_at
+           ) values (?, ?, ?, null, ?, 'publish', 'worker-a',
+                     'automatic spatial publication', ?, ?)""",
+        [event_id, run_id, base_run_id, run_id, date(2026, 8, 17), published_at],
+    )
+    original.connection.execute(
+        """insert into spatial_run_summary (
+               spatial_run_id, base_published_run_id, boundary_version_id,
+               policy_version, business_date, table_counts_json,
+               table_digests_json, started_at, completed_at, published_at
+           ) values (?, ?, ?, 'policy-v1', ?, '{}', '{}', ?, ?, ?)""",
+        [
+            run_id,
+            base_run_id,
+            boundary_id,
+            date(2026, 8, 17),
+            published_at,
+            published_at,
+            published_at,
+        ],
+    )
+    original_checksums = dict(
+        original.query("select version, checksum from schema_migrations")
+    )
+    original.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+
+    assert dict(upgraded.query("select version, checksum from schema_migrations")).items() >= (
+        original_checksums.items()
+    )
+    assert upgraded.query(
+        """select column_name, is_nullable
+           from information_schema.columns
+           where table_schema = 'main' and table_name = 'spatial_run_summary'
+             and column_name in (
+                 'publication_event_id', 'publisher',
+                 'previous_spatial_run_id', 'publication_action',
+                 'publication_reason'
+             )
+           order by ordinal_position"""
+    ) == [
+        ("publication_event_id", "NO"),
+        ("publisher", "NO"),
+        ("previous_spatial_run_id", "YES"),
+        ("publication_action", "NO"),
+        ("publication_reason", "NO"),
+    ]
+    assert upgraded.query(
+        """select publication_event_id, publisher, previous_spatial_run_id,
+                  publication_action, publication_reason
+           from spatial_run_summary where spatial_run_id = ?""",
+        [run_id],
+    ) == [
+        (
+            event_id,
+            "worker-a",
+            None,
+            "publish",
+            "automatic spatial publication",
+        )
     ]
 
 
