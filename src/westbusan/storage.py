@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
@@ -34,12 +34,15 @@ class RawStore:
         body: bytes,
         suffix: str,
         source_date: date | None = None,
+        fence_check: Callable[[], None] | None = None,
     ) -> RawArtifact:
         """Write a response once, returning its immutable artifact metadata."""
         if not suffix.startswith("."):
             raise ValueError("suffix must begin with a dot")
         if Path(source_id).name != source_id:
             raise ValueError("source_id must be a single path component")
+        if fence_check is not None:
+            fence_check()
 
         redacted_request = _redact(request)
         request_json = json.dumps(
@@ -51,19 +54,25 @@ class RawStore:
         ingest_date = written_at.date()
         directory = self.raw_dir / source_id / f"ingest_date={ingest_date.isoformat()}"
         path = directory / f"{content_hash}{suffix}"
+        if fence_check is not None:
+            fence_check()
         directory.mkdir(parents=True, exist_ok=True)
         if path.exists():
+            if fence_check is not None:
+                fence_check()
             actual_hash = _sha256(path.read_bytes())
             if actual_hash != content_hash:
                 quarantine = path.with_name(
                     f"{path.name}.corrupt-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%fZ')}"
                 )
+                if fence_check is not None:
+                    fence_check()
                 os.replace(str(path), str(quarantine))
                 raise ValueError(
                     f"raw artifact integrity mismatch; quarantined {path.name}"
                 )
         else:
-            _atomic_write(path, body)
+            _atomic_write(path, body, fence_check=fence_check)
 
         return RawArtifact(
             artifact_id=uuid5(
@@ -118,7 +127,12 @@ def _sha256(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def _atomic_write(path: Path, body: bytes) -> None:
+def _atomic_write(
+    path: Path,
+    body: bytes,
+    *,
+    fence_check: Callable[[], None] | None = None,
+) -> None:
     descriptor, temporary_name = tempfile.mkstemp(dir=str(path.parent))
     temporary_path = Path(temporary_name)
     try:
@@ -126,6 +140,8 @@ def _atomic_write(path: Path, body: bytes) -> None:
             temporary.write(body)
             temporary.flush()
             os.fsync(temporary.fileno())
+        if fence_check is not None:
+            fence_check()
         os.replace(str(temporary_path), str(path))
     finally:
         temporary_path.unlink(missing_ok=True)

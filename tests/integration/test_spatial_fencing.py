@@ -3,9 +3,10 @@ from __future__ import annotations
 import shutil
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from threading import Event
+from typing import Any
 from uuid import UUID, uuid4
 
 import duckdb
@@ -14,9 +15,17 @@ import pytest
 from westbusan.analytics.build import write_mart_manifest
 from westbusan.config import PolicyConfig, RegionConfig, Settings, SpatialConfig
 from westbusan.db import Database
+from westbusan.spatial import fencing as spatial_fencing
+from westbusan.spatial import grid as grid_module
 from westbusan.spatial.boundary import approve_boundary, inspect_boundary
-from westbusan.spatial.models import BoundaryMetadata
-from westbusan.spatial.orchestrator import SpatialFenceError, SpatialPipeline
+from westbusan.spatial.fencing import SpatialOperationLease
+from westbusan.spatial.grid import build_grid
+from westbusan.spatial.models import BoundaryApprovalError, BoundaryMetadata
+from westbusan.spatial.orchestrator import (
+    SpatialFenceError,
+    SpatialLeaseError,
+    SpatialPipeline,
+)
 from westbusan.storage import RawStore
 
 BOUNDARY_FIXTURE = Path("tests/fixtures/spatial/busan_dongs.geojson")
@@ -207,6 +216,177 @@ def test_ownership_loss_before_stage_causes_zero_changes(tmp_path: Path) -> None
         "select count(*) from mart_spatial_exception where spatial_run_id = ?",
         [spatial_run_id],
     ) == 0
+
+
+def test_active_pipeline_lease_blocks_direct_grid_build(tmp_path: Path) -> None:
+    """Catches Task 2 grid writes bypassing the global spatial writer."""
+    _first_db, second_db, _first, _second, spatial_run_id, _base_run_id = (
+        _active_pipelines(tmp_path)
+    )
+    boundary_version_id = second_db.scalar(
+        "select boundary_version_id from spatial_run where spatial_run_id = ?",
+        [spatial_run_id],
+    )
+
+    with pytest.raises(SpatialLeaseError, match="active"):
+        build_grid(second_db, boundary_version_id, SpatialConfig.default())
+
+    assert second_db.scalar(
+        """select count(*) from dim_spatial_grid_500m
+           where boundary_version_id = ?""",
+        [boundary_version_id],
+    ) == 0
+
+
+def test_active_pipeline_lease_blocks_direct_boundary_approval(
+    tmp_path: Path,
+) -> None:
+    """Catches Task 2 approval DB/filesystem writes bypassing the global writer."""
+    _first_db, second_db, _first, _second, _run_id, _base_run_id = (
+        _active_pipelines(tmp_path)
+    )
+    inspection = inspect_boundary(BOUNDARY_FIXTURE, RegionConfig.default())
+    store = RawStore(tmp_path / "blocked-raw")
+    before_events = second_db.scalar(
+        "select count(*) from spatial_boundary_approval_event"
+    )
+
+    with pytest.raises(SpatialLeaseError, match="active"):
+        approve_boundary(
+            second_db,
+            store,
+            BOUNDARY_FIXTURE,
+            inspection,
+            inspection.content_hash,
+            "blocked-reviewer@example.org",
+            "This approval must not bypass the active pipeline.",
+            BoundaryMetadata(
+                "부산광역시",
+                "https://data.busan.go.kr/boundary",
+                date(2026, 8, 1),
+                "blocked-version",
+            ),
+        )
+
+    assert second_db.scalar(
+        "select count(*) from spatial_boundary_approval_event"
+    ) == before_events
+    assert not store.raw_dir.exists()
+
+
+def test_stale_direct_grid_owner_cannot_commit_after_operation_takeover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches direct grid inserts outside the operation lease transaction."""
+    db_path = tmp_path / "direct-grid-fence.duckdb"
+    first_db = Database(db_path, Path("sql"))
+    first_db.migrate()
+    inspection = inspect_boundary(BOUNDARY_FIXTURE, RegionConfig.default())
+    boundary_version_id = approve_boundary(
+        first_db,
+        RawStore(tmp_path / "seed-raw"),
+        BOUNDARY_FIXTURE,
+        inspection,
+        inspection.content_hash,
+        "grid-reviewer@example.org",
+        "Seed reviewed boundary for direct grid fencing.",
+        BoundaryMetadata(
+            "부산광역시",
+            "https://data.busan.go.kr/boundary",
+            date(2026, 8, 1),
+            "direct-grid-fence",
+        ),
+    )
+    second_db = Database(db_path, Path("sql"))
+    paused = Event()
+    release = Event()
+    original_commit = SpatialOperationLease.commit
+
+    def paused_commit(self, action):  # type: ignore[no-untyped-def]
+        paused.set()
+        if not release.wait(10):
+            raise TimeoutError("test did not release direct grid transaction")
+        return original_commit(self, action)
+
+    monkeypatch.setattr(spatial_fencing, "_LEASE_DURATION", timedelta(seconds=1))
+    monkeypatch.setattr(grid_module.SpatialOperationLease, "commit", paused_commit)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            build_grid, first_db, boundary_version_id, SpatialConfig.default()
+        )
+        assert paused.wait(10)
+        Event().wait(1.1)
+        with SpatialOperationLease(second_db, "grid takeover"):
+            pass
+        release.set()
+        with pytest.raises((SpatialFenceError, duckdb.TransactionException)) as stale:
+            future.result(timeout=10)
+
+    assert isinstance(stale.value, (SpatialFenceError, duckdb.TransactionException))
+    assert second_db.scalar(
+        """select count(*) from dim_spatial_grid_500m
+           where boundary_version_id = ?""",
+        [boundary_version_id],
+    ) == 0
+
+
+class _PausedBoundaryStore(RawStore):
+    def __init__(self, data_dir: Path, paused: Event, release: Event) -> None:
+        super().__init__(data_dir)
+        self.paused = paused
+        self.release = release
+
+    def write(self, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        fence_check = kwargs.pop("fence_check", None)
+        self.paused.set()
+        if not self.release.wait(10):
+            raise TimeoutError("test did not release boundary filesystem write")
+        if fence_check is None:
+            return super().write(*args, **kwargs)
+        return super().write(*args, fence_check=fence_check, **kwargs)
+
+
+def test_stale_boundary_owner_cannot_write_raw_file_after_takeover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches immutable files written after direct approval loses ownership."""
+    db_path = tmp_path / "boundary-filesystem-fence.duckdb"
+    first_db = Database(db_path, Path("sql"))
+    first_db.migrate()
+    second_db = Database(db_path, Path("sql"))
+    inspection = inspect_boundary(BOUNDARY_FIXTURE, RegionConfig.default())
+    paused = Event()
+    release = Event()
+    store = _PausedBoundaryStore(tmp_path / "stale-raw", paused, release)
+    monkeypatch.setattr(spatial_fencing, "_LEASE_DURATION", timedelta(seconds=1))
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            approve_boundary,
+            first_db,
+            store,
+            BOUNDARY_FIXTURE,
+            inspection,
+            inspection.content_hash,
+            "filesystem-reviewer@example.org",
+            "A stale approval must not write immutable files.",
+            BoundaryMetadata(
+                "부산광역시",
+                "https://data.busan.go.kr/boundary",
+                date(2026, 8, 1),
+                "filesystem-fence",
+            ),
+        )
+        assert paused.wait(10)
+        Event().wait(1.1)
+        with SpatialOperationLease(second_db, "boundary takeover"):
+            pass
+        release.set()
+        with pytest.raises((SpatialFenceError, SpatialLeaseError, BoundaryApprovalError)):
+            future.result(timeout=10)
+
+    assert not store.raw_dir.exists() or not list(store.raw_dir.rglob("*.geojson"))
 
 
 @pytest.mark.parametrize("failure_stage", ["prepared", "fenced_stage"])

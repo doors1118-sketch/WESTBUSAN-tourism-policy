@@ -16,6 +16,14 @@ import duckdb
 from westbusan.analytics.build import mart_manifest_is_valid
 from westbusan.config import Settings
 from westbusan.db import Database, ensure_run_rebuildable
+from westbusan.spatial.fencing import (
+    SpatialFenceError,
+    SpatialLeaseError,
+    acquire_writer,
+    parse_datetime,
+    rollback,
+    touch_writer,
+)
 
 _LEASE_DURATION = timedelta(minutes=15)
 _T = TypeVar("_T")
@@ -23,14 +31,6 @@ _T = TypeVar("_T")
 
 class SpatialInputError(RuntimeError):
     """An immutable core or boundary input failed closed."""
-
-
-class SpatialLeaseError(RuntimeError):
-    """The single spatial writer lease is unavailable to this owner."""
-
-
-class SpatialFenceError(RuntimeError):
-    """A spatial write was attempted with lost ownership or a stale epoch."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,37 +215,38 @@ class SpatialPipeline:
             self.db.connection.execute("begin transaction")
             began = True
             rows = self.db.query(
-                """select status, owner, lease_expires_at::varchar
+                """select base_published_run_id, boundary_version_id,
+                          policy_version, business_date, status, owner,
+                          lease_expires_at::varchar
                    from spatial_run where spatial_run_id = ?""",
                 [spatial_run_id],
             )
-            if len(rows) != 1 or rows[0][0] != "RUNNING":
+            if len(rows) != 1 or rows[0][4] != "RUNNING":
                 raise SpatialLeaseError(
                     f"spatial run {spatial_run_id} is not a live attempt"
                 )
-            expires = _parse_datetime(rows[0][2])
-            if rows[0][1] is not None and expires is not None and expires > now:
+            (
+                base_run_id,
+                boundary_version_id,
+                policy_version,
+                business_date,
+                _status,
+                owner,
+                expires_text,
+            ) = rows[0]
+            expected_run_id = self._spatial_run_id(
+                base_run_id, boundary_version_id, business_date
+            )
+            if spatial_run_id != expected_run_id or policy_version != self._policy_version:
+                raise SpatialInputError("deterministic spatial run identity mismatch")
+            self._validate_inputs(base_run_id, boundary_version_id, business_date)
+            expires = _parse_datetime(expires_text)
+            if owner is not None and expires is not None and expires > now:
                 raise SpatialLeaseError(
                     f"spatial run {spatial_run_id} has an active lease"
                 )
-            writer = self.db.query(
-                """select spatial_run_id, lease_expires_at::varchar, fence_epoch
-                   from spatial_writer_lease where lease_key = 'writer'"""
-            )
-            if len(writer) != 1:
-                raise SpatialLeaseError("spatial writer lease row is missing")
-            writer_expires = _parse_datetime(writer[0][1])
-            if writer[0][0] is not None and writer_expires and writer_expires > now:
-                raise SpatialLeaseError("spatial writer has an active lease")
-            epoch = int(writer[0][2]) + 1
+            epoch = self._acquire_unowned_writer(spatial_run_id, now)
             lease_expires_at = now + _LEASE_DURATION
-            self.db.connection.execute(
-                """update spatial_writer_lease
-                   set spatial_run_id = ?, owner = ?, lease_expires_at = ?,
-                       fence_epoch = ?, fence_touch = coalesce(fence_touch, 0) + 1
-                   where lease_key = 'writer'""",
-                [spatial_run_id, self._owner, lease_expires_at, epoch],
-            )
             self.db.connection.execute(
                 """update spatial_run set owner = ?, lease_expires_at = ?, fence_epoch = ?
                    where spatial_run_id = ? and status = 'RUNNING'""",
@@ -300,28 +301,12 @@ class SpatialPipeline:
 
     def _assert_fence(self, spatial_run_id: UUID) -> int:
         """Touch the singleton lease row inside the caller's write transaction."""
-        now = datetime.now(UTC)
-        rows = self.db.query(
-            """update spatial_writer_lease as writer
-               set fence_touch = writer.fence_touch + 1
-               where writer.lease_key = 'writer'
-                 and writer.spatial_run_id = ? and writer.owner = ?
-                 and writer.lease_expires_at > ?
-                 and exists (
-                     select 1 from spatial_run as run
-                     where run.spatial_run_id = writer.spatial_run_id
-                       and run.status = 'RUNNING' and run.owner = ?
-                       and run.fence_epoch = writer.fence_epoch
-                       and run.lease_expires_at > ?
-                 )
-               returning writer.fence_epoch""",
-            [spatial_run_id, self._owner, now, self._owner, now],
+        return touch_writer(
+            self.db,
+            spatial_run_id,
+            self._owner,
+            require_spatial_run=True,
         )
-        if len(rows) != 1:
-            raise SpatialFenceError(
-                f"spatial run {spatial_run_id} ownership or writer fence was lost"
-            )
-        return int(rows[0][0])
 
     def _commit_stage(
         self, spatial_run_id: UUID, action: Callable[[], _T]
@@ -503,7 +488,8 @@ class SpatialPipeline:
                       boundary.source_url, boundary.source_date,
                       boundary.source_version, boundary.crs,
                       boundary.district_count, boundary.dong_count,
-                      artifact.content_hash, artifact.path
+                      artifact.content_hash, artifact.path,
+                      boundary.approved_by, boundary.approval_rationale
                from spatial_boundary_version as boundary
                join raw_artifact as artifact
                  on artifact.artifact_id = boundary.raw_artifact_id
@@ -518,28 +504,41 @@ class SpatialPipeline:
             or row[6] != 16
             or int(row[7]) < 16
             or any(not str(value).strip() for value in row[1:5])
+            or any(not str(value).strip() for value in row[10:12])
         ):
             raise SpatialInputError("approved boundary metadata is invalid")
         approval = self.db.query(
-            """select source_metadata_json from spatial_boundary_approval_event
+            """select actor, rationale, source_metadata_json
+               from spatial_boundary_approval_event
                where boundary_version_id = ? and observed_content_hash = ?
-                 and action = 'approved' order by event_at desc limit 1""",
+                 and action = 'approved' order by event_at desc""",
             [boundary_version_id, row[0]],
         )
-        if len(approval) != 1:
+        if not approval:
             raise SpatialInputError("approved boundary audit evidence is missing")
-        try:
-            source_metadata = json.loads(approval[0][0])
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise SpatialInputError("approved boundary audit metadata is invalid") from exc
         expected_metadata = {
             "source_date": row[3].isoformat(),
             "source_organization": row[1],
             "source_url": row[2],
             "source_version": row[4],
         }
-        if source_metadata != expected_metadata:
-            raise SpatialInputError("approved boundary audit metadata does not match")
+        matching_event = False
+        for event_actor, event_rationale, source_metadata_json in approval:
+            try:
+                source_metadata = json.loads(source_metadata_json)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise SpatialInputError(
+                    "approved boundary audit metadata is invalid"
+                ) from exc
+            if (
+                event_actor == row[10]
+                and event_rationale == row[11]
+                and source_metadata == expected_metadata
+            ):
+                matching_event = True
+                break
+        if not matching_event:
+            raise SpatialInputError("approved boundary audit evidence does not match")
         try:
             observed_hash = hashlib.sha256(Path(row[9]).read_bytes()).hexdigest()
         except OSError as exc:
@@ -563,25 +562,13 @@ class SpatialPipeline:
             raise SpatialInputError("deterministic spatial run identity collision")
 
     def _acquire_unowned_writer(self, spatial_run_id: UUID, now: datetime) -> int:
-        rows = self.db.query(
-            """select spatial_run_id, owner, lease_expires_at::varchar, fence_epoch
-               from spatial_writer_lease where lease_key = 'writer'"""
+        return acquire_writer(
+            self.db,
+            spatial_run_id,
+            self._owner,
+            now,
+            _LEASE_DURATION,
         )
-        if len(rows) != 1:
-            raise SpatialLeaseError("spatial writer lease row is missing")
-        active_run_id, owner, expires_text, prior_epoch = rows[0]
-        expires = _parse_datetime(expires_text)
-        if active_run_id is not None and owner is not None and expires and expires > now:
-            raise SpatialLeaseError("spatial writer has an active lease")
-        epoch = int(prior_epoch) + 1
-        self.db.connection.execute(
-            """update spatial_writer_lease
-               set spatial_run_id = ?, owner = ?, lease_expires_at = ?, fence_epoch = ?,
-                   fence_touch = coalesce(fence_touch, 0) + 1
-               where lease_key = 'writer'""",
-            [spatial_run_id, self._owner, now + _LEASE_DURATION, epoch],
-        )
-        return epoch
 
     def _require_writer_row(
         self, spatial_run_id: UUID, epoch: int, now: datetime
@@ -599,16 +586,8 @@ class SpatialPipeline:
 
 
 def _parse_datetime(value: object) -> datetime | None:
-    if value is None:
-        return None
-    parsed = datetime.fromisoformat(str(value))
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return parse_datetime(value)
 
 
 def _rollback(db: Database, began: bool) -> None:
-    if not began:
-        return
-    try:
-        db.connection.execute("rollback")
-    except duckdb.Error:
-        return
+    rollback(db, began)

@@ -16,6 +16,7 @@ from shapely.ops import transform, unary_union
 
 from westbusan.config import SpatialConfig
 from westbusan.db import Database
+from westbusan.spatial.fencing import SpatialOperationLease
 from westbusan.spatial.models import BoundaryApprovalError, GridBuildResult
 
 _AREA_TIE_ABSOLUTE_TOLERANCE = 1e-5
@@ -27,6 +28,17 @@ def build_grid(
     config: SpatialConfig,
 ) -> GridBuildResult:
     """Build or byte-verify one approved boundary's stable 500 m grid rows."""
+    with SpatialOperationLease(db, "grid build") as lease:
+        return _build_grid(db, boundary_version_id, config, lease)
+
+
+def _build_grid(
+    db: Database,
+    boundary_version_id: UUID,
+    config: SpatialConfig,
+    lease: SpatialOperationLease,
+) -> GridBuildResult:
+    lease.refresh()
     boundary_rows = db.query(
         """select artifact.path, boundary.content_hash, artifact.content_hash
            from spatial_boundary_version as boundary
@@ -76,6 +88,7 @@ def build_grid(
     max_y = math.ceil(busan.bounds[3] / size) * size
     rows: list[tuple[object, ...]] = []
     for origin_x in range(min_x, max_x, size):
+        lease.refresh()
         for origin_y in range(min_y, max_y, size):
             square = box(origin_x, origin_y, origin_x + size, origin_y + size)
             clipped = square.intersection(busan)
@@ -113,15 +126,17 @@ def build_grid(
                 "existing grid rows differ from deterministic rebuild"
             )
     else:
-        db.connection.executemany(
-            """insert into dim_spatial_grid_500m (
-                   boundary_version_id, grid_id, x_index, y_index, district_code,
-                   district_name, primary_dong_code, primary_dong_name,
-                   centroid_projected_x, centroid_projected_y,
-                   centroid_wgs84_longitude, centroid_wgs84_latitude,
-                   geometry_geojson, overlap_evidence_json, clipped_area_ratio
-               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            rows,
+        lease.commit(
+            lambda: db.connection.executemany(
+                """insert into dim_spatial_grid_500m (
+                       boundary_version_id, grid_id, x_index, y_index, district_code,
+                       district_name, primary_dong_code, primary_dong_name,
+                       centroid_projected_x, centroid_projected_y,
+                       centroid_wgs84_longitude, centroid_wgs84_latitude,
+                       geometry_geojson, overlap_evidence_json, clipped_area_ratio
+                   ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                rows,
+            )
         )
     digest = hashlib.sha256(_canonical_json(rows).encode("utf-8")).hexdigest()
     return GridBuildResult(boundary_version_id, len(rows), digest)

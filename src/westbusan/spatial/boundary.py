@@ -15,6 +15,11 @@ from shapely.geometry.base import BaseGeometry
 from westbusan.config import RegionConfig
 from westbusan.db import Database
 from westbusan.models import RunContext
+from westbusan.spatial.fencing import (
+    SpatialFenceError,
+    SpatialLeaseError,
+    SpatialOperationLease,
+)
 from westbusan.spatial.models import (
     BoundaryApprovalError,
     BoundaryContractError,
@@ -139,6 +144,32 @@ def approve_boundary(
     metadata: BoundaryMetadata,
 ) -> UUID:
     """Copy reviewed bytes immutably, revalidate them, and append approval evidence."""
+    with SpatialOperationLease(db, "boundary approval") as lease:
+        return _approve_boundary(
+            db,
+            store,
+            path,
+            inspection,
+            supplied_hash,
+            approver,
+            rationale,
+            metadata,
+            lease,
+        )
+
+
+def _approve_boundary(
+    db: Database,
+    store: RawStore,
+    path: Path,
+    inspection: BoundaryInspection,
+    supplied_hash: str,
+    approver: str,
+    rationale: str,
+    metadata: BoundaryMetadata,
+    lease: SpatialOperationLease,
+) -> UUID:
+    lease.refresh()
     body = Path(path).read_bytes()
     observed_hash = hashlib.sha256(body).hexdigest()
     actor = approver.strip()
@@ -149,6 +180,7 @@ def approve_boundary(
     if invalid_reason is not None:
         _append_approval_event(
             db,
+            lease,
             observed_hash,
             None,
             "rejected",
@@ -161,6 +193,7 @@ def approve_boundary(
     if supplied_hash != observed_hash or inspection.content_hash != observed_hash:
         _append_approval_event(
             db,
+            lease,
             observed_hash,
             None,
             "rejected",
@@ -180,10 +213,14 @@ def approve_boundary(
             body,
             ".geojson",
             source_date=metadata.source_date,
+            fence_check=lease.refresh,
         )
+    except (SpatialFenceError, SpatialLeaseError):
+        raise
     except Exception as exc:  # noqa: BLE001
         _append_approval_event(
             db,
+            lease,
             observed_hash,
             None,
             "rejected",
@@ -197,10 +234,13 @@ def approve_boundary(
         )
         raise BoundaryApprovalError("immutable boundary storage failed") from None
     try:
-        db.record_artifact(artifact)
+        lease.commit(lambda: db.record_artifact(artifact))
+    except (SpatialFenceError, SpatialLeaseError):
+        raise
     except Exception as exc:  # noqa: BLE001
         _append_approval_event(
             db,
+            lease,
             observed_hash,
             None,
             "rejected",
@@ -214,12 +254,14 @@ def approve_boundary(
         )
         raise BoundaryApprovalError("raw artifact metadata recording failed") from None
     try:
+        lease.refresh()
         immutable_inspection = inspect_boundary(
             artifact.path, RegionConfig.default()
         )
     except BoundaryContractError as exc:
         _append_approval_event(
             db,
+            lease,
             observed_hash,
             None,
             "rejected",
@@ -232,6 +274,7 @@ def approve_boundary(
     except OSError as exc:
         _append_approval_event(
             db,
+            lease,
             observed_hash,
             None,
             "rejected",
@@ -249,6 +292,7 @@ def approve_boundary(
     if immutable_inspection != inspection:
         _append_approval_event(
             db,
+            lease,
             observed_hash,
             None,
             "rejected",
@@ -284,6 +328,7 @@ def approve_boundary(
     try:
         db.connection.execute("begin transaction")
         began = True
+        lease.touch()
         try:
             final_artifact_hash = hashlib.sha256(
                 artifact.path.read_bytes()
@@ -293,6 +338,7 @@ def approve_boundary(
             began = False
             _append_approval_event(
                 db,
+                lease,
                 observed_hash,
                 None,
                 "rejected",
@@ -312,6 +358,7 @@ def approve_boundary(
             began = False
             _append_approval_event(
                 db,
+                lease,
                 observed_hash,
                 None,
                 "rejected",
@@ -338,6 +385,7 @@ def approve_boundary(
                 began = False
                 _append_approval_event(
                     db,
+                    lease,
                     observed_hash,
                     None,
                     "rejected",
@@ -366,6 +414,7 @@ def approve_boundary(
             )
         _append_approval_event(
             db,
+            lease,
             observed_hash,
             boundary_version_id,
             "approved",
@@ -373,7 +422,9 @@ def approve_boundary(
             reason,
             source_metadata,
             approval_evidence,
+            in_transaction=True,
         )
+        lease.touch()
         db.connection.execute("commit")
         began = False
     except Exception:
@@ -458,6 +509,7 @@ def _source_metadata(metadata: BoundaryMetadata) -> dict[str, object]:
 
 def _append_approval_event(
     db: Database,
+    lease: SpatialOperationLease,
     observed_hash: str,
     boundary_version_id: UUID | None,
     action: str,
@@ -465,30 +517,38 @@ def _append_approval_event(
     rationale: str,
     source_metadata: dict[str, object],
     evidence: dict[str, object],
+    *,
+    in_transaction: bool = False,
 ) -> None:
-    db.connection.execute(
-        """insert into spatial_boundary_approval_event (
-               event_id, observed_content_hash, boundary_version_id, action,
-               actor, rationale, source_metadata_json, evidence_json
-           ) values (?, ?, ?, ?, ?, ?, ?, ?)""",
-        [
-            uuid4(),
-            observed_hash,
-            boundary_version_id,
-            action,
-            actor,
-            rationale,
-            json.dumps(
-                source_metadata,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
-            json.dumps(
-                evidence,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ),
-        ],
-    )
+    def insert_event() -> None:
+        db.connection.execute(
+            """insert into spatial_boundary_approval_event (
+                   event_id, observed_content_hash, boundary_version_id, action,
+                   actor, rationale, source_metadata_json, evidence_json
+               ) values (?, ?, ?, ?, ?, ?, ?, ?)""",
+            [
+                uuid4(),
+                observed_hash,
+                boundary_version_id,
+                action,
+                actor,
+                rationale,
+                json.dumps(
+                    source_metadata,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                json.dumps(
+                    evidence,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ],
+        )
+
+    if in_transaction:
+        insert_event()
+    else:
+        lease.commit(insert_event)

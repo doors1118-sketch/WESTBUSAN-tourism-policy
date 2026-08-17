@@ -160,6 +160,15 @@ def ensure_run_rebuildable(db: Database, run_id: UUID) -> None:
                where lineage.run_id = ?""",
             [parent_run_id],
         )
+        if not inputs:
+            raise RuntimeError(
+                f"input lineage for run {run_id} is empty at {parent_run_id}"
+            )
+        if not any(input_run_id == parent_run_id for input_run_id, *_ in inputs):
+            raise RuntimeError(
+                f"input lineage for run {run_id} lacks self membership "
+                f"at {parent_run_id}"
+            )
         for input_run_id, input_rebuildable, input_status, input_date in inputs:
             if input_run_id == parent_run_id:
                 continue
