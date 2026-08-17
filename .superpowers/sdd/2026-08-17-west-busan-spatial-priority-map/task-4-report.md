@@ -1,5 +1,56 @@
 # Task 4 report — facility coordinate resolution and transparent ratings
 
+## Review round 1 hardening
+
+- Candidate base: `31b1df7`.
+- The facility stage now loads `district_code` and `district_name` with the
+  exact grid ID from the pinned boundary version. The exact `run_facility`
+  district must equal that grid district name; null or conflicting districts
+  emit one redacted `DISTRICT_COORDINATE_MISMATCH` exception and no public row.
+  Public district labels and exact-period district context both come from the
+  pinned grid identity after this agreement gate.
+- Coordinate candidates are compared by their exact resolved projected float
+  pair. Decimal rounding was removed, so even two distinct accepted points
+  closer than one nanometre remain ambiguous rather than being silently merged.
+- `spatial.policy.spatial_policy_version(settings)` is now the sole canonical
+  serializer/hash function. Task 3 preparation delegates to it, and Task 4
+  recomputes the current hash with the same function before its first progress
+  callback, grid read, purge, or write. A stale pinned policy fails closed and
+  explicitly requires a newly prepared spatial run.
+- Public evidence now includes the pinned policy hash, exact room/age breaks,
+  component points, composite score bands, and public labels used. It never
+  includes local/internal paths.
+- Public evidence no longer exposes whether `review_required` arose from a
+  pending duplicate review, ambiguous multi-building link, or both. The public
+  mart exposes only the generic display status. Exact private causes remain in
+  the already run-scoped `run_duplicate_review` and `run_facility_building`
+  source tables and are not copied into a public exception.
+
+Review-round RED evidence:
+
+1. Both a null district and a Haeundae facility snapshot were published at a
+   Busanjin grid point instead of producing a mismatch exception.
+2. Two distinct projected X values separated by `2e-10` metres were merged by
+   the old nine-decimal key.
+3. A run with a stale policy hash rebuilt without error and purged an existing
+   target exception.
+4. Public rows omitted pinned grid district code and exact policy evidence.
+5. A recursive scan found `review_flags`, `pending_duplicate_review`, and
+   `ambiguous_multi_building` in public evidence.
+6. After the first GREEN pass, an added sequencing RED proved the stale-policy
+   path still invoked the progress/lease callback before rejecting the hash.
+
+All six original adversarial selections passed together after the first GREEN
+implementation. The sequencing test passed after moving the first callback
+behind the policy gate. Review-round verification on the final pre-commit tree:
+
+- New selected adversarial cases: **6 passed**.
+- Complete facility integration suite, including the real two-connection
+  in-transaction takeover: **15 passed**.
+- Task 3 orchestrator/fencing regression after canonical hash extraction:
+  **26 passed**.
+- Combined Task 1–4 relevant regression: **156 passed in 121.63s**.
+
 ## Outcome
 
 - Implemented strict pure coordinate resolution for explicitly declared
@@ -30,8 +81,8 @@
   south edges belong to the cell beginning on that edge.
 - The build confirms that the derived grid ID exists under the exact pinned
   boundary version before emitting a public point.
-- Identical accepted candidates from multiple legal registrations deduplicate
-  to one physical-facility row. Distinct accepted points emit one
+- Exactly identical accepted candidates from multiple legal registrations
+  deduplicate to one physical-facility row. Distinct accepted points emit one
   `AMBIGUOUS_COORDINATES` exception; no coordinate is chosen, averaged, or
   geocoded.
 - `public_name` and address preserve the exact selected snapshot strings.
@@ -58,7 +109,8 @@
   `priority_1`, 3–4 `priority_2`, 1–2 `monitor`, 0 `general`; otherwise score is
   `NULL` and grade is `insufficient_evidence`.
 - Pending run-scoped duplicate review or more than one run-scoped building link
-  independently sets `display_status='review_required'`. An unavailable
+  independently sets `display_status='review_required'`. Their exact causes
+  remain private and are not serialized into public evidence. An unavailable
   component alone remains `public`.
 - Evidence states that the result is a policy-support priority, not an
   assessment of safety, hygiene, legal compliance, property condition, or

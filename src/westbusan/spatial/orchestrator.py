@@ -24,6 +24,7 @@ from westbusan.spatial.fencing import (
     rollback,
     touch_writer,
 )
+from westbusan.spatial.policy import spatial_policy_version
 
 _LEASE_DURATION = timedelta(minutes=15)
 _T = TypeVar("_T")
@@ -428,12 +429,7 @@ class SpatialPipeline:
 
     @property
     def _policy_version(self) -> str:
-        payload = {
-            "policy": self.settings.policy.model_dump(mode="json"),
-            "spatial": self.settings.spatial.model_dump(mode="json"),
-        }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-        return f"sha256:{hashlib.sha256(encoded).hexdigest()}"
+        return spatial_policy_version(self.settings)
 
     def _spatial_run_id(
         self, base_run_id: UUID, boundary_version_id: UUID, business_date: date

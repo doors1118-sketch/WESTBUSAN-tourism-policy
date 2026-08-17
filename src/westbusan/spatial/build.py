@@ -7,13 +7,14 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
-from westbusan.config import SpatialConfig
+from westbusan.config import Settings, SpatialConfig
 from westbusan.db import Database
 from westbusan.spatial.coordinates import (
     ResolvedPoint,
@@ -21,6 +22,7 @@ from westbusan.spatial.coordinates import (
     resolve_facility_point,
 )
 from westbusan.spatial.fencing import SpatialFenceError, rollback, touch_writer
+from westbusan.spatial.policy import spatial_policy_version
 from westbusan.spatial.ratings import FacilityRatingInput, rate_facility
 
 
@@ -35,6 +37,13 @@ class _RunInput:
     boundary_version_id: UUID
     business_date: date
     owner: str
+    policy_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class _GridIdentity:
+    district_code: str | None
+    district_name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,10 +79,17 @@ def build_facility_priority(
     the target-run purge and replacement are enclosed by Task 3's mutable
     conditional fence touches in one DuckDB transaction.
     """
-    progress()
     run = _load_owned_run(db, spatial_run_id)
+    settings = Settings.load(Path(__file__).resolve().parents[3])
+    expected_policy_version = spatial_policy_version(settings)
+    if run.policy_version != expected_policy_version:
+        raise FacilityBuildError(
+            "spatial run policy version differs from current canonical policy version; "
+            "prepare a new spatial run"
+        )
+    progress()
     grid_rows = db.query(
-        """select grid_id, geometry_geojson
+        """select grid_id, district_code, district_name, geometry_geojson
            from dim_spatial_grid_500m
            where boundary_version_id = ? order by grid_id""",
         [run.boundary_version_id],
@@ -81,11 +97,17 @@ def build_facility_priority(
     if not grid_rows:
         raise FacilityBuildError("pinned boundary has no reviewed grid rows")
     try:
-        boundary = unary_union([shape(json.loads(row[1])) for row in grid_rows])
+        boundary = unary_union([shape(json.loads(row[3])) for row in grid_rows])
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
         raise FacilityBuildError("pinned boundary grid geometry is invalid") from exc
-    grid_ids = {str(row[0]) for row in grid_rows}
-    config = SpatialConfig.default()
+    grids = {
+        str(row[0]): _GridIdentity(
+            district_code=str(row[1]) if row[1] is not None else None,
+            district_name=str(row[2]) if row[2] is not None else "",
+        )
+        for row in grid_rows
+    }
+    config = settings.spatial
 
     priority_rows: list[tuple[object, ...]] = []
     exception_rows: list[tuple[object, ...]] = []
@@ -107,7 +129,7 @@ def build_facility_priority(
             run,
             config,
             boundary,
-            grid_ids,
+            grids,
             facility,
         )
         if row is not None:
@@ -123,7 +145,7 @@ def build_facility_priority(
 def _load_owned_run(db: Database, spatial_run_id: UUID) -> _RunInput:
     rows = db.query(
         """select run.base_published_run_id, run.boundary_version_id,
-                  run.business_date, run.owner
+                  run.business_date, run.owner, run.policy_version
            from spatial_run as run
            join spatial_writer_lease as writer
              on writer.lease_key = 'writer'
@@ -139,13 +161,14 @@ def _load_owned_run(db: Database, spatial_run_id: UUID) -> _RunInput:
         raise SpatialFenceError(
             f"spatial run {spatial_run_id} has no active owned facility stage"
         )
-    base_run_id, boundary_version_id, business_date, owner = rows[0]
+    base_run_id, boundary_version_id, business_date, owner, policy_version = rows[0]
     return _RunInput(
         spatial_run_id=spatial_run_id,
         base_run_id=base_run_id,
         boundary_version_id=boundary_version_id,
         business_date=business_date,
         owner=str(owner),
+        policy_version=str(policy_version),
     )
 
 
@@ -154,7 +177,7 @@ def _build_facility_row(
     run: _RunInput,
     config: SpatialConfig,
     boundary: Any,
-    grid_ids: set[str],
+    grids: dict[str, _GridIdentity],
     facility: tuple[object, ...],
 ) -> tuple[tuple[object, ...] | None, tuple[object, ...] | None]:
     (
@@ -190,7 +213,7 @@ def _build_facility_row(
         if isinstance(resolution, SpatialException):
             rejected_codes.add(resolution.code)
             continue
-        key = (round(resolution.projected_x, 9), round(resolution.projected_y, 9))
+        key = (resolution.projected_x, resolution.projected_y)
         prior = accepted.get(key)
         if prior is None or registration.source_identity < prior[1].source_identity:
             accepted[key] = (resolution, registration)
@@ -215,12 +238,20 @@ def _build_facility_row(
         )
 
     point, chosen = next(iter(accepted.values()))
-    if point.grid_id not in grid_ids:
+    grid = grids.get(point.grid_id)
+    if grid is None:
         return None, _exception_row(
             run,
             facility_id,
             "GRID_NOT_FOUND",
             {"grid_id": point.grid_id, "source_identities": source_identities},
+        )
+    if not isinstance(district, str) or district != grid.district_name:
+        return None, _exception_row(
+            run,
+            facility_id,
+            "DISTRICT_COORDINATE_MISMATCH",
+            {"reason": "pinned_grid_district_disagrees"},
         )
     building_link_count = int(
         db.scalar(
@@ -239,7 +270,7 @@ def _build_facility_row(
     )
     ambiguous_multi_building = building_link_count > 1
     demand_pressure, room_supply = _district_context(
-        db, run, str(district) if district is not None else None
+        db, run, grid.district_name
     )
     rating = rate_facility(
         FacilityRatingInput(
@@ -286,10 +317,7 @@ def _build_facility_row(
             "public_label": rating.public_interpretation,
         },
         "registration_aliases": aliases,
-        "review_flags": {
-            "ambiguous_multi_building": ambiguous_multi_building,
-            "pending_duplicate_review": pending_duplicate,
-        },
+        "policy": _public_policy_evidence(run.policy_version, config),
         "selected_revisions": [
             {
                 "observed_on": item.selected_observed_on.isoformat(),
@@ -314,8 +342,8 @@ def _build_facility_row(
             point.latitude,
             public_room_count,
             public_building_age,
-            None,
-            district,
+            grid.district_code,
+            grid.district_name,
             rating.small_scale,
             small_points,
             rating.aged_building,
@@ -397,6 +425,36 @@ def _district_context(
         str(rows[0][0]) if rows[0][0] is not None else None,
         str(rows[0][1]) if rows[0][1] is not None else None,
     )
+
+
+def _public_policy_evidence(
+    policy_version: str,
+    config: SpatialConfig,
+) -> dict[str, object]:
+    return {
+        "component_points": {
+            "high": 2,
+            "low": 0,
+            "medium": 1,
+            "unavailable": None,
+        },
+        "composite_score_bands": {
+            "general": [0, 0],
+            "monitor": [1, 2],
+            "priority_1": [5, 6],
+            "priority_2": [3, 4],
+        },
+        "labels": {
+            "district_context": "district_context",
+            "insufficient_evidence": "insufficient_evidence",
+            "public_interpretation": "policy-support priority",
+        },
+        "policy_version": policy_version,
+        "thresholds": {
+            "age_year_breaks": list(config.age_year_breaks),
+            "room_scale_breaks": list(config.room_scale_breaks),
+        },
+    }
 
 
 def _replace_target_rows(

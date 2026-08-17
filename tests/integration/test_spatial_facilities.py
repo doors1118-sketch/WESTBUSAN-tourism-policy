@@ -14,19 +14,27 @@ from shapely.geometry import box, mapping
 
 import westbusan.spatial.build as facility_build_module
 from westbusan.db import Database
-from westbusan.spatial.build import build_facility_priority
+from westbusan.spatial.build import FacilityBuildError, build_facility_priority
 from westbusan.spatial.fencing import SpatialFenceError
 
 BUSINESS_DATE = date(2026, 8, 17)
 PERIOD = "2026-08"
 DISTRICT = "부산진구"
+DISTRICT_CODE = "26230"
+CURRENT_POLICY_VERSION = (
+    "sha256:8a360857fac0190d0086ba55143637960c708143e4d833013b1bce7f455d08ff"
+)
 PROJECTED_X = 382_600.0
 PROJECTED_Y = 168_700.0
 TO_PUBLIC = Transformer.from_crs("EPSG:5174", "EPSG:4326", always_xy=True)
 LONGITUDE, LATITUDE = TO_PUBLIC.transform(PROJECTED_X, PROJECTED_Y)
 
 
-def _database(tmp_path: Path) -> tuple[Database, UUID, UUID, UUID, str]:
+def _database(
+    tmp_path: Path,
+    *,
+    policy_version: str = CURRENT_POLICY_VERSION,
+) -> tuple[Database, UUID, UUID, UUID, str]:
     db = Database(tmp_path / "spatial-facilities.duckdb", Path("sql"))
     db.migrate()
     base_run_id = uuid4()
@@ -55,11 +63,12 @@ def _database(tmp_path: Path) -> tuple[Database, UUID, UUID, UUID, str]:
                spatial_run_id, base_published_run_id, boundary_version_id,
                policy_version, business_date, status, started_at, owner,
                lease_expires_at, fence_epoch
-           ) values (?, ?, ?, 'fixture-policy', ?, 'RUNNING', ?, ?, ?, 1)""",
+           ) values (?, ?, ?, ?, ?, 'RUNNING', ?, ?, ?, 1)""",
         [
             spatial_run_id,
             base_run_id,
             boundary_version_id,
+            policy_version,
             BUSINESS_DATE,
             now,
             owner,
@@ -81,20 +90,24 @@ def _insert_grid(
     boundary_version_id: UUID,
     *,
     grid_id: str = "g5174_500_765_337",
+    district_code: str = DISTRICT_CODE,
+    district_name: str = DISTRICT,
 ) -> None:
     geometry = box(LONGITUDE - 0.02, LATITUDE - 0.02, LONGITUDE + 0.02, LATITUDE + 0.02)
     db.connection.execute(
         """insert into dim_spatial_grid_500m (
-               boundary_version_id, grid_id, x_index, y_index, district_name,
+               boundary_version_id, grid_id, x_index, y_index, district_code,
+               district_name,
                primary_dong_code, primary_dong_name, centroid_projected_x,
                centroid_projected_y, centroid_wgs84_longitude,
                centroid_wgs84_latitude, geometry_geojson,
                overlap_evidence_json, clipped_area_ratio
-           ) values (?, ?, 765, 337, ?, '26000101', '부전동', ?, ?, ?, ?, ?, '{}', 1)""",
+           ) values (?, ?, 765, 337, ?, ?, '26000101', '부전동', ?, ?, ?, ?, ?, '{}', 1)""",
         [
             boundary_version_id,
             grid_id,
-            DISTRICT,
+            district_code,
+            district_name,
             PROJECTED_X,
             PROJECTED_Y,
             LONGITUDE,
@@ -116,13 +129,14 @@ def _add_facility(
     building_quality: str = "reported",
     building_links: int = 1,
     district_context: bool = True,
+    facility_district: str | None = DISTRICT,
 ) -> UUID:
     facility_id = facility_id or uuid4()
     db.connection.execute(
         """insert into run_facility (
                run_id, facility_id, canonical_name, district, region_group
            ) values (?, ?, ?, ?, 'other')""",
-        [base_run_id, facility_id, canonical_name, DISTRICT],
+        [base_run_id, facility_id, canonical_name, facility_district],
     )
     db.connection.execute(
         """insert into mart_facility_current (
@@ -135,7 +149,7 @@ def _add_facility(
         [
             base_run_id,
             facility_id,
-            DISTRICT,
+            facility_district or DISTRICT,
             room_count,
             room_quality,
             building_age,
@@ -149,7 +163,7 @@ def _add_facility(
         )
     if district_context and not db.query(
         "select 1 from mart_region_month where run_id = ? and district = ? and period = ?",
-        [base_run_id, DISTRICT, PERIOD],
+        [base_run_id, facility_district or DISTRICT, PERIOD],
     ):
         db.connection.execute(
             """insert into mart_region_month (
@@ -158,7 +172,7 @@ def _add_facility(
                    active_net_change, demand_pressure_band, room_supply_band,
                    metric_evidence_json
                ) values (?, ?, 'other', ?, 1, 0, 0, 0, 'high', 'low', '{}')""",
-            [base_run_id, DISTRICT, PERIOD],
+            [base_run_id, facility_district or DISTRICT, PERIOD],
         )
     return facility_id
 
@@ -176,6 +190,7 @@ def _add_registration(
     projected_y: float = PROJECTED_Y,
     selected_version_run_id: UUID | None = None,
     address: str = "부산광역시 부산진구 정책로 1",
+    district: str = DISTRICT,
 ) -> UUID:
     version_run_id = selected_version_run_id or uuid4()
     observed_on = date(2026, 8, 1)
@@ -212,13 +227,227 @@ def _add_registration(
             source_name,
             normalized_name if normalized_name is not None else source_name,
             address,
-            DISTRICT,
+            district,
             projected_x,
             projected_y,
             f"hash-{source_id}-{source_record_id}-{version_run_id}",
         ],
     )
     return version_run_id
+
+
+@pytest.mark.parametrize("facility_district", [None, "해운대구"])
+def test_grid_district_mismatch_emits_one_redacted_exception(
+    tmp_path: Path,
+    facility_district: str | None,
+) -> None:
+    """Catches a Busanjin point published under a null or Haeundae snapshot."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    facility = _add_facility(
+        db,
+        base,
+        facility_district=facility_district,
+    )
+    _add_registration(
+        db,
+        base,
+        facility,
+        source_id="official-haeundae",
+        source_record_id="H-1",
+        source_name="해운대 등록 숙소",
+        district=facility_district or DISTRICT,
+    )
+
+    assert build_facility_priority(db, spatial, lambda: None) == 0
+    assert db.scalar(
+        "select count(*) from mart_facility_priority_current where spatial_run_id = ?",
+        [spatial],
+    ) == 0
+    assert db.query(
+        """select exception_code, redacted_evidence_json
+           from mart_spatial_exception
+           where spatial_run_id = ? and subject_id = ?""",
+        [spatial, str(facility)],
+    ) == [
+        (
+            "DISTRICT_COORDINATE_MISMATCH",
+            '{"reason":"pinned_grid_district_disagrees"}',
+        )
+    ]
+
+
+def test_distinct_subnanometre_coordinate_candidates_are_not_rounded_together(
+    tmp_path: Path,
+) -> None:
+    """Catches distinct accepted coordinates being merged through decimal rounding."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    facility = _add_facility(db, base)
+    _add_registration(
+        db,
+        base,
+        facility,
+        source_id="official-a",
+        source_record_id="A-1",
+        source_name="alias-a",
+    )
+    _add_registration(
+        db,
+        base,
+        facility,
+        source_id="official-b",
+        source_record_id="B-1",
+        source_name="alias-b",
+        projected_x=PROJECTED_X + 2e-10,
+    )
+
+    assert build_facility_priority(db, spatial, lambda: None) == 0
+    assert db.query(
+        """select exception_code from mart_spatial_exception
+           where spatial_run_id = ? and subject_id = ?""",
+        [spatial, str(facility)],
+    ) == [("AMBIGUOUS_COORDINATES",)]
+
+
+def test_changed_policy_version_fails_before_target_rows_are_purged(
+    tmp_path: Path,
+) -> None:
+    """Catches an old spatial run being rebuilt under changed current policy."""
+    db, base, _boundary, spatial, _owner = _database(
+        tmp_path,
+        policy_version="sha256:" + "0" * 64,
+    )
+    db.connection.execute(
+        """insert into mart_spatial_exception (
+               spatial_run_id, base_published_run_id, subject_type, subject_id,
+               exception_code, redacted_evidence_json, resolution_status
+           ) values (?, ?, 'facility', 'existing', 'EXISTING', '{}', 'open')""",
+        [spatial, base],
+    )
+    before = db.query(
+        """select * from mart_spatial_exception where spatial_run_id = ?
+           order by subject_id, exception_code""",
+        [spatial],
+    )
+    heartbeats: list[str] = []
+
+    with pytest.raises(FacilityBuildError, match="policy version"):
+        build_facility_priority(db, spatial, lambda: heartbeats.append("called"))
+
+    assert heartbeats == []
+    assert db.query(
+        """select * from mart_spatial_exception where spatial_run_id = ?
+           order by subject_id, exception_code""",
+        [spatial],
+    ) == before
+    assert db.scalar(
+        "select count(*) from mart_facility_priority_current where spatial_run_id = ?",
+        [spatial],
+    ) == 0
+
+
+def test_public_evidence_contains_pinned_grid_and_exact_policy_contract(
+    tmp_path: Path,
+) -> None:
+    """Catches public evidence omitting the exact policy used for its ratings."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    facility = _add_facility(db, base)
+    _add_registration(
+        db,
+        base,
+        facility,
+        source_id="official-a",
+        source_record_id="A-1",
+        source_name="alias-a",
+    )
+
+    assert build_facility_priority(db, spatial, lambda: None) == 1
+    district_code, district_name, evidence_json = db.query(
+        """select district_code, district_name, evidence_json
+           from mart_facility_priority_current where spatial_run_id = ?""",
+        [spatial],
+    )[0]
+
+    assert (district_code, district_name) == (DISTRICT_CODE, DISTRICT)
+    assert json.loads(evidence_json)["policy"] == {
+        "component_points": {
+            "high": 2,
+            "low": 0,
+            "medium": 1,
+            "unavailable": None,
+        },
+        "composite_score_bands": {
+            "general": [0, 0],
+            "monitor": [1, 2],
+            "priority_1": [5, 6],
+            "priority_2": [3, 4],
+        },
+        "labels": {
+            "district_context": "district_context",
+            "insufficient_evidence": "insufficient_evidence",
+            "public_interpretation": "policy-support priority",
+        },
+        "policy_version": CURRENT_POLICY_VERSION,
+        "thresholds": {
+            "age_year_breaks": [20, 30],
+            "room_scale_breaks": [10, 20],
+        },
+    }
+
+
+def test_public_evidence_recursively_excludes_internal_review_causes(
+    tmp_path: Path,
+) -> None:
+    """Catches private duplicate/building-link causes leaking into public JSON."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    facility = _add_facility(db, base, building_links=2)
+    _add_registration(
+        db,
+        base,
+        facility,
+        source_id="official-a",
+        source_record_id="A-1",
+        source_name="alias-a",
+    )
+    db.connection.execute(
+        """insert into run_duplicate_review (
+               run_id, review_id, left_facility_id, review_status, evidence_json
+           ) values (?, ?, ?, 'pending', '{"note":"private duplicate cause"}')""",
+        [base, uuid4(), facility],
+    )
+
+    assert build_facility_priority(db, spatial, lambda: None) == 1
+    display_status, evidence_json = db.query(
+        """select display_status, evidence_json
+           from mart_facility_priority_current where spatial_run_id = ?""",
+        [spatial],
+    )[0]
+    assert display_status == "review_required"
+    _assert_public_evidence_has_no_internal_details(json.loads(evidence_json))
+
+
+def _assert_public_evidence_has_no_internal_details(value: object) -> None:
+    forbidden = (
+        ".worktrees",
+        "/users/",
+        "ambiguous_multi_building",
+        "building_link",
+        "c:\\",
+        "config/spatial",
+        "duplicate_review",
+        "pending_duplicate",
+        "private duplicate cause",
+        "review_flags",
+        "src/westbusan",
+    )
+    if isinstance(value, dict):
+        for key, item in value.items():
+            assert not any(token in str(key).lower() for token in forbidden)
+            _assert_public_evidence_has_no_internal_details(item)
+    elif isinstance(value, list):
+        for item in value:
+            _assert_public_evidence_has_no_internal_details(item)
+    elif isinstance(value, str):
+        assert not any(token in value.lower() for token in forbidden)
 
 
 def test_public_name_address_and_normalized_alias_keep_exact_selected_values(
@@ -474,10 +703,15 @@ def test_pending_duplicate_or_ambiguous_building_requires_review_without_notes(
         "review_required",
     )
     assert "secret reviewer note" not in row[6]
-    assert json.loads(row[6])["review_flags"] == {
-        "ambiguous_multi_building": True,
-        "pending_duplicate_review": True,
-    }
+    _assert_public_evidence_has_no_internal_details(json.loads(row[6]))
+    assert db.scalar(
+        "select count(*) from run_duplicate_review where run_id = ?",
+        [base],
+    ) == 1
+    assert db.scalar(
+        "select count(*) from run_facility_building where run_id = ? and facility_id = ?",
+        [base, facility],
+    ) == 2
 
 
 @pytest.mark.parametrize(
@@ -515,11 +749,16 @@ def test_each_review_condition_independently_requires_review(
     )[0]
 
     assert display_status == "review_required"
-    assert json.loads(evidence_json)["review_flags"] == {
-        "ambiguous_multi_building": building_links > 1,
-        "pending_duplicate_review": pending_duplicate,
-    }
+    _assert_public_evidence_has_no_internal_details(json.loads(evidence_json))
     assert "private" not in evidence_json
+    assert db.scalar(
+        "select count(*) from run_duplicate_review where run_id = ?",
+        [base],
+    ) == int(pending_duplicate)
+    assert db.scalar(
+        "select count(*) from run_facility_building where run_id = ? and facility_id = ?",
+        [base, facility],
+    ) == building_links
 
 
 def test_candidate_grid_must_exist_for_pinned_boundary(tmp_path: Path) -> None:
@@ -578,13 +817,13 @@ def test_stale_facility_writer_commits_zero_rows_after_takeover(
     )
     first.connection.execute(
         """update spatial_run
-           set lease_expires_at = now() + interval '250 milliseconds'
+           set lease_expires_at = now() + interval '2 seconds'
            where spatial_run_id = ?""",
         [spatial],
     )
     first.connection.execute(
         """update spatial_writer_lease
-           set lease_expires_at = now() + interval '250 milliseconds'
+           set lease_expires_at = now() + interval '2 seconds'
            where lease_key = 'writer'"""
     )
     paused = Event()
@@ -602,7 +841,7 @@ def test_stale_facility_writer_commits_zero_rows_after_takeover(
     with ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(build_facility_priority, first, spatial, lambda: None)
         assert paused.wait(10)
-        Event().wait(0.4)
+        Event().wait(2.1)
         try:
             second.connection.execute("begin transaction")
             second.connection.execute(
