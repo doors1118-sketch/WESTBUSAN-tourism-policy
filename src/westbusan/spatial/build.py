@@ -7,7 +7,9 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
+from hashlib import sha256
 from pathlib import Path
+from statistics import median
 from typing import Any
 from uuid import UUID
 
@@ -23,11 +25,31 @@ from westbusan.spatial.coordinates import (
 )
 from westbusan.spatial.fencing import SpatialFenceError, rollback, touch_writer
 from westbusan.spatial.policy import spatial_policy_version
-from westbusan.spatial.ratings import FacilityRatingInput, rate_facility
+from westbusan.spatial.ratings import (
+    FacilityRatingInput,
+    composite,
+    rate_age,
+    rate_district_context,
+    rate_facility,
+    rate_room_scale,
+)
+
+_STOCK_SOURCE_IDENTITY = "inventory.full_snapshot_membership"
 
 
 class FacilityBuildError(RuntimeError):
     """The pinned run-scoped facility build contract is incomplete or invalid."""
+
+
+class GridMartBuildError(RuntimeError):
+    """The pinned grid aggregation inputs are incomplete or inconsistent."""
+
+
+@dataclass(frozen=True, slots=True)
+class GridMartResult:
+    row_count: int
+    evidence_row_count: int
+    row_digest: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,6 +87,308 @@ class _Registration:
     @property
     def source_identity(self) -> str:
         return f"{self.source_id}:{self.source_record_id}"
+
+
+@dataclass(frozen=True, slots=True)
+class _GridMartDimension:
+    grid_id: str
+    district_code: str | None
+    district_name: str
+    primary_dong_code: str | None
+    primary_dong_name: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _StockSnapshot:
+    observed: bool
+    total_facilities: int | None
+    demand_pressure_band: str | None
+    room_supply_band: str | None
+    source_identity: str
+    source_period: str
+    missing_reason: str | None
+
+
+def build_grid_marts(
+    db: Database,
+    spatial_run_id: UUID,
+    progress: Callable[[], None],
+) -> GridMartResult:
+    """Aggregate one exact-period row for every grid in the pinned boundary."""
+    run = _load_owned_run(db, spatial_run_id)
+    settings = Settings.load(Path(__file__).resolve().parents[3])
+    if run.policy_version != spatial_policy_version(settings):
+        raise GridMartBuildError(
+            "spatial run policy version differs from current canonical policy version; "
+            "prepare a new spatial run"
+        )
+    progress()
+    period = run.business_date.strftime("%Y-%m")
+    grids = [
+        _GridMartDimension(
+            grid_id=str(row[0]),
+            district_code=str(row[1]) if row[1] is not None else None,
+            district_name=str(row[2]) if row[2] is not None else "",
+            primary_dong_code=str(row[3]) if row[3] is not None else None,
+            primary_dong_name=str(row[4]) if row[4] is not None else None,
+        )
+        for row in db.query(
+            """select grid_id, district_code, district_name,
+                      primary_dong_code, primary_dong_name
+               from dim_spatial_grid_500m where boundary_version_id = ?
+               order by grid_id""",
+            [run.boundary_version_id],
+        )
+    ]
+    if not grids:
+        raise GridMartBuildError("pinned boundary has no reviewed grid rows")
+    if any(not grid.district_name for grid in grids):
+        raise GridMartBuildError("pinned grid is missing a district identity")
+
+    facility_rows = db.query(
+        """select facility_id, grid_id, district_name, room_count,
+                  use_approval_age_years, small_scale_rating,
+                  aged_building_rating
+           from mart_facility_priority_current
+           where spatial_run_id = ? and base_published_run_id = ?
+           order by grid_id, facility_id""",
+        [run.spatial_run_id, run.base_run_id],
+    )
+    by_grid: dict[str, list[tuple[object, ...]]] = {}
+    mapped_by_district: dict[str, set[object]] = {}
+    for facility in facility_rows:
+        by_grid.setdefault(str(facility[1]), []).append(facility)
+        mapped_by_district.setdefault(str(facility[2]), set()).add(facility[0])
+    registration_counts = {
+        row[0]: int(row[1])
+        for row in db.query(
+            """select facility_id, count(*)
+               from run_facility_license where run_id = ?
+               group by facility_id order by facility_id""",
+            [run.base_run_id],
+        )
+    }
+    snapshots = {
+        district: _load_stock_snapshot(db, run, district, period)
+        for district in sorted({grid.district_name for grid in grids})
+    }
+    grid_rows: list[tuple[object, ...]] = []
+    evidence_rows: list[tuple[object, ...]] = []
+    for grid in grids:
+        progress()
+        facilities = by_grid.get(grid.grid_id, [])
+        snapshot = snapshots[grid.district_name]
+        district_mapped = len(mapped_by_district.get(grid.district_name, set()))
+        if (
+            snapshot.observed
+            and snapshot.total_facilities is not None
+            and district_mapped > snapshot.total_facilities
+        ):
+            snapshot = _StockSnapshot(
+                observed=False,
+                total_facilities=None,
+                demand_pressure_band=None,
+                room_supply_band=None,
+                source_identity=snapshot.source_identity,
+                source_period=snapshot.source_period,
+                missing_reason="mapped_facilities_exceed_observed_stock",
+            )
+        observed = (
+            snapshot.observed
+            and snapshot.total_facilities is not None
+            and district_mapped <= snapshot.total_facilities
+        )
+        mapped_count = len(facilities) if observed else None
+        legal_count = (
+            sum(registration_counts.get(row[0], 0) for row in facilities)
+            if observed
+            else None
+        )
+        coordinate_sample = district_mapped if observed else None
+        coordinate_coverage = (
+            1.0
+            if observed and snapshot.total_facilities == 0
+            else district_mapped / snapshot.total_facilities
+            if observed and snapshot.total_facilities
+            else None
+        )
+        room_values = [float(row[3]) for row in facilities if row[3] is not None]
+        age_values = [float(row[4]) for row in facilities if row[4] is not None]
+        room_known = len(room_values) if observed else None
+        age_known = len(age_values) if observed else None
+        room_coverage = (
+            room_known / mapped_count
+            if mapped_count is not None and mapped_count > 0 and room_known is not None
+            else 1.0
+            if mapped_count == 0
+            else None
+        )
+        age_coverage = (
+            age_known / mapped_count
+            if mapped_count is not None and mapped_count > 0 and age_known is not None
+            else 1.0
+            if mapped_count == 0
+            else None
+        )
+        room_sum = (
+            sum(room_values)
+            if room_values
+            else 0.0
+            if mapped_count == 0
+            else None
+        )
+        small_count = (
+            sum(value <= settings.spatial.room_scale_breaks[1] for value in room_values)
+            if observed
+            else None
+        )
+        age_20_count = (
+            sum(value >= settings.spatial.age_year_breaks[0] for value in age_values)
+            if observed
+            else None
+        )
+        age_30_count = (
+            sum(value >= settings.spatial.age_year_breaks[1] for value in age_values)
+            if observed
+            else None
+        )
+        small_share = small_count / room_known if room_known else None
+        age_20_share = age_20_count / age_known if age_known else None
+        age_30_share = age_30_count / age_known if age_known else None
+        complete_rooms = bool(mapped_count) and room_known == mapped_count
+        complete_ages = bool(mapped_count) and age_known == mapped_count
+        small_band = (
+            rate_room_scale(median(room_values), settings.spatial)
+            if complete_rooms
+            else "unavailable"
+        )
+        age_band = (
+            rate_age(median(age_values), settings.spatial)
+            if complete_ages
+            else "unavailable"
+        )
+        context_band = (
+            rate_district_context(
+                snapshot.demand_pressure_band,
+                snapshot.room_supply_band,
+            )
+            if observed and mapped_count is not None and mapped_count > 0
+            else "unavailable"
+        )
+        aggregate_rating = composite(small_band, age_band, context_band)
+        below_coordinate_guard = (
+            coordinate_coverage is None
+            or coordinate_coverage < settings.spatial.coordinate_coverage_min
+        )
+        if below_coordinate_guard:
+            small_points = age_points = context_points = score = None
+            grade = "insufficient_evidence"
+        else:
+            small_points, age_points, context_points = (
+                aggregate_rating.component_points
+            )
+            score = aggregate_rating.score
+            grade = aggregate_rating.grade
+            if score is not None and mapped_count is not None and (
+                mapped_count < settings.spatial.grid_min_facilities
+            ):
+                grade = "small_sample"
+        common_evidence = _grid_public_evidence(
+            run,
+            settings.spatial,
+            grid,
+            period,
+            snapshot,
+        )
+        grid_evidence = {
+            **common_evidence,
+            "coordinate": {
+                "coverage": coordinate_coverage,
+                "denominator": snapshot.total_facilities if observed else None,
+                "sample_size": coordinate_sample,
+                "scope": "district",
+            },
+            "missing_reason": None if observed else snapshot.missing_reason,
+        }
+        grid_rows.append(
+            (
+                run.spatial_run_id,
+                run.base_run_id,
+                grid.grid_id,
+                grid.district_code,
+                grid.district_name,
+                grid.primary_dong_code,
+                grid.primary_dong_name,
+                period,
+                mapped_count,
+                legal_count,
+                room_sum,
+                room_coverage,
+                small_count,
+                small_share,
+                age_known,
+                age_coverage,
+                age_20_count,
+                age_20_share,
+                age_30_count,
+                age_30_share,
+                coordinate_sample,
+                coordinate_coverage,
+                context_band,
+                context_points,
+                small_band,
+                small_points,
+                age_band,
+                age_points,
+                score,
+                grade,
+                _canonical_json(grid_evidence),
+            )
+        )
+        evidence_rows.extend(
+            _grid_metric_evidence_rows(
+                run=run,
+                grid=grid,
+                period=period,
+                snapshot=snapshot,
+                common=common_evidence,
+                observed=observed,
+                mapped_count=mapped_count,
+                legal_count=legal_count,
+                room_values=room_values,
+                room_known=room_known,
+                room_sum=room_sum,
+                room_coverage=room_coverage,
+                small_count=small_count,
+                small_share=small_share,
+                age_values=age_values,
+                age_known=age_known,
+                age_coverage=age_coverage,
+                age_20_count=age_20_count,
+                age_20_share=age_20_share,
+                age_30_count=age_30_count,
+                age_30_share=age_30_share,
+                coordinate_sample=coordinate_sample,
+                coordinate_coverage=coordinate_coverage,
+                small_band=small_band,
+                small_points=small_points,
+                age_band=age_band,
+                age_points=age_points,
+                context_band=context_band,
+                context_points=context_points,
+                score=score,
+                grade=grade,
+                below_coordinate_guard=below_coordinate_guard,
+                config=settings.spatial,
+            )
+        )
+    _replace_grid_target_rows(db, run, grid_rows, evidence_rows)
+    progress()
+    return GridMartResult(
+        row_count=len(grid_rows),
+        evidence_row_count=len(evidence_rows),
+        row_digest=_prepared_rows_digest(grid_rows, evidence_rows),
+    )
 
 
 def build_facility_priority(
@@ -504,6 +828,599 @@ def _replace_target_rows(
     except Exception:
         rollback(db, began)
         raise
+
+
+def _load_stock_snapshot(
+    db: Database,
+    run: _RunInput,
+    district: str,
+    period: str,
+) -> _StockSnapshot:
+    rows = db.query(
+        """select physical_facility_count, demand_pressure_band,
+                  room_supply_band, metric_evidence_json
+           from mart_region_month
+           where run_id = ? and district = ? and period = ?""",
+        [run.base_run_id, district, period],
+    )
+    if len(rows) != 1:
+        return _StockSnapshot(
+            False,
+            None,
+            None,
+            None,
+            _STOCK_SOURCE_IDENTITY,
+            period,
+            "missing_exact_period_stock_snapshot",
+        )
+    total, demand_band, supply_band, raw_evidence = rows[0]
+    try:
+        evidence = json.loads(str(raw_evidence))
+        stock = evidence["physical_facility_count"]
+        if not isinstance(stock, dict):
+            raise TypeError("physical facility stock evidence must be an object")
+        observed = stock.get("stock_observed") is True
+        source_identity = stock["metric_source_identity"]
+        source_period = str(stock["source_period"])
+        if source_identity != _STOCK_SOURCE_IDENTITY:
+            raise ValueError("unexpected physical facility stock source")
+    except (AttributeError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return _StockSnapshot(
+            False,
+            None,
+            None,
+            None,
+            _STOCK_SOURCE_IDENTITY,
+            period,
+            "invalid_stock_evidence",
+        )
+    valid_total = isinstance(total, int) and not isinstance(total, bool) and total >= 0
+    if not observed:
+        return _StockSnapshot(
+            False,
+            None,
+            None,
+            None,
+            _STOCK_SOURCE_IDENTITY,
+            period,
+            "stock_not_observed",
+        )
+    numerator = stock.get("numerator")
+    denominator = stock.get("denominator")
+    coverage = stock.get("coverage")
+    quality_band = stock.get("quality_band")
+    consistent_evidence = (
+        valid_total
+        and source_period == period
+        and isinstance(numerator, (int, float))
+        and not isinstance(numerator, bool)
+        and float(numerator) == float(total)
+        and denominator == 1.0
+        and coverage == 1.0
+        and quality_band == "good"
+    )
+    if not consistent_evidence:
+        return _StockSnapshot(
+            False,
+            None,
+            None,
+            None,
+            _STOCK_SOURCE_IDENTITY,
+            period,
+            "invalid_stock_evidence",
+        )
+    return _StockSnapshot(
+        True,
+        int(total),
+        str(demand_band) if demand_band is not None else None,
+        str(supply_band) if supply_band is not None else None,
+        _STOCK_SOURCE_IDENTITY,
+        source_period,
+        None,
+    )
+
+
+def _grid_public_evidence(
+    run: _RunInput,
+    config: SpatialConfig,
+    grid: _GridMartDimension,
+    period: str,
+    snapshot: _StockSnapshot,
+) -> dict[str, object]:
+    return {
+        "boundary_version": str(run.boundary_version_id),
+        "context_label": "district_context",
+        "district": grid.district_name,
+        "grid_id": grid.grid_id,
+        "interpretation_limits": [
+            "district demand and supply bands are context only",
+            "coordinate coverage is district scoped",
+            "policy-support priority is not a safety or condition assessment",
+        ],
+        "period": period,
+        "policy_version": run.policy_version,
+        "source_identity": snapshot.source_identity,
+        "source_period": snapshot.source_period,
+        "thresholds": {
+            "age_year_breaks": list(config.age_year_breaks),
+            "coordinate_coverage_min": config.coordinate_coverage_min,
+            "grid_min_facilities": config.grid_min_facilities,
+            "room_scale_breaks": list(config.room_scale_breaks),
+        },
+    }
+
+
+def _grid_metric_evidence_rows(
+    *,
+    run: _RunInput,
+    grid: _GridMartDimension,
+    period: str,
+    snapshot: _StockSnapshot,
+    common: dict[str, object],
+    observed: bool,
+    mapped_count: int | None,
+    legal_count: int | None,
+    room_values: list[float],
+    room_known: int | None,
+    room_sum: float | None,
+    room_coverage: float | None,
+    small_count: int | None,
+    small_share: float | None,
+    age_values: list[float],
+    age_known: int | None,
+    age_coverage: float | None,
+    age_20_count: int | None,
+    age_20_share: float | None,
+    age_30_count: int | None,
+    age_30_share: float | None,
+    coordinate_sample: int | None,
+    coordinate_coverage: float | None,
+    small_band: str,
+    small_points: int | None,
+    age_band: str,
+    age_points: int | None,
+    context_band: str,
+    context_points: int | None,
+    score: int | None,
+    grade: str,
+    below_coordinate_guard: bool,
+    config: SpatialConfig,
+) -> list[tuple[object, ...]]:
+    district_total = snapshot.total_facilities if observed else None
+    stock_status = (
+        "complete_empty"
+        if observed and snapshot.total_facilities == 0
+        else "observed"
+        if observed
+        else "unobserved"
+    )
+    missing_reason = None if observed else snapshot.missing_reason
+    no_mapped_facilities = mapped_count == 0
+
+    def quality(coverage: float | None, available: bool) -> str:
+        if stock_status == "complete_empty":
+            return "complete_empty"
+        if not available:
+            return "insufficient_evidence"
+        return "good" if coverage == 1.0 else "warning"
+
+    room_quality = quality(room_coverage, room_known is not None and room_known > 0)
+    age_quality = quality(age_coverage, age_known is not None and age_known > 0)
+    coordinate_quality = quality(
+        coordinate_coverage,
+        coordinate_coverage is not None and not below_coordinate_guard,
+    )
+    component_quality = (
+        "good" if not below_coordinate_guard else "insufficient_evidence"
+    )
+    if stock_status == "complete_empty":
+        component_quality = "complete_empty"
+    room_median = median(room_values) if room_values else None
+    age_median = median(age_values) if age_values else None
+    small_10_count = (
+        sum(value <= config.room_scale_breaks[0] for value in room_values)
+        if observed
+        else None
+    )
+    room_details = {
+        "known_sample_size": room_known,
+        "median": room_median,
+        "ordered_sample_size": len(room_values) if observed else None,
+        "summary": "median mapped facility",
+    }
+    age_details = {
+        "median": age_median,
+        "ordered_ages": sorted(age_values),
+        "ordered_sample_size": len(age_values) if observed else None,
+        "summary": "median mapped facility",
+    }
+    specs: dict[
+        str,
+        tuple[
+            str,
+            float | int | None,
+            float | int | None,
+            float | None,
+            object,
+            str,
+            dict[str, object],
+        ],
+    ] = {
+        "physical_facility_count": (
+            snapshot.source_identity,
+            mapped_count,
+            district_total,
+            coordinate_coverage,
+            mapped_count,
+            quality(coordinate_coverage, mapped_count is not None),
+            {"scope": "grid count with district coordinate context"},
+        ),
+        "legal_registration_count": (
+            "core.run_facility_license.selected_snapshot",
+            legal_count,
+            mapped_count,
+            coordinate_coverage,
+            legal_count,
+            quality(coordinate_coverage, legal_count is not None),
+            {"count_basis": "legal registrations for mapped physical facilities"},
+        ),
+        "room_sum": (
+            "core.mart_facility_current.room_count",
+            room_sum,
+            mapped_count,
+            room_coverage,
+            room_sum,
+            room_quality,
+            room_details,
+        ),
+        "room_coverage": (
+            "core.mart_facility_current.room_count",
+            room_known,
+            mapped_count,
+            room_coverage,
+            room_coverage,
+            room_quality,
+            room_details,
+        ),
+        "small_facility_count": (
+            "core.mart_facility_current.room_count",
+            small_count,
+            room_known,
+            room_coverage,
+            small_count,
+            room_quality,
+            {**room_details, "at_or_below_10_count": small_10_count},
+        ),
+        "small_facility_share": (
+            "core.mart_facility_current.room_count",
+            small_count,
+            room_known,
+            room_coverage,
+            small_share,
+            room_quality,
+            {**room_details, "at_or_below_10_count": small_10_count},
+        ),
+        "age_sample_size": (
+            "building_register.use_approval_date",
+            age_known,
+            mapped_count,
+            age_coverage,
+            age_known,
+            age_quality,
+            age_details,
+        ),
+        "age_coverage": (
+            "building_register.use_approval_date",
+            age_known,
+            mapped_count,
+            age_coverage,
+            age_coverage,
+            age_quality,
+            age_details,
+        ),
+        "age_20y_facility_count": (
+            "building_register.use_approval_date",
+            age_20_count,
+            age_known,
+            age_coverage,
+            age_20_count,
+            age_quality,
+            age_details,
+        ),
+        "age_20y_share": (
+            "building_register.use_approval_date",
+            age_20_count,
+            age_known,
+            age_coverage,
+            age_20_share,
+            age_quality,
+            age_details,
+        ),
+        "age_30y_facility_count": (
+            "building_register.use_approval_date",
+            age_30_count,
+            age_known,
+            age_coverage,
+            age_30_count,
+            age_quality,
+            age_details,
+        ),
+        "age_30y_share": (
+            "building_register.use_approval_date",
+            age_30_count,
+            age_known,
+            age_coverage,
+            age_30_share,
+            age_quality,
+            age_details,
+        ),
+        "coordinate_sample_size": (
+            snapshot.source_identity,
+            coordinate_sample,
+            district_total,
+            coordinate_coverage,
+            coordinate_sample,
+            coordinate_quality,
+            {"context_label": "district_coordinate_coverage", "scope": "district"},
+        ),
+        "coordinate_coverage": (
+            snapshot.source_identity,
+            coordinate_sample,
+            district_total,
+            coordinate_coverage,
+            coordinate_coverage,
+            coordinate_quality,
+            {"context_label": "district_coordinate_coverage", "scope": "district"},
+        ),
+        "small_scale_rating": (
+            "spatial.policy.median_room_count",
+            room_median,
+            room_known,
+            room_coverage,
+            small_band,
+            component_quality if small_points is not None else "insufficient_evidence",
+            {
+                **room_details,
+                "missing_reason": "incomplete_mapped_room_sample"
+                if small_band == "unavailable" and observed
+                else missing_reason,
+            },
+        ),
+        "small_scale_points": (
+            "spatial.policy.median_room_count",
+            small_points,
+            2,
+            room_coverage,
+            small_points,
+            component_quality if small_points is not None else "insufficient_evidence",
+            {
+                **room_details,
+                "missing_reason": "no_mapped_facilities"
+                if no_mapped_facilities
+                else "coordinate_coverage_below_threshold"
+                if below_coordinate_guard
+                else "incomplete_mapped_room_sample"
+                if small_points is None and observed
+                else missing_reason,
+            },
+        ),
+        "aged_building_rating": (
+            "spatial.policy.median_trusted_use_approval_age",
+            age_median,
+            age_known,
+            age_coverage,
+            age_band,
+            component_quality if age_points is not None else "insufficient_evidence",
+            {
+                **age_details,
+                "missing_reason": "incomplete_mapped_age_sample"
+                if age_band == "unavailable" and observed
+                else missing_reason,
+            },
+        ),
+        "aged_building_points": (
+            "spatial.policy.median_trusted_use_approval_age",
+            age_points,
+            2,
+            age_coverage,
+            age_points,
+            component_quality if age_points is not None else "insufficient_evidence",
+            {
+                **age_details,
+                "missing_reason": "no_mapped_facilities"
+                if no_mapped_facilities
+                else "coordinate_coverage_below_threshold"
+                if below_coordinate_guard
+                else "incomplete_mapped_age_sample"
+                if age_points is None and observed
+                else missing_reason,
+            },
+        ),
+        "district_context_rating": (
+            "core.mart_region_month.district_bands",
+            None,
+            None,
+            1.0 if context_band != "unavailable" else None,
+            context_band,
+            component_quality
+            if context_points is not None
+            else "insufficient_evidence",
+            {
+                "context_label": "district_context",
+                "demand_pressure_band": snapshot.demand_pressure_band,
+                "missing_reason": "unavailable_district_context"
+                if context_band == "unavailable" and observed
+                else missing_reason,
+                "room_supply_band": snapshot.room_supply_band,
+            },
+        ),
+        "district_context_points": (
+            "core.mart_region_month.district_bands",
+            context_points,
+            2,
+            1.0 if context_band != "unavailable" else None,
+            context_points,
+            component_quality
+            if context_points is not None
+            else "insufficient_evidence",
+            {
+                "context_label": "district_context",
+                "missing_reason": "no_mapped_facilities"
+                if no_mapped_facilities
+                else "coordinate_coverage_below_threshold"
+                if below_coordinate_guard
+                else "unavailable_district_context"
+                if context_points is None and observed
+                else missing_reason,
+            },
+        ),
+        "composite_score": (
+            "spatial.policy.component_points",
+            score,
+            6,
+            coordinate_coverage,
+            score,
+            component_quality if score is not None else "insufficient_evidence",
+            {
+                "component_bands": [small_band, age_band, context_band],
+                "missing_reason": "no_mapped_facilities"
+                if no_mapped_facilities
+                else "coordinate_coverage_below_threshold"
+                if below_coordinate_guard
+                else "unavailable_component"
+                if score is None
+                else None,
+            },
+        ),
+        "composite_grade": (
+            "spatial.policy.component_points",
+            score,
+            6,
+            coordinate_coverage,
+            grade,
+            "warning" if grade == "small_sample" else component_quality,
+            {
+                "component_bands": [small_band, age_band, context_band],
+                "missing_reason": "coordinate_coverage_below_threshold"
+                if below_coordinate_guard
+                else "unavailable_component"
+                if grade == "insufficient_evidence"
+                else None,
+            },
+        ),
+    }
+    rows: list[tuple[object, ...]] = []
+    for metric_name in sorted(specs):
+        source, numerator, denominator, coverage, value, metric_quality, details = (
+            specs[metric_name]
+        )
+        metric_missing_reason = details.get("missing_reason", missing_reason)
+        safe_details = {
+            key: value for key, value in details.items() if key != "missing_reason"
+        }
+        evidence = {
+            **common,
+            **safe_details,
+            "missing_reason": metric_missing_reason,
+            "metric_name": metric_name,
+            "stock_status": stock_status,
+            "value": value,
+        }
+        rows.append(
+            (
+                run.spatial_run_id,
+                run.base_run_id,
+                "grid",
+                grid.grid_id,
+                period,
+                metric_name,
+                source,
+                snapshot.source_period,
+                float(numerator) if numerator is not None else None,
+                float(denominator) if denominator is not None else None,
+                coverage,
+                metric_quality,
+                _canonical_json(evidence),
+            )
+        )
+    return rows
+
+
+def _replace_grid_target_rows(
+    db: Database,
+    run: _RunInput,
+    grid_rows: list[tuple[object, ...]],
+    evidence_rows: list[tuple[object, ...]],
+) -> None:
+    began = False
+    try:
+        db.connection.execute("begin transaction")
+        began = True
+        touch_writer(db, run.spatial_run_id, run.owner, require_spatial_run=True)
+        db.connection.execute(
+            "delete from mart_grid_month where spatial_run_id = ?",
+            [run.spatial_run_id],
+        )
+        db.connection.execute(
+            """delete from mart_spatial_evidence
+               where spatial_run_id = ? and subject_type = 'grid'""",
+            [run.spatial_run_id],
+        )
+        for row in grid_rows:
+            _insert_grid_mart_row(db, row)
+        for row in evidence_rows:
+            _insert_grid_evidence_row(db, row)
+        touch_writer(db, run.spatial_run_id, run.owner, require_spatial_run=True)
+        db.connection.execute("commit")
+        began = False
+    except Exception:
+        rollback(db, began)
+        raise
+
+
+def _insert_grid_mart_row(db: Database, row: tuple[object, ...]) -> None:
+    db.connection.execute(
+        """insert into mart_grid_month (
+               spatial_run_id, base_published_run_id, grid_id, district_code,
+               district_name, primary_dong_code, primary_dong_name, period,
+               physical_facility_count, legal_registration_count, room_sum,
+               room_coverage, small_facility_count, small_facility_share,
+               age_sample_size, age_coverage, age_20y_facility_count,
+               age_20y_share, age_30y_facility_count, age_30y_share,
+               coordinate_sample_size, coordinate_coverage,
+               district_context_rating, district_context_points,
+               small_scale_rating, small_scale_points, aged_building_rating,
+               aged_building_points, composite_score, composite_grade,
+               evidence_json
+           ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        row,
+    )
+
+
+def _insert_grid_evidence_row(db: Database, row: tuple[object, ...]) -> None:
+    db.connection.execute(
+        """insert into mart_spatial_evidence (
+               spatial_run_id, base_published_run_id, subject_type, subject_id,
+               period, metric_name, source_identity, source_period, numerator,
+               denominator, coverage, quality_band, evidence_json
+           ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        row,
+    )
+
+
+def _prepared_rows_digest(
+    grid_rows: list[tuple[object, ...]],
+    evidence_rows: list[tuple[object, ...]],
+) -> str:
+    canonical = json.dumps(
+        {"evidence": evidence_rows, "grids": grid_rows},
+        default=str,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _insert_priority_row(db: Database, row: tuple[object, ...]) -> None:

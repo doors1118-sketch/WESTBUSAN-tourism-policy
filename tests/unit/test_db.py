@@ -243,6 +243,68 @@ def test_nullable_spatial_ratings_upgrade_applied_032_database(tmp_path: Path) -
     ]
 
 
+def test_unknown_spatial_grid_counts_and_samples_are_nullable(tmp_path: Path) -> None:
+    """Catches unknown stock being forced into factual zero grid counts."""
+    db = Database(tmp_path / "nullable-spatial-grid-counts.duckdb", Path("sql"))
+    db.migrate()
+
+    assert db.query(
+        """select column_name, is_nullable
+           from information_schema.columns
+           where table_schema = 'main' and table_name = 'mart_grid_month'
+             and column_name in (
+                 'physical_facility_count', 'legal_registration_count',
+                 'age_sample_size', 'coordinate_sample_size'
+             )
+           order by column_name"""
+    ) == [
+        ("age_sample_size", "YES"),
+        ("coordinate_sample_size", "YES"),
+        ("legal_registration_count", "YES"),
+        ("physical_facility_count", "YES"),
+    ]
+
+
+def test_nullable_spatial_grid_counts_upgrade_applied_033_database(
+    tmp_path: Path,
+) -> None:
+    """Catches migration 034 rewriting checksums or requiring an empty database."""
+    migrations_033 = tmp_path / "migrations-033"
+    migrations_033.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name <= "033_spatial_nullable_ratings.sql":
+            copy2(migration, migrations_033 / migration.name)
+    path = tmp_path / "applied-033.duckdb"
+    original = Database(path, migrations_033)
+    original.migrate()
+    original_checksums = dict(
+        original.query("select version, checksum from schema_migrations")
+    )
+    original.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+
+    assert dict(upgraded.query("select version, checksum from schema_migrations")).items() >= (
+        original_checksums.items()
+    )
+    assert upgraded.query(
+        """select column_name, is_nullable
+           from information_schema.columns
+           where table_schema = 'main' and table_name = 'mart_grid_month'
+             and column_name in (
+                 'physical_facility_count', 'legal_registration_count',
+                 'age_sample_size', 'coordinate_sample_size'
+             )
+           order by column_name"""
+    ) == [
+        ("age_sample_size", "YES"),
+        ("coordinate_sample_size", "YES"),
+        ("legal_registration_count", "YES"),
+        ("physical_facility_count", "YES"),
+    ]
+
+
 def test_migrations_are_idempotent(tmp_path: Path) -> None:
     db = Database(tmp_path / "test.duckdb", Path("sql"))
     db.migrate()
