@@ -12,6 +12,8 @@ import pytest
 
 from westbusan.config import RegionConfig
 from westbusan.db import Database
+from westbusan.models import RawArtifact
+from westbusan.spatial import boundary as boundary_module
 from westbusan.spatial.boundary import approve_boundary, inspect_boundary
 from westbusan.spatial.models import (
     BoundaryApprovalError,
@@ -121,6 +123,22 @@ def test_inspection_rejects_invalid_official_boundary_contract(
         inspect_boundary(path, RegionConfig.default())
 
 
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_inspection_rejects_nonstandard_nonfinite_json_constants(
+    tmp_path: Path, constant: str
+) -> None:
+    """Catches Python's permissive JSON parser accepting NaN or Infinity tokens."""
+    body = FIXTURE.read_text(encoding="utf-8")
+    path = tmp_path / "nonfinite.geojson"
+    path.write_text(
+        body.replace('"features": [', f'"non_standard": {constant}, "features": ['),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(BoundaryContractError, match="NaN or Infinity"):
+        inspect_boundary(path, RegionConfig.default())
+
+
 def _metadata(version: str = "2026-08-reviewed") -> BoundaryMetadata:
     return BoundaryMetadata(
         source_organization="부산광역시",
@@ -185,6 +203,95 @@ class _InboxMutatingRawStore(RawStore):
         return artifact
 
 
+class _FailingRawStore(RawStore):
+    def write(self, *args: Any, **kwargs: Any):  # type: ignore[no-untyped-def]
+        raise OSError("DO_NOT_AUDIT_FILE_CONTENTS")
+
+
+class _ArtifactRecordFailingDatabase(Database):
+    def record_artifact(self, artifact: RawArtifact) -> None:
+        raise duckdb.ConstraintException("DO_NOT_AUDIT_DATABASE_DETAIL")
+
+
+def test_raw_store_failure_appends_redacted_rejection_event(tmp_path: Path) -> None:
+    """Catches immutable-copy failures disappearing after the inbox hash is observed."""
+    inspection = inspect_boundary(FIXTURE, RegionConfig.default())
+    db = _database(tmp_path)
+
+    with pytest.raises(BoundaryApprovalError, match="storage failed"):
+        approve_boundary(
+            db,
+            _FailingRawStore(tmp_path / "data"),
+            FIXTURE,
+            inspection,
+            inspection.content_hash,
+            "reviewer@example.org",
+            "Reviewed against the official district release.",
+            _metadata(),
+        )
+
+    assert db.query("select count(*) from spatial_boundary_version") == [(0,)]
+    assert db.query("select count(*) from raw_artifact") == [(0,)]
+    event = db.query(
+        """select observed_content_hash, boundary_version_id, action,
+                  source_metadata_json, evidence_json
+           from spatial_boundary_approval_event"""
+    )[0]
+    assert event[:3] == (inspection.content_hash, None, "rejected")
+    assert json.loads(event[3]) == {
+        "source_date": "2026-08-01",
+        "source_organization": "부산광역시",
+        "source_url": "https://data.busan.go.kr/boundary",
+        "source_version": "2026-08-reviewed",
+    }
+    assert json.loads(event[4]) == {
+        "failure_type": "OSError",
+        "reason": "raw_store_write_failed",
+    }
+    assert "DO_NOT_AUDIT_FILE_CONTENTS" not in event[4]
+
+
+def test_artifact_record_failure_appends_redacted_rejection_event(
+    tmp_path: Path,
+) -> None:
+    """Catches artifact-record failures losing the mandatory rejection audit."""
+    inspection = inspect_boundary(FIXTURE, RegionConfig.default())
+    db = _ArtifactRecordFailingDatabase(tmp_path / "spatial.duckdb", Path("sql"))
+    db.migrate()
+
+    with pytest.raises(BoundaryApprovalError, match="recording failed"):
+        approve_boundary(
+            db,
+            RawStore(tmp_path / "data"),
+            FIXTURE,
+            inspection,
+            inspection.content_hash,
+            "reviewer@example.org",
+            "Reviewed against the official district release.",
+            _metadata(),
+        )
+
+    assert db.query("select count(*) from spatial_boundary_version") == [(0,)]
+    assert db.query("select count(*) from raw_artifact") == [(0,)]
+    event = db.query(
+        """select observed_content_hash, boundary_version_id, action,
+                  source_metadata_json, evidence_json
+           from spatial_boundary_approval_event"""
+    )[0]
+    assert event[:3] == (inspection.content_hash, None, "rejected")
+    assert json.loads(event[3])["source_url"] == "https://data.busan.go.kr/boundary"
+    assert json.loads(event[4]) == {
+        "failure_type": "ConstraintException",
+        "reason": "raw_artifact_record_failed",
+    }
+    assert "DO_NOT_AUDIT_DATABASE_DETAIL" not in event[4]
+    stored_files = list((tmp_path / "data" / "raw").rglob("*.geojson"))
+    assert len(stored_files) == 1
+    assert hashlib.sha256(stored_files[0].read_bytes()).hexdigest() == (
+        inspection.content_hash
+    )
+
+
 def test_approval_parses_immutable_copy_after_inbox_is_changed(tmp_path: Path) -> None:
     """Catches reparsing the mutable reviewed inbox after immutable storage."""
     inbox = tmp_path / "inbox.geojson"
@@ -219,6 +326,54 @@ def test_approval_parses_immutable_copy_after_inbox_is_changed(tmp_path: Path) -
     assert db.query(
         "select action, boundary_version_id from spatial_boundary_approval_event"
     ) == [("approved", boundary_id)]
+
+
+def test_approval_rehash_rejects_artifact_changed_after_immutable_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches artifact mutation between immutable inspection and atomic approval."""
+    inspection = inspect_boundary(FIXTURE, RegionConfig.default())
+    db = _database(tmp_path)
+    original_inspect = boundary_module.inspect_boundary
+    inspected_artifact: list[Path] = []
+
+    def inspect_then_mutate(path: Path, regions: RegionConfig):
+        result = original_inspect(path, regions)
+        artifact_path = Path(path)
+        inspected_artifact.append(artifact_path)
+        artifact_path.write_bytes(b"tampered after immutable inspection")
+        return result
+
+    monkeypatch.setattr(boundary_module, "inspect_boundary", inspect_then_mutate)
+
+    with pytest.raises(BoundaryApprovalError, match="changed after inspection"):
+        approve_boundary(
+            db,
+            RawStore(tmp_path / "data"),
+            FIXTURE,
+            inspection,
+            inspection.content_hash,
+            "reviewer@example.org",
+            "Reviewed against the official district release.",
+            _metadata(),
+        )
+
+    assert len(inspected_artifact) == 1
+    assert hashlib.sha256(inspected_artifact[0].read_bytes()).hexdigest() != (
+        inspection.content_hash
+    )
+    assert db.query("select count(*) from spatial_boundary_version") == [(0,)]
+    assert db.query(
+        """select observed_content_hash, boundary_version_id, action, evidence_json
+           from spatial_boundary_approval_event"""
+    ) == [
+        (
+            inspection.content_hash,
+            None,
+            "rejected",
+            '{"reason":"immutable_artifact_hash_changed"}',
+        )
+    ]
 
 
 def test_repeated_matching_approval_is_idempotent_and_conflict_fails_closed(

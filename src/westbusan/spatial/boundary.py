@@ -32,7 +32,9 @@ def inspect_boundary(path: Path, regions: RegionConfig) -> BoundaryInspection:
     body = Path(path).read_bytes()
     content_hash = hashlib.sha256(body).hexdigest()
     try:
-        document = json.loads(body.decode("utf-8"))
+        document = json.loads(
+            body.decode("utf-8"), parse_constant=_reject_nonfinite_json_constant
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise BoundaryContractError("boundary must be UTF-8 GeoJSON") from exc
 
@@ -170,15 +172,47 @@ def approve_boundary(
         raise BoundaryApprovalError("supplied hash does not match observed content hash")
 
     run = RunContext.start("spatial-boundary-approval", datetime.now(UTC))
-    artifact = store.write(
-        run,
-        "spatial-boundary",
-        source_metadata,
-        body,
-        ".geojson",
-        source_date=metadata.source_date,
-    )
-    db.record_artifact(artifact)
+    try:
+        artifact = store.write(
+            run,
+            "spatial-boundary",
+            source_metadata,
+            body,
+            ".geojson",
+            source_date=metadata.source_date,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _append_approval_event(
+            db,
+            observed_hash,
+            None,
+            "rejected",
+            actor,
+            reason,
+            source_metadata,
+            {
+                "failure_type": type(exc).__name__,
+                "reason": "raw_store_write_failed",
+            },
+        )
+        raise BoundaryApprovalError("immutable boundary storage failed") from None
+    try:
+        db.record_artifact(artifact)
+    except Exception as exc:  # noqa: BLE001
+        _append_approval_event(
+            db,
+            observed_hash,
+            None,
+            "rejected",
+            actor,
+            reason,
+            source_metadata,
+            {
+                "failure_type": type(exc).__name__,
+                "reason": "raw_artifact_record_failed",
+            },
+        )
+        raise BoundaryApprovalError("raw artifact metadata recording failed") from None
     try:
         immutable_inspection = inspect_boundary(
             artifact.path, RegionConfig.default()
@@ -210,13 +244,6 @@ def approve_boundary(
             "immutable boundary inspection does not match reviewed inspection"
         )
 
-    existing = db.query(
-        """select boundary_version_id, source_organization, source_url,
-                  source_date, source_version, crs, district_count, dong_count,
-                  approved_by, approval_rationale
-           from spatial_boundary_version where content_hash = ?""",
-        [observed_hash],
-    )
     immutable_metadata = (
         metadata.source_organization.strip(),
         metadata.source_url.strip(),
@@ -235,9 +262,15 @@ def approve_boundary(
         "feature_count": inspection.feature_count,
         "geometry_valid": inspection.geometry_valid,
     }
-    if existing:
-        boundary_version_id = existing[0][0]
-        if existing[0][1:] != immutable_metadata:
+    boundary_version_id = uuid4()
+    began = False
+    try:
+        db.connection.execute("begin transaction")
+        began = True
+        final_artifact_hash = hashlib.sha256(artifact.path.read_bytes()).hexdigest()
+        if final_artifact_hash != observed_hash:
+            db.connection.execute("rollback")
+            began = False
             _append_approval_event(
                 db,
                 observed_hash,
@@ -246,42 +279,52 @@ def approve_boundary(
                 actor,
                 reason,
                 source_metadata,
-                {"reason": "conflicting_immutable_metadata"},
+                {"reason": "immutable_artifact_hash_changed"},
             )
             raise BoundaryApprovalError(
-                "content hash already exists with conflicting metadata"
+                "immutable boundary artifact changed after inspection"
             )
-        _append_approval_event(
-            db,
-            observed_hash,
-            boundary_version_id,
-            "approved",
-            actor,
-            reason,
-            source_metadata,
-            approval_evidence,
-        )
-        return boundary_version_id
 
-    boundary_version_id = uuid4()
-    began = False
-    try:
-        db.connection.execute("begin transaction")
-        began = True
-        db.connection.execute(
-            """insert into spatial_boundary_version (
-                   boundary_version_id, raw_artifact_id, content_hash,
-                   source_organization, source_url, source_date, source_version,
-                   crs, district_count, dong_count, approved_by,
-                   approval_rationale
-               ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            [
-                boundary_version_id,
-                artifact.artifact_id,
-                observed_hash,
-                *immutable_metadata,
-            ],
+        existing = db.query(
+            """select boundary_version_id, source_organization, source_url,
+                      source_date, source_version, crs, district_count, dong_count,
+                      approved_by, approval_rationale
+               from spatial_boundary_version where content_hash = ?""",
+            [observed_hash],
         )
+        if existing:
+            boundary_version_id = existing[0][0]
+            if existing[0][1:] != immutable_metadata:
+                db.connection.execute("rollback")
+                began = False
+                _append_approval_event(
+                    db,
+                    observed_hash,
+                    None,
+                    "rejected",
+                    actor,
+                    reason,
+                    source_metadata,
+                    {"reason": "conflicting_immutable_metadata"},
+                )
+                raise BoundaryApprovalError(
+                    "content hash already exists with conflicting metadata"
+                )
+        else:
+            db.connection.execute(
+                """insert into spatial_boundary_version (
+                       boundary_version_id, raw_artifact_id, content_hash,
+                       source_organization, source_url, source_date, source_version,
+                       crs, district_count, dong_count, approved_by,
+                       approval_rationale
+                   ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                [
+                    boundary_version_id,
+                    artifact.artifact_id,
+                    observed_hash,
+                    *immutable_metadata,
+                ],
+            )
         _append_approval_event(
             db,
             observed_hash,
@@ -313,6 +356,12 @@ def _read_crs(document: dict[str, object]) -> str:
     ):
         raise BoundaryContractError("boundary CRS must be EPSG:4326")
     return _PUBLIC_CRS
+
+
+def _reject_nonfinite_json_constant(value: str) -> object:
+    raise BoundaryContractError(
+        f"boundary JSON must not contain NaN or Infinity ({value})"
+    )
 
 
 def _required_text(properties: dict[str, object], field: str, index: int) -> str:
