@@ -2,6 +2,7 @@
 
 ## Outcome
 
+- Implementation commit: `d217737` (`feat(spatial): isolate and fence spatial runs`).
 - Implemented `SpatialPipeline.prepare`, `refresh_lease`, `take_over`, and `run`.
 - Added immutable core/boundary eligibility gates, deterministic logical-run identity,
   one global spatial writer, monotonic takeover epochs, transactional fence touches,
