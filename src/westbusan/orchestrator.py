@@ -48,6 +48,7 @@ from westbusan.storage import RawStore
 from westbusan.transport.load import load_transport
 
 _LEASE_DURATION = timedelta(minutes=15)
+_PHASE_PROGRESS_INTERVAL_SECONDS = 5.0
 _FIXTURE_SOURCES = (
     "lodgings",
     "tourist_accommodations",
@@ -442,8 +443,21 @@ class Pipeline:
         self, phase: object, run_id: UUID
     ) -> dict[str, object]:
         parameters = inspect.signature(phase).parameters
+        last_refresh: float | None = None
+
+        def progress() -> None:
+            nonlocal last_refresh
+            now = monotonic()
+            if (
+                last_refresh is not None
+                and now - last_refresh < _PHASE_PROGRESS_INTERVAL_SECONDS
+            ):
+                return
+            self._refresh_lease(run_id)
+            last_refresh = now
+
         values: dict[str, object] = {
-            "progress": lambda: self._refresh_lease(run_id),
+            "progress": progress,
             "fence_check": lambda: self._assert_fence(run_id),
         }
         return {name: value for name, value in values.items() if name in parameters}

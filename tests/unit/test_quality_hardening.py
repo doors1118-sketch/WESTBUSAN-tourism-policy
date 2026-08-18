@@ -891,7 +891,6 @@ def test_metadata_less_official_no_data_reconciles_as_one_empty_page(
     path = tmp_path / "metadata-less-no-data.json"
     path.write_bytes(body)
     _record_raw_page(db, run_id, "lodgings", path, body, "info", date(2026, 8, 16))
-    approve_schema_baseline(db, "lodgings", "info", page.schema_fingerprint)
     db.record_source_status(
         SourceStatus(
             "lodgings",
@@ -906,6 +905,7 @@ def test_metadata_less_official_no_data_reconciles_as_one_empty_page(
     reconciliation = _check(report, "raw_total_matches_staging", "lodgings")
 
     assert (page.total_count, page.page_no, page.page_size) == (0, 1, 0)
+    assert _check(report, "schema_fingerprint_approved", "lodgings").status == "passed"
     assert reconciliation.status == "passed"
     assert reconciliation.actual == [
         {
@@ -1495,11 +1495,11 @@ def test_invalid_nonnull_official_dates_fail_required_date_coverage(
 
 
 @pytest.mark.parametrize("status_code", ["03", "04"])
-def test_closed_or_cancelled_status_requires_a_valid_closure_date(
+def test_closed_or_cancelled_status_preserves_current_stock_when_closure_date_is_missing(
     tmp_path: Path,
     status_code: str,
 ) -> None:
-    """Catches closed current stock being accepted without CLSBIZ_YMD evidence."""
+    """Keeps current inactive stock usable while closure-period evidence stays unavailable."""
     db = _db(tmp_path)
     run_id = uuid4()
     _valid_run(db, tmp_path, run_id)
@@ -1514,7 +1514,11 @@ def test_closed_or_cancelled_status_requires_a_valid_closure_date(
 
     report = run_quality_suite(db, run_id)
 
-    assert _check(report, "accommodation_status_coverage", "lodgings").status == "failed"
+    assert _check(report, "accommodation_status_coverage", "lodgings").status == "passed"
+    closure = _check(report, "accommodation_closure_date_coverage", "lodgings")
+    assert closure.status == "warning"
+    assert closure.severity == "warning"
+    assert closure.actual == {"covered_rows": 0, "inactive_rows": 1}
 
 
 def test_older_backfill_cannot_replace_newer_pointer_without_audited_override(

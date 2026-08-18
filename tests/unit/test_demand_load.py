@@ -751,6 +751,153 @@ def test_loader_collects_each_reviewed_operation_for_one_source(
     ]
 
 
+def test_loader_collects_each_reviewed_indicator_for_one_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches operation-only deduplication dropping official KTO indicator codes."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    unresolved = SourceSpec(
+        source_id="area_tourism_demand",
+        url="https://example.test/AreaTarDemDsService",
+        group="tourism",
+        inspection_required=True,
+    )
+    registry = SourceRegistry((unresolved,))
+    for indicator_code in ("2101", "2102"):
+        record_inspection(
+            unresolved,
+            db,
+            operation="areaTarSjrnDsList",
+            required_parameters={
+                "baseYm": "{baseYm}",
+                "areaCd": "26",
+                "tarSjrnDsIxCd": indicator_code,
+            },
+            response_row_path="response.body.items.item",
+            portal_detail_url="https://www.data.go.kr/data/15151868/openapi.do",
+        )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            indicator_code = str(parameters["tarSjrnDsIxCd"])
+            row = {
+                "baseYm": "202601",
+                "areaCd": "26",
+                "signguCd": "26380",
+                "signguNm": "사하구",
+                "tarSjrnDsIxVal": "0.31",
+                "tarSjrnDsIxCd": indicator_code,
+                "tarSjrnDsIxNm": f"지표 {indicator_code}",
+            }
+            yield ApiPage(
+                rows=[row],
+                total_count=1,
+                page_no=1,
+                page_size=1,
+                raw_body=json.dumps({"data": [row]}, ensure_ascii=False).encode(),
+                schema_fingerprint="reviewed-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    result = load_tourism_demand(
+        db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == 2
+    assert sorted(db.query("select metric_code from fact_tourism_demand")) == [
+        ("area_tar_sjrn_ds_list.2101",),
+        ("area_tar_sjrn_ds_list.2102",),
+    ]
+
+
+def test_area_aggregate_row_is_out_of_scope_not_schema_changed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The official area query returns one Busan total before its 16 district rows."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "secret-service-key")
+    db = Database(tmp_path / "tourism.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id="area_tourism_demand",
+                url="https://example.test/AreaTarDemDsService",
+                operation="areaTarSjrnDsList",
+                group="tourism",
+                required_parameters={
+                    "baseYm": "{baseYm}",
+                    "areaCd": "26",
+                    "tarSjrnDsIxCd": "2101",
+                },
+            ),
+        )
+    )
+
+    class FakePager:
+        def __init__(self, client: object, service_key: str) -> None:
+            pass
+
+        def iter_pages(
+            self, spec: SourceSpec, parameters: dict[str, object], *, include_empty: bool
+        ):
+            rows = [
+                {
+                    "baseYm": "202601",
+                    "areaCd": "26",
+                    "signguCd": "_",
+                    "signguNm": "_",
+                    "tarSjrnDsIxVal": "0.40",
+                    "tarSjrnDsIxCd": "2101",
+                    "tarSjrnDsIxNm": "당일 비중",
+                },
+                {
+                    "baseYm": "202601",
+                    "areaCd": "26",
+                    "signguCd": "26380",
+                    "signguNm": "사하구",
+                    "tarSjrnDsIxVal": "0.31",
+                    "tarSjrnDsIxCd": "2101",
+                    "tarSjrnDsIxNm": "당일 비중",
+                },
+            ]
+            yield ApiPage(
+                rows=rows,
+                total_count=2,
+                page_no=1,
+                page_size=2,
+                raw_body=json.dumps({"data": rows}, ensure_ascii=False).encode(),
+                schema_fingerprint="reviewed-fields",
+            )
+
+    monkeypatch.setattr("westbusan.demand.load.DataGoKrPager", FakePager)
+    result = load_tourism_demand(
+        db,
+        registry,
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext(uuid4(), "test", datetime(2026, 2, 1, tzinfo=UTC)),
+    )
+
+    assert result.records_loaded == 1
+    assert result.sources_ready == ("area_tourism_demand",)
+    status = json.loads(
+        db.query("select detail_json from source_status order by checked_at desc")[0][0]
+    )
+    assert status["out_of_scope_rows"] == 1
+    assert status["invalid_rows"] == 0
+
+
 def test_concentration_uses_reviewed_area_parameters_and_returned_base_ymd(
     tmp_path: Path, monkeypatch
 ) -> None:

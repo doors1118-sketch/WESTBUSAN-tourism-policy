@@ -271,6 +271,8 @@ def observed_schema_contracts(db: Database) -> list[dict[str, str]]:
             page = parse_data_page(Path(str(path)).read_bytes(), "application/json")
         except (OSError, ValueError, TypeError):
             continue
+        if not page.rows:
+            continue
         observations.add(
             (str(source_id), operation, partition, page.schema_fingerprint)
         )
@@ -829,7 +831,7 @@ def _schema_check(db: Database, source_id: str, pages: list[_ArtifactPage], stat
     changed_in_run = any(status == "SCHEMA_CHANGED" for status, _ in statuses)
     by_contract: dict[tuple[str, str | None], set[str]] = defaultdict(set)
     for page in pages:
-        if page.schema_fingerprint:
+        if page.rows and page.schema_fingerprint:
             by_contract[(page.operation, page.partition)].add(page.schema_fingerprint)
     outcomes: list[dict[str, object]] = []
     for (operation, partition), observed in sorted(
@@ -844,15 +846,26 @@ def _schema_check(db: Database, source_id: str, pages: list[_ArtifactPage], stat
                 "approved_baseline": baseline,
             }
         )
-    passed = bool(outcomes) and not changed_in_run and all(
-        item["approved_baseline"] is not None
-        and item["observed"] == [item["approved_baseline"]]
-        for item in outcomes
+    explicit_empty_only = bool(pages) and all(
+        page.error is None and page.rows == [] for page in pages
+    )
+    passed = not changed_in_run and (
+        explicit_empty_only
+        or (
+            bool(outcomes)
+            and all(
+                item["approved_baseline"] is not None
+                and item["observed"] == [item["approved_baseline"]]
+                for item in outcomes
+            )
+        )
     )
     return CheckResult(
         "schema_fingerprint_approved",
         "passed" if passed else "failed",
-        outcomes or "MISSING_SCHEMA_FINGERPRINT",
+        outcomes if outcomes else (
+            "EXPLICIT_EMPTY_NO_SCHEMA" if explicit_empty_only else "MISSING_SCHEMA_FINGERPRINT"
+        ),
         "explicitly approved schema baseline per source operation/partition",
         severity,
         source_id,
@@ -1264,11 +1277,11 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
             and row[16] not in (None, "unknown")
             and row[17] is not None
             and row[18] is not None
-            and (
-                row[15] not in {"03", "04"}
-                or (row[8] is not None and row[9] == "parsed")
-            )
             for row in source_rows
+        )
+        inactive_rows = [row for row in source_rows if row[15] in {"03", "04"}]
+        closure_date_count = sum(
+            row[8] is not None and row[9] == "parsed" for row in inactive_rows
         )
         checks.extend(
             [
@@ -1285,7 +1298,7 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
                     source_id,
                     date_count,
                     count,
-                    "parseable LCPMT_YMD, LAST_MDFCN_YMD, and DATA_UPDT_YMD",
+                    "parseable official license, source-modified, and data-updated dates",
                     run_id,
                 ),
                 _coverage_check(
@@ -1293,8 +1306,31 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
                     source_id,
                     status_count,
                     count,
-                    "known SALS_STTS_CD plus detailed status; 03/04 require CLSBIZ_YMD",
+                    "known SALS_STTS_CD plus detailed status",
                     run_id,
+                ),
+                CheckResult(
+                    "accommodation_closure_date_coverage",
+                    (
+                        "passed"
+                        if not inactive_rows
+                        or closure_date_count == len(inactive_rows)
+                        else "warning"
+                    ),
+                    {
+                        "covered_rows": closure_date_count,
+                        "inactive_rows": len(inactive_rows),
+                    },
+                    "03/04 rows use a parseable official closure or permit-revocation date",
+                    "warning",
+                    source_id,
+                    "staging_license_snapshot",
+                    {
+                        "run_id": str(run_id),
+                        "covered_rows": closure_date_count,
+                        "inactive_rows": len(inactive_rows),
+                        "missing_dates_are_not_inferred": True,
+                    },
                 ),
             ]
         )

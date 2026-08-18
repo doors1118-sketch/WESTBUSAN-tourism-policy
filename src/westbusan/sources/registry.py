@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from collections.abc import Mapping
@@ -25,7 +26,7 @@ from westbusan.http import (
     SafeHttpClient,
     SchemaError,
 )
-from westbusan.models import SourceSpec, SourceStatus, SourceStatusCode
+from westbusan.models import ApiPage, SourceSpec, SourceStatus, SourceStatusCode
 from westbusan.sources.datagokr import parse_data_page
 
 
@@ -209,12 +210,18 @@ def probe_source(spec: SourceSpec, client: SafeHttpClient, db: Database) -> Sour
             result.body, result.content_type, spec.response_row_path
         ):
             raise SchemaError("response does not contain the inspected row path")
-        page = parse_data_page(
-            result.body,
-            result.content_type,
-            require_paging_metadata=spec.url.startswith(
-                "https://apis.data.go.kr/1741000/"
-            ),
+        page = (
+            _empty_probe_page(result.body)
+            if _is_successful_empty_building_probe(
+                spec, result.body, result.content_type
+            )
+            else parse_data_page(
+                result.body,
+                result.content_type,
+                require_paging_metadata=spec.url.startswith(
+                    "https://apis.data.go.kr/1741000/"
+                ),
+            )
         )
     except AuthenticationError as error:
         return _persist(db, _status(spec.source_id, "AUTH_FAILED", _error_detail(error)))
@@ -432,6 +439,46 @@ def _response_path_exists(body: bytes, content_type: str, row_path: str | None) 
             return False
         value = value[segment]
     return isinstance(value, (Mapping, list))
+
+
+def _is_successful_empty_building_probe(
+    spec: SourceSpec, body: bytes, content_type: str
+) -> bool:
+    """Recognize the parcel APIs' reviewed success envelope before parcel params exist."""
+    if spec.group != "building":
+        return False
+    try:
+        decoded = (
+            xmltodict.parse(body)
+            if "xml" in content_type.lower() or body.lstrip().startswith(b"<")
+            else json.loads(body)
+        )
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(decoded, Mapping):
+        return False
+    response = decoded.get("response")
+    if not isinstance(response, Mapping):
+        return False
+    header = response.get("header")
+    response_body = response.get("body")
+    return (
+        isinstance(header, Mapping)
+        and str(header.get("resultCode", "")) == "00"
+        and isinstance(response_body, Mapping)
+        and not response_body
+    )
+
+
+def _empty_probe_page(raw_body: bytes) -> ApiPage:
+    return ApiPage(
+        rows=[],
+        total_count=0,
+        page_no=1,
+        page_size=0,
+        raw_body=raw_body,
+        schema_fingerprint=hashlib.sha256(b"[]").hexdigest(),
+    )
 
 
 def _http_status(error: HttpStatusError) -> SourceStatusCode:

@@ -202,6 +202,8 @@ def iter_collection_months(
 def normalize_demand_row(source_id: str, row: dict[str, object]) -> DemandRecord:
     if source_id == "tourism_data_lab":
         _validate_datalab_jurisdiction(row)
+    else:
+        _exclude_area_aggregate(row)
     period, period_fields = _period(source_id, row)
     district = str(_required_field(row, _DISTRICT_FIELDS)).strip()
     try:
@@ -240,6 +242,14 @@ def _validate_datalab_jurisdiction(row: Mapping[str, object]) -> None:
         raise ValueError("DataLab signguCode must be a five-digit string")
     if not signgu_code.startswith("26"):
         raise _OutOfScopeRow("DataLab row is outside Busan")
+
+
+def _exclude_area_aggregate(row: Mapping[str, object]) -> None:
+    """Exclude the official metropolitan total from district-grain comparisons."""
+    district_name = str(_required_field(row, _DISTRICT_FIELDS)).strip()
+    district_code = str(row.get("signguCd", "")).strip()
+    if district_name in {"", "_"} or district_code in {"_", "26000"}:
+        raise _OutOfScopeRow("metropolitan aggregate is outside district grain")
 
 
 def load_tourism_demand(
@@ -479,7 +489,7 @@ def _resolved_specs(spec: SourceSpec, db: Database) -> tuple[SourceSpec, ...]:
         [spec.source_id],
     )
     resolved: list[SourceSpec] = []
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     for (detail_json,) in rows:
         try:
             inspection = json.loads(detail_json)["inspection"]
@@ -490,10 +500,15 @@ def _resolved_specs(spec: SourceSpec, db: Database) -> tuple[SourceSpec, ...]:
         if (
             isinstance(operation, str)
             and isinstance(parameters, dict)
-            and operation not in seen
         ):
+            inspection_key = (
+                operation,
+                json.dumps(parameters, ensure_ascii=False, sort_keys=True, default=str),
+            )
+            if inspection_key in seen:
+                continue
             resolved.append(replace(spec, operation=operation, required_parameters=parameters))
-            seen.add(operation)
+            seen.add(inspection_key)
     return tuple(resolved) or (spec,)
 
 

@@ -151,6 +151,50 @@ def test_official_current_fields_preserve_status_dates_and_projected_coordinates
     assert record.latitude is None
 
 
+def test_live_official_point_timestamps_supply_required_update_dates() -> None:
+    """Catches the live 1741000 PNT fields being ignored in favor of fixture-only YMD aliases."""
+    record = normalize_license(
+        "lodgings",
+        {
+            "MNG_NO": "LIVE-OFFICIAL-DATES",
+            "LCPMT_YMD": "2026-08-04",
+            "LAST_MDFCN_PNT": "2026-08-04 16:48:38",
+            "DAT_UPDT_PNT": "2026-08-05 22:09:00",
+        },
+        date(2026, 8, 18),
+    )
+
+    assert record.source_updated_at == "2026-08-04 16:48:38"
+    assert (record.source_modified_on, record.source_modified_date_quality) == (
+        date(2026, 8, 4),
+        "parsed",
+    )
+    assert (record.data_updated_on, record.data_updated_date_quality) == (
+        date(2026, 8, 5),
+        "parsed",
+    )
+    assert record.data_update_point == "2026-08-05 22:09:00"
+
+
+def test_official_permit_revocation_date_dates_cancelled_registration() -> None:
+    """Catches a status-04 record losing its official LCPMT_RTRCN_YMD date."""
+    record = normalize_license(
+        "tourist_accommodations",
+        {
+            "MNG_NO": "CANCELLED-OFFICIAL",
+            "SALS_STTS_CD": "04",
+            "DTL_SALS_STTS_CD": "31",
+            "LCPMT_RTRCN_YMD": "2019-02-20",
+        },
+        date(2026, 8, 18),
+    )
+
+    assert (record.closure_date, record.closure_date_quality) == (
+        date(2019, 2, 20),
+        "parsed",
+    )
+
+
 def test_overall_status_codes_have_pinned_official_meanings() -> None:
     """Catches an overall status code being reinterpreted as a detailed status."""
     expected = {

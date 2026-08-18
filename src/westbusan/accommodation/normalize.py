@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Literal
 
 from westbusan.config import region_group_for_district
@@ -28,7 +28,7 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "road_address": ("ROAD_NM_ADDR", "ROADNMADDR", "ROAD_ADDRESS", "도로명주소"),
     "lot_address": ("LOTNO_ADDR", "LOTNOADDR", "JIBUN_ADDR", "JIBUN_ADDRESS", "지번주소"),
     "license_date": ("LCPMT_YMD", "LICENSG_DE", "LICENS_DE", "PERMIT_DATE", "LICENSE_DATE", "인허가일자", "인허가일"),
-    "closure_date": ("CLSBIZ_YMD", "CLSBIZ_DE", "CLOSURE_DATE", "CLOSE_DATE", "폐업일자", "폐업일"),
+    "closure_date": ("CLSBIZ_YMD", "LCPMT_RTRCN_YMD", "CLSBIZ_DE", "CLOSURE_DATE", "CLOSE_DATE", "폐업일자", "폐업일"),
     "status_code": ("SALS_STTS_CD", "TRD_STATE_GBN", "STATE_CODE", "STATUS_CODE", "영업상태구분코드", "영업상태코드"),
     "status_name": ("SALS_STTS_NM", "TRD_STATE_NM", "STATUS_NAME", "영업상태명", "상태명"),
     "detailed_status_code": ("DTL_SALS_STTS_CD", "DTL_STATE_GBN", "상세영업상태코드"),
@@ -40,8 +40,8 @@ _ALIASES: dict[str, tuple[str, ...]] = {
     "latitude": ("LAT", "LATITUDE", "위도"),
     "projected_x": ("XCRD",),
     "projected_y": ("YCRD",),
-    "updated_at": ("LAST_MDFCN_YMD", "LAST_MOD_TS", "LAST_UPDT_DT", "UPDATE_DATE", "UPDATED_AT", "MODIFIED_AT", "최종수정일"),
-    "data_updated_on": ("DATA_UPDT_YMD", "데이터기준일자"),
+    "updated_at": ("LAST_MDFCN_YMD", "LAST_MDFCN_PNT", "LAST_MOD_TS", "LAST_UPDT_DT", "UPDATE_DATE", "UPDATED_AT", "MODIFIED_AT", "최종수정일"),
+    "data_updated_on": ("DATA_UPDT_YMD", "DAT_UPDT_PNT", "데이터기준일자"),
     "data_update_point": ("DAT_UPDT_PNT",),
 }
 _ALIASES = {field: tuple(_alias_key(alias) for alias in aliases) for field, aliases in _ALIASES.items()}
@@ -119,10 +119,25 @@ def _parse_date_with_quality(value: object | None) -> tuple[date | None, str]:
     if text is None:
         return None, "missing"
     match = re.fullmatch(r"(\d{4})[-/.]?(\d{2})[-/.]?(\d{2})", text)
-    if match is None:
+    if match is not None:
+        try:
+            return date(*(int(part) for part in match.groups())), "parsed"
+        except ValueError:
+            return None, "invalid"
+    timestamp = re.fullmatch(
+        r"(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})(?:\.\d{1,6})?",
+        text,
+    )
+    if timestamp is None:
         return None, "invalid"
     try:
-        return date(*(int(part) for part in match.groups())), "parsed"
+        return (
+            datetime(
+                *(int(part) for part in timestamp.groups()),
+                tzinfo=UTC,
+            ).date(),
+            "parsed",
+        )
     except ValueError:
         return None, "invalid"
 

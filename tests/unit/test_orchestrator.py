@@ -36,6 +36,32 @@ def test_monthly_partitions_include_both_boundary_months() -> None:
     )
 
 
+def test_phase_progress_coalesces_hot_loop_lease_refreshes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches one durable lease transaction being committed per compared pair."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    run_id = uuid4()
+    now = [100.0]
+    refreshes: list[object] = []
+    monkeypatch.setattr(orchestrator_module, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        pipeline, "_refresh_lease", lambda refreshed: refreshes.append(refreshed)
+    )
+
+    progress = pipeline._supported_phase_kwargs(build_facilities, run_id)["progress"]
+    assert callable(progress)
+    progress()
+    for _ in range(10_000):
+        progress()
+    now[0] += 4.999
+    progress()
+    now[0] += 0.001
+    progress()
+
+    assert refreshes == [run_id, run_id]
+
+
 def test_current_only_backfill_uses_one_restartable_snapshot(tmp_path: Path) -> None:
     """Catches replaying one current-state source once per historical month."""
     pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))

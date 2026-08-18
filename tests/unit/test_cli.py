@@ -97,8 +97,8 @@ def test_spatial_boundary_inspection_prints_only_review_summary(
     assert output == {
         "bounds": [128.9, 35.05, 128.916, 35.066],
         "content_hash": (
-            "91e3b3226f20d3de893e6897ccb1ac57"
-            "cd5f27d6bd2625c19c366b1abbbcb4e2"
+            "5c0456147f201117ae45bb710436a976"
+            "7534f097a33eb8c1483fd5e4885e8d16"
         ),
         "crs": "EPSG:4326",
         "district_count": 16,
@@ -286,6 +286,9 @@ def _seed_schema_observation(tmp_path: Path, monkeypatch) -> tuple[Database, str
     body = b'{"data":[{"MNG_NO":"L1","OPN_ATMY_GRP_CD":"6260000"}],"totalCount":1,"pageNo":1,"numOfRows":1}'
     raw_path = tmp_path / "observed.json"
     raw_path.write_bytes(body)
+    empty_path = tmp_path / "observed-empty.json"
+    empty_body = b'{"data":[],"totalCount":0,"pageNo":1,"numOfRows":0}'
+    empty_path.write_bytes(empty_body)
     expected_fingerprint = hashlib.sha256(
         b'["MNG_NO","OPN_ATMY_GRP_CD"]'
     ).hexdigest()
@@ -300,6 +303,19 @@ def _seed_schema_observation(tmp_path: Path, monkeypatch) -> tuple[Database, str
             uuid4(),
             json.dumps({"operation": "info", "partition": "2026-08-16"}),
             str(raw_path),
+            now,
+        ],
+    )
+    db.connection.execute(
+        """insert into raw_artifact (
+               artifact_id, run_id, source_id, ingest_date, request_json, request_hash,
+               content_hash, path, created_at, source_date
+           ) values (?, ?, 'lodgings', '2026-08-16', ?, 'empty-request', 'empty-content', ?, ?, '2026-08-16')""",
+        [
+            uuid4(),
+            uuid4(),
+            json.dumps({"operation": "info", "partition": "2026-08-16"}),
+            str(empty_path),
             now,
         ],
     )

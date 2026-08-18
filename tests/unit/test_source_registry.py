@@ -196,6 +196,41 @@ def test_official_accommodation_probe_rejects_invented_paging_metadata(
     assert status.status == "SCHEMA_CHANGED"
 
 
+def test_building_probe_accepts_official_success_with_empty_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches a parcel-scoped building API success being mislabeled as schema drift."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-service-key")
+    spec = SourceRegistry.load(Path("config/sources.yaml")).get(
+        "building_register_title"
+    )
+    db = Database(tmp_path / "status.duckdb", Path("sql"))
+    db.migrate()
+    client = SafeHttpClient(
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "response": {
+                            "header": {
+                                "resultCode": "00",
+                                "resultMsg": "NORMAL SERVICE.",
+                            },
+                            "body": {},
+                        }
+                    },
+                )
+            )
+        ),
+        sleeper=lambda _: None,
+    )
+
+    status = probe_source(spec, client, db)
+
+    assert status.status == "EMPTY"
+
+
 @pytest.mark.parametrize(
     ("source_id", "body", "expected_status"),
     [
