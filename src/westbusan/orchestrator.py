@@ -260,7 +260,9 @@ class Pipeline:
                     building_registry,
                     run,
                     raw_store=self.raw_store,
-                    progress=lambda: self._refresh_lease(run.run_id),
+                    **self._supported_phase_kwargs(
+                        collect_buildings_for_licenses, run.run_id
+                    ),
                 )
             except Exception as error:  # noqa: BLE001 - terminal family boundary
                 for source_id in selected:
@@ -281,7 +283,9 @@ class Pipeline:
                     tourism_start,
                     tourism_end,
                     run,
-                    progress=lambda: self._refresh_lease(run.run_id),
+                    **self._supported_phase_kwargs(
+                        load_tourism_demand, run.run_id
+                    ),
                     **self._supported_storage_kwargs(load_tourism_demand),
                 )
             except Exception as error:  # noqa: BLE001 - terminal family boundary
@@ -322,7 +326,9 @@ class Pipeline:
                             range_start,
                             range_end,
                             run,
-                            progress=lambda: self._refresh_lease(run.run_id),
+                            **self._supported_phase_kwargs(
+                                load_transport, run.run_id
+                            ),
                             **self._supported_storage_kwargs(load_transport),
                         )
                         total_rows += result.records_loaded

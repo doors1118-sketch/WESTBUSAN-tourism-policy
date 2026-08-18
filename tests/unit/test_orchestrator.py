@@ -641,6 +641,11 @@ def test_production_passes_lease_progress_to_every_loader_family(
     )
     pipeline.registry = SourceRegistry(specs)
     calls: list[str] = []
+    refreshes: list[object] = []
+    monkeypatch.setattr(orchestrator_module, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(
+        pipeline, "_refresh_lease", lambda run_id: refreshes.append(run_id)
+    )
 
     def ready_probe(spec, client, db):
         status = SourceStatus(spec.source_id, datetime.now(UTC), "READY", {})
@@ -648,17 +653,20 @@ def test_production_passes_lease_progress_to_every_loader_family(
         return status
 
     def building_loader(db, registry, run, *, raw_store, progress):
-        progress()
+        for _ in range(1_000):
+            progress()
         calls.append("building")
         return SimpleNamespace(building_rows=0)
 
     def tourism_loader(db, registry, start, end, run, *, progress):
-        progress()
+        for _ in range(1_000):
+            progress()
         calls.append("tourism")
         return SimpleNamespace(records_loaded=0)
 
     def transport_loader(db, registry, start, end, run, *, progress):
-        progress()
+        for _ in range(1_000):
+            progress()
         calls.append("transport")
         source_id = registry.ids()[0]
         return SimpleNamespace(
@@ -684,6 +692,7 @@ def test_production_passes_lease_progress_to_every_loader_family(
 
     assert result == "finished"
     assert calls == ["building", "tourism", "transport"]
+    assert len(refreshes) < 20
 
 
 def test_fixture_backfill_defaults_to_the_complete_required_fixture_set(
