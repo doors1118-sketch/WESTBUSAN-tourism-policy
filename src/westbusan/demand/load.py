@@ -303,6 +303,14 @@ def load_tourism_demand(
             months, backfill_phase = _planned_months(
                 source_id, spec, start, end, run, db
             )
+            resumed_months = _eligible_checkpointed_months(
+                db, source_id, spec.operation, start, end, run.mode
+            )
+            _observe_checkpointed_facts(
+                db, source_id, spec.operation, resumed_months, run, heartbeat
+            )
+            if not months and resumed_months:
+                continue
             page_statuses: dict[int, dict[int, list[str]]] = {}
             for month in months:
                 heartbeat()
@@ -626,6 +634,68 @@ def _month_checkpoint_complete(
     except (TypeError, ValueError):
         return False
     return isinstance(value, dict) and value.get("status") == "completed"
+
+
+def _eligible_checkpointed_months(
+    db: Database,
+    source_id: str,
+    operation: str | None,
+    start: date,
+    end: date,
+    mode: str,
+) -> tuple[YearMonth, ...]:
+    if operation is None or mode != "backfill":
+        return ()
+    prefix = f"tourism_month:{operation}:"
+    rows = db.query(
+        "select partition_key, checkpoint_json from collection_checkpoint where source_id = ? and partition_key like ?",
+        [source_id, f"{prefix}%"],
+    )
+    lower = _INITIAL_BACKFILL_MONTH if source_id in _HISTORICAL_SOURCE_IDS else YearMonth(
+        start.year, start.month
+    )
+    upper = YearMonth(end.year, end.month)
+    completed: set[YearMonth] = set()
+    for partition_key, raw in rows:
+        try:
+            value = json.loads(raw)
+            month = YearMonth.from_value(str(partition_key)[len(prefix) :])
+        except (TypeError, ValueError):
+            continue
+        if isinstance(value, dict) and value.get("status") == "completed" and lower <= month <= upper:
+            completed.add(month)
+    return tuple(sorted(completed))
+
+
+def _observe_checkpointed_facts(
+    db: Database,
+    source_id: str,
+    operation: str | None,
+    months: tuple[YearMonth, ...],
+    run: RunContext,
+    progress: ProgressCallback,
+) -> None:
+    metric_prefix = _OPERATION_METRIC_PREFIX.get(operation or "")
+    if metric_prefix is None:
+        return
+    for month in months:
+        progress()
+        db.connection.execute(
+            """
+            insert into run_fact_observation (run_id, family, observation_key, observed_at)
+            select ?, 'tourism', observation_key, ?
+            from fact_tourism_demand
+            where source_id = ? and metric_code like ? and period like ?
+            on conflict do nothing
+            """,
+            [
+                run.run_id,
+                datetime.now(UTC),
+                source_id,
+                f"{metric_prefix}.%",
+                f"{month}%",
+            ],
+        )
 
 
 def _record_month_checkpoint(

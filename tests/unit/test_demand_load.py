@@ -105,6 +105,37 @@ def test_historical_backfill_resumes_after_each_completed_month(tmp_path: Path) 
     assert phase == "initial"
     assert [str(month) for month in months] == ["2022-02"]
 
+    first_run = RunContext(
+        uuid4(), "backfill", datetime(2022, 2, 1, tzinfo=UTC), business_date=date(2022, 2, 1)
+    )
+    resumed_run = RunContext(
+        uuid4(), "backfill", datetime(2022, 3, 1, tzinfo=UTC), business_date=date(2022, 3, 1)
+    )
+    record = demand_load_module.DemandRecord(
+        "tourism_data_lab",
+        "locgo_regn_visitr_dd_list.visitor_count",
+        "count",
+        "2022-01-15",
+        "사하구",
+        "west",
+        123,
+        {},
+        {"baseYmd": "20220115", "signguNm": "사하구", "touNum": 123},
+    )
+    demand_load_module._persist_record(
+        db, record, "revision", uuid4(), first_run, lambda: None
+    )
+    completed = demand_load_module._eligible_checkpointed_months(
+        db, spec.source_id, operation, date(2022, 1, 1), date(2022, 2, 28), "backfill"
+    )
+    demand_load_module._observe_checkpointed_facts(
+        db, spec.source_id, operation, completed, resumed_run, lambda: None
+    )
+
+    assert db.query(
+        "select run_id from run_fact_observation order by run_id"
+    ) == sorted([(first_run.run_id,), (resumed_run.run_id,)])
+
 
 def test_demand_row_maps_saha_stay_intensity_to_west() -> None:
     """A district mapping regression would put West Busan demand in the wrong region."""
