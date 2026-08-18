@@ -54,6 +54,65 @@ def test_iter_pages_sends_registered_parameters_on_every_page() -> None:
     ]
 
 
+def test_iter_pages_completes_each_registered_parameter_partition() -> None:
+    """Catches only the first Busan district being collected or later pages losing its filter."""
+    requests: list[tuple[str, int]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        authority = request.url.params["cond[OPN_ATMY_GRP_CD::EQ]"]
+        page_no = int(request.url.params["pageNo"])
+        requests.append((authority, page_no))
+        total = 2 if authority == "3340000" else 1
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"MNG_NO": f"{authority}-{page_no}"}],
+                "totalCount": total,
+                "pageNo": page_no,
+                "numOfRows": 1,
+            },
+        )
+
+    pager = DataGoKrPager.for_test(httpx.MockTransport(handler), "test-key")
+    spec = SourceSpec(
+        "lodgings",
+        "https://example.test/lodgings",
+        page_size=1,
+        operation="info",
+        parameter_partitions={
+            "cond[OPN_ATMY_GRP_CD::EQ]": ("3340000", "3360000")
+        },
+    )
+
+    pages = list(pager.iter_pages(spec, {}))
+
+    assert len(pages) == 3
+    assert requests == [("3340000", 1), ("3340000", 2), ("3360000", 1)]
+
+
+def test_iter_pages_rejects_a_caller_override_of_partition_parameter() -> None:
+    """Catches a caller bypassing the reviewed exhaustive authority-code partition."""
+    pager = DataGoKrPager.for_test(
+        httpx.MockTransport(lambda request: httpx.Response(500)), "test-key"
+    )
+    spec = SourceSpec(
+        "lodgings",
+        "https://example.test/lodgings",
+        operation="info",
+        parameter_partitions={
+            "cond[OPN_ATMY_GRP_CD::EQ]": ("3340000", "3360000")
+        },
+    )
+
+    with pytest.raises(ValueError, match="partition parameter"):
+        list(
+            pager.iter_pages(
+                spec,
+                {"cond[OPN_ATMY_GRP_CD::EQ]": "6110000"},
+            )
+        )
+
+
 def test_iter_pages_rejects_a_caller_override_of_required_parameters() -> None:
     """Catches a caller replacing the reviewed Busan jurisdiction constraint."""
     calls = 0

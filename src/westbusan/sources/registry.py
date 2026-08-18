@@ -13,6 +13,10 @@ from pathlib import Path
 import xmltodict
 import yaml
 
+from westbusan.accommodation.contracts import (
+    BUSAN_AUTHORITY_PARAMETER,
+    BUSAN_DISTRICT_AUTHORITY_CODES,
+)
 from westbusan.db import Database
 from westbusan.http import (
     AuthenticationError,
@@ -190,6 +194,10 @@ def probe_source(spec: SourceSpec, client: SafeHttpClient, db: Database) -> Sour
 
     params: dict[str, object] = {
         **spec.required_parameters,
+        **{
+            key: values[0]
+            for key, values in spec.parameter_partitions.items()
+        },
         "serviceKey": service_key,
         "pageNo": 1,
         "numOfRows": 1,
@@ -252,6 +260,19 @@ def _source_spec(entry: object) -> SourceSpec:
     required_parameters = entry.get("required_parameters", {})
     if not _valid_parameters(required_parameters):
         raise ValueError(f"{source_id}: required_parameters must be a mapping")
+    parameter_partitions = entry.get("parameter_partitions", {})
+    if not _valid_parameter_partitions(parameter_partitions):
+        raise ValueError(f"{source_id}: parameter_partitions must map names to values")
+    group = _string(entry, "group", "")
+    if group == "accommodation" and url.startswith(
+        "https://apis.data.go.kr/1741000/"
+    ) and tuple(
+        str(value)
+        for value in parameter_partitions.get(BUSAN_AUTHORITY_PARAMETER, [])
+    ) != BUSAN_DISTRICT_AUTHORITY_CODES:
+        raise ValueError(
+            f"{source_id}: accommodation requires the exact 16-code Busan authority partition"
+        )
     return SourceSpec(
         source_id=source_id,
         url=url,
@@ -259,12 +280,15 @@ def _source_spec(entry: object) -> SourceSpec:
         format_parameter=_string(entry, "format_parameter", "returnType"),
         format_value=_string(entry, "format_value", "json"),
         operation=_optional_string(entry, "operation"),
-        group=_string(entry, "group", ""),
+        group=group,
         required_for_publication=_boolean(entry, "required_for_publication", False),
         cadence=_string(entry, "cadence", "daily"),
         additive_facility=_boolean(entry, "additive_facility", True),
         source_type=_string(entry, "source_type", "api"),
         required_parameters=dict(required_parameters),
+        parameter_partitions={
+            str(key): tuple(values) for key, values in parameter_partitions.items()
+        },
         response_row_path=_optional_string(entry, "response_row_path"),
         portal_detail_url=_optional_string(entry, "portal_detail_url"),
         inspection_required=_boolean(entry, "inspection_required", False),
@@ -377,6 +401,17 @@ def _error_detail(error: Exception) -> dict[str, object]:
 def _valid_parameters(value: object) -> bool:
     return isinstance(value, Mapping) and all(
         isinstance(key, str) and key.strip() for key in value
+    )
+
+
+def _valid_parameter_partitions(value: object) -> bool:
+    return isinstance(value, Mapping) and all(
+        isinstance(key, str)
+        and key.strip()
+        and isinstance(values, list)
+        and bool(values)
+        and all(isinstance(item, (str, int)) and not isinstance(item, bool) for item in values)
+        for key, values in value.items()
     )
 
 

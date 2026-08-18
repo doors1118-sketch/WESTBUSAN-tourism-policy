@@ -33,11 +33,53 @@ def test_registry_contains_all_accommodation_sources() -> None:
 def test_every_accommodation_source_is_scoped_to_busan_current_stock() -> None:
     """Catches a nationwide current-state API being treated as Busan history."""
     registry = SourceRegistry.load(Path("config/sources.yaml"))
+    expected_authority_codes = (
+        "3250000",
+        "3260000",
+        "3270000",
+        "3280000",
+        "3290000",
+        "3300000",
+        "3310000",
+        "3320000",
+        "3330000",
+        "3340000",
+        "3350000",
+        "3360000",
+        "3370000",
+        "3380000",
+        "3390000",
+        "3400000",
+    )
 
     for source_id in registry.ids(group="accommodation"):
         source = registry.get(source_id)
-        assert source.required_parameters == {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+        assert source.required_parameters == {}
+        assert getattr(source, "parameter_partitions", None) == {
+            "cond[OPN_ATMY_GRP_CD::EQ]": expected_authority_codes
+        }
         assert source.temporal_semantics == "current_snapshot_only"
+
+
+def test_registry_rejects_an_incomplete_accommodation_authority_partition(
+    tmp_path: Path,
+) -> None:
+    """Catches a configuration edit silently omitting one Busan district."""
+    path = tmp_path / "sources.yaml"
+    path.write_text(
+        """sources:
+  - source_id: lodgings
+    url: https://apis.data.go.kr/1741000/lodgings
+    operation: info
+    group: accommodation
+    parameter_partitions:
+      cond[OPN_ATMY_GRP_CD::EQ]: [3250000]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exact 16-code Busan authority partition"):
+        SourceRegistry.load(path)
 
 
 def test_registry_configures_odcloud_file_detail_profile() -> None:
@@ -54,6 +96,33 @@ def test_registry_loads_source_metadata_from_fixture() -> None:
     assert source.endpoint_url == "https://example.test/service/info"
     assert source.cadence == "daily"
     assert source.response_row_path == "data"
+
+
+def test_accommodation_probe_is_scoped_to_a_reviewed_authority_partition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches the readiness probe calling the nationwide endpoint without a Busan filter."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-service-key")
+    source = SourceRegistry.load(Path("config/sources.yaml")).get("lodgings")
+    db = Database(tmp_path / "status.duckdb", Path("sql"))
+    db.migrate()
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.url.params)
+        return httpx.Response(
+            200,
+            json={"data": [], "totalCount": 0, "pageNo": 1, "numOfRows": 1},
+        )
+
+    client = SafeHttpClient(
+        httpx.Client(transport=httpx.MockTransport(handler)), sleeper=lambda _: None
+    )
+
+    status = probe_source(source, client, db)
+
+    assert status.status == "EMPTY"
+    assert captured["cond[OPN_ATMY_GRP_CD::EQ]"] == "3250000"
 
 
 def test_registry_rejects_unknown_source_id() -> None:

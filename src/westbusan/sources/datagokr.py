@@ -103,14 +103,29 @@ class DataGoKrPager:
         for key, required_value in spec.required_parameters.items():
             if key in base_params and base_params[key] != required_value:
                 raise ValueError(f"caller cannot override required parameter: {key}")
-        yield from self.iter_url(
-            spec.endpoint_url,
-            {**dict(spec.required_parameters), **base_params},
-            page_size=spec.page_size,
-            format_parameter=spec.format_parameter,
-            format_value=spec.format_value,
-            include_empty=include_empty,
-        )
+        for key in spec.parameter_partitions:
+            if key in base_params:
+                raise ValueError(f"caller cannot override partition parameter: {key}")
+        parameter_sets: list[dict[str, object]] = [{}]
+        for key, values in spec.parameter_partitions.items():
+            parameter_sets = [
+                {**parameters, key: value}
+                for parameters in parameter_sets
+                for value in values
+            ]
+        for partition_parameters in parameter_sets:
+            yield from self.iter_url(
+                spec.endpoint_url,
+                {
+                    **dict(spec.required_parameters),
+                    **partition_parameters,
+                    **base_params,
+                },
+                page_size=spec.page_size,
+                format_parameter=spec.format_parameter,
+                format_value=spec.format_value,
+                include_empty=include_empty,
+            )
 
     def iter_url(
         self,

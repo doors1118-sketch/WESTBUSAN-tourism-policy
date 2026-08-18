@@ -14,8 +14,27 @@ from westbusan.orchestrator import Pipeline
 from westbusan.quality.checks import run_quality_suite
 from westbusan.sources.registry import SourceRegistry
 
+BUSAN_DISTRICT_AUTHORITY_CODES = (
+    "3250000",
+    "3260000",
+    "3270000",
+    "3280000",
+    "3290000",
+    "3300000",
+    "3310000",
+    "3320000",
+    "3330000",
+    "3340000",
+    "3350000",
+    "3360000",
+    "3370000",
+    "3380000",
+    "3390000",
+    "3400000",
+)
 
-def _official_row(record_id: str, jurisdiction: str | None = "6260000") -> dict[str, str]:
+
+def _official_row(record_id: str, jurisdiction: str | None = "3340000") -> dict[str, str]:
     row = {
         "MNG_NO": record_id,
         "BPLC_NM": f"공식숙박-{record_id}",
@@ -72,7 +91,9 @@ def _pipeline(
                 group="accommodation",
                 required_for_publication=True,
                 page_size=page_size,
-                required_parameters={"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"},
+                parameter_partitions={
+                    "cond[OPN_ATMY_GRP_CD::EQ]": ("3340000",)
+                },
                 temporal_semantics="current_snapshot_only",
             ),
         )
@@ -84,6 +105,180 @@ def _pipeline(
     assert run is not None
     logger = orchestrator_module._JsonlLogger(tmp_path / "logs", date(2026, 8, 16))
     return pipeline, run, logger
+
+
+def _use_current_busan_authority_partitions(
+    pipeline: Pipeline, source_id: str = "lodgings"
+) -> None:
+    pipeline.registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id,
+                f"https://apis.data.go.kr/1741000/{source_id}",
+                operation="info",
+                group="accommodation",
+                required_for_publication=True,
+                page_size=100,
+                parameter_partitions={
+                    "cond[OPN_ATMY_GRP_CD::EQ]": BUSAN_DISTRICT_AUTHORITY_CODES
+                },
+                temporal_semantics="current_snapshot_only",
+            ),
+        )
+    )
+
+
+def test_collector_rejects_the_obsolete_city_level_authority_code(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches the provider's obsolete zero-row 6260000 filter being restored."""
+    pipeline, run, logger = _pipeline(tmp_path)
+    pipeline.registry = SourceRegistry(
+        (
+            SourceSpec(
+                "lodgings",
+                "https://apis.data.go.kr/1741000/lodgings",
+                operation="info",
+                group="accommodation",
+                required_for_publication=True,
+                required_parameters={
+                    "cond[OPN_ATMY_GRP_CD::EQ]": "6260000"
+                },
+                temporal_semantics="current_snapshot_only",
+            ),
+        )
+    )
+
+    class Client:
+        def get(self, endpoint: str, parameters: dict[str, object]) -> HttpResult:
+            return HttpResult(200, _response([], total=0), "application/json")
+
+    monkeypatch.setattr(orchestrator_module, "SafeHttpClient", Client)
+
+    with pytest.raises(SchemaError, match="reviewed Busan jurisdiction filter"):
+        pipeline._collect_accommodation(run, "lodgings", date(2026, 8, 16), logger)
+
+
+def test_collector_reconciles_all_current_busan_authority_partitions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches a city-level code collecting zero rows or shard totals being reconciled as one page set."""
+    pipeline, run, logger = _pipeline(tmp_path)
+    _use_current_busan_authority_partitions(pipeline)
+    requests: list[str] = []
+
+    class Client:
+        def get(self, endpoint: str, parameters: dict[str, object]) -> HttpResult:
+            authority = str(parameters["cond[OPN_ATMY_GRP_CD::EQ]"])
+            requests.append(authority)
+            rows = (
+                [_official_row(f"ROW-{authority}", authority)]
+                if authority in {"3340000", "3360000"}
+                else []
+            )
+            return HttpResult(
+                200,
+                _response(rows, total=len(rows), page_size=100),
+                "application/json",
+            )
+
+    monkeypatch.setattr(orchestrator_module, "SafeHttpClient", Client)
+
+    loaded = pipeline._collect_accommodation(
+        run, "lodgings", date(2026, 8, 16), logger
+    )
+
+    assert loaded == 2
+    assert requests == list(BUSAN_DISTRICT_AUTHORITY_CODES)
+    assert pipeline.db.query(
+        """select jurisdiction_code from staging_license_snapshot
+           order by jurisdiction_code"""
+    ) == [("3340000",), ("3360000",)]
+    assert pipeline.db.scalar(
+        "select count(*) from accommodation_collection_audit"
+    ) == 16
+    reconciliation = next(
+        check
+        for check in run_quality_suite(pipeline.db, run.run_id).checks
+        if check.name == "raw_total_matches_staging" and check.source_id == "lodgings"
+    )
+    assert reconciliation.status == "passed"
+    assert reconciliation.actual[0]["raw_total"] == 2
+    assert reconciliation.actual[0]["target_rows"] == 2
+
+
+def test_quality_rejects_missing_empty_authority_partition_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches deleted zero-row shard evidence being hidden by an unchanged aggregate total."""
+    pipeline, run, logger = _pipeline(tmp_path)
+    _use_current_busan_authority_partitions(pipeline)
+
+    class Client:
+        def get(self, endpoint: str, parameters: dict[str, object]) -> HttpResult:
+            authority = str(parameters["cond[OPN_ATMY_GRP_CD::EQ]"])
+            rows = (
+                [_official_row(f"ROW-{authority}", authority)]
+                if authority in {"3340000", "3360000"}
+                else []
+            )
+            return HttpResult(
+                200,
+                _response(rows, total=len(rows), page_size=100),
+                "application/json",
+            )
+
+    monkeypatch.setattr(orchestrator_module, "SafeHttpClient", Client)
+    pipeline._collect_accommodation(run, "lodgings", date(2026, 8, 16), logger)
+    pipeline.db.connection.execute(
+        """delete from raw_artifact
+           where run_id = ?
+             and request_json not like '%3340000%'
+             and request_json not like '%3360000%'""",
+        [run.run_id],
+    )
+
+    reconciliation = next(
+        check
+        for check in run_quality_suite(pipeline.db, run.run_id).checks
+        if check.name == "raw_total_matches_staging" and check.source_id == "lodgings"
+    )
+
+    assert reconciliation.status == "failed"
+
+
+def test_collector_rejects_a_row_from_another_authority_partition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches a provider ignoring one shard filter while returning another Busan district."""
+    pipeline, run, logger = _pipeline(tmp_path)
+    _use_current_busan_authority_partitions(pipeline)
+
+    class Client:
+        def get(self, endpoint: str, parameters: dict[str, object]) -> HttpResult:
+            requested = str(parameters["cond[OPN_ATMY_GRP_CD::EQ]"])
+            rows = (
+                [_official_row("WRONG-SHARD", "3360000")]
+                if requested == "3340000"
+                else []
+            )
+            return HttpResult(
+                200,
+                _response(rows, total=len(rows), page_size=100),
+                "application/json",
+            )
+
+    monkeypatch.setattr(orchestrator_module, "SafeHttpClient", Client)
+
+    with pytest.raises(SchemaError, match="jurisdiction filter"):
+        pipeline._collect_accommodation(run, "lodgings", date(2026, 8, 16), logger)
+
+    assert pipeline.db.query(
+        """select jurisdiction_expected, accepted_count, out_of_scope_count
+           from accommodation_collection_audit
+           where out_of_scope_count > 0"""
+    ) == [("3340000", 0, 1)]
+    assert pipeline.db.scalar("select count(*) from staging_license_snapshot") == 0
 
 
 @pytest.mark.parametrize(
@@ -147,7 +342,7 @@ def test_every_accommodation_source_follows_provider_page_caps_until_total(
     assert evidence["total_count"] == 3
     assert evidence["counts"] == {"accepted": 3, "out_of_scope": 0, "rejected": 0}
     assert evidence["jurisdiction_filter"] == {
-        "expected": "6260000",
+        "expected": "3340000",
         "parameter": "cond[OPN_ATMY_GRP_CD::EQ]",
     }
     assert evidence["operation"] == "info"
@@ -262,8 +457,8 @@ def test_collector_pages_with_busan_filter_and_persists_redacted_request_evidenc
     assert pipeline._collect_accommodation(run, "lodgings", date(2026, 8, 16), logger) == 2
 
     assert [request["cond[OPN_ATMY_GRP_CD::EQ]"] for request in requests] == [
-        "6260000",
-        "6260000",
+        "3340000",
+        "3340000",
     ]
     assert pipeline.db.scalar("select count(*) from staging_license_snapshot") == 2
     raw_requests = [
@@ -275,7 +470,7 @@ def test_collector_pages_with_busan_filter_and_persists_redacted_request_evidenc
     for page_no, metadata in enumerate(raw_requests, start=1):
         assert metadata["endpoint"] == "https://apis.data.go.kr/1741000/lodgings/info"
         assert metadata["parameters"] == {
-            "cond[OPN_ATMY_GRP_CD::EQ]": "6260000",
+            "cond[OPN_ATMY_GRP_CD::EQ]": "3340000",
             "serviceKey": "***",
             "pageNo": page_no,
             "numOfRows": 1,
@@ -284,7 +479,7 @@ def test_collector_pages_with_busan_filter_and_persists_redacted_request_evidenc
         assert "as_of" not in metadata["parameters"]
         assert metadata["jurisdiction_filter"] == {
             "parameter": "cond[OPN_ATMY_GRP_CD::EQ]",
-            "expected": "6260000",
+            "expected": "3340000",
         }
         assert metadata["response"]["http_status"] == 200
         assert metadata["response"]["content_type"] == "application/json; charset=utf-8"

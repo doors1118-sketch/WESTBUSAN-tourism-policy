@@ -50,7 +50,7 @@ def test_load_persists_official_semantics_without_using_projected_coordinates_as
             "MNG_NO": "BUSAN-OFFICIAL-1",
             "BPLC_NM": "공식 숙박업소",
             "ROAD_NM_ADDR": "부산광역시 사하구 낙동대로 1",
-            "OPN_ATMY_GRP_CD": "6260000",
+            "OPN_ATMY_GRP_CD": "3340000",
             "LCPMT_YMD": "20200102",
             "SALS_STTS_CD": "01",
             "SALS_STTS_NM": "영업",
@@ -73,7 +73,7 @@ def test_load_persists_official_semantics_without_using_projected_coordinates_as
            from staging_license_snapshot"""
     ) == [
         (
-            "6260000",
+            "3340000",
             "active",
             "01",
             "정상",

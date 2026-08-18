@@ -14,6 +14,7 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import duckdb
 
+from westbusan.accommodation.contracts import BUSAN_DISTRICT_AUTHORITY_SET
 from westbusan.db import Database, ensure_run_rebuildable
 from westbusan.http import SchemaError
 from westbusan.inventory import (
@@ -50,7 +51,6 @@ _FILE_TRANSPORT_SOURCES = frozenset(
     }
 )
 _UNAVAILABLE = frozenset({"AUTH_FAILED", "QUOTA_EXCEEDED", "SPEC_UNRESOLVED", "HTTP_FAILED", "SCHEMA_CHANGED"})
-_BUSAN_AUTHORITY_CODE = "6260000"
 _OFFICIAL_OVERALL_STATUS_CODES = frozenset({"01", "02", "03", "04"})
 _IDENTIFIER_FIELDS = frozenset({"MNG_NO", "MGT_NO", "management_number", "source_record_id", "id"})
 _TOURISM_OPERATION_PREFIXES = {
@@ -117,6 +117,7 @@ class _ArtifactPage:
     declared_schema_fingerprint: str | None
     requested_start: date | None
     requested_end: date | None
+    jurisdiction_expected: str | None
 
 
 def run_quality_suite(
@@ -382,6 +383,13 @@ def _parse_artifacts(
         )
         requested_start: date | None = None
         requested_end: date | None = None
+        jurisdiction_filter = metadata.get("jurisdiction_filter")
+        jurisdiction_expected = (
+            str(jurisdiction_filter.get("expected"))
+            if isinstance(jurisdiction_filter, dict)
+            and jurisdiction_filter.get("expected") not in (None, "")
+            else None
+        )
         partition = (
             _metadata_partition(metadata) or _partition(source_date)
             if source_id in _BUILDING_SOURCES
@@ -454,6 +462,7 @@ def _parse_artifacts(
                     declared_schema_fingerprint,
                     requested_start,
                     requested_end,
+                    jurisdiction_expected,
                 )
             )
         else:
@@ -477,6 +486,7 @@ def _parse_artifacts(
                     declared_schema_fingerprint,
                     requested_start,
                     requested_end,
+                    jurisdiction_expected,
                 )
             )
     return pages
@@ -529,7 +539,7 @@ def _raw_contract_checks(db: Database, run_id: UUID, source_id: str, pages: list
             ),
         ]
     else:
-        checks = [integrity, structure, _schema_check(db, source_id, data_pages, statuses, severity), _reconciliation_check(db, run_id, source_id, data_pages, severity)]
+        checks = [integrity, structure, _schema_check(db, source_id, data_pages, statuses, severity), _reconciliation_check(db, run_id, source_id, data_pages, statuses, severity)]
     if source_id in _TOURISM_SOURCES:
         checks.append(_date_parse_check(db, run_id, source_id, pages, severity))
     return checks
@@ -875,11 +885,32 @@ def _schema_baseline(
     return str(rows[0][0]) if rows else None
 
 
-def _reconciliation_check(db: Database, run_id: UUID, source_id: str, pages: list[_ArtifactPage], severity: Severity) -> CheckResult:
+def _reconciliation_check(
+    db: Database,
+    run_id: UUID,
+    source_id: str,
+    pages: list[_ArtifactPage],
+    statuses: list[tuple[str, dict[str, object]]],
+    severity: Severity,
+) -> CheckResult:
     if any(page.error or page.total_count is None or page.page_no is None for page in pages):
         return CheckResult("raw_total_matches_staging", "failed", "MISSING_PAGE_TOTAL_OR_PAGE_NUMBER", "complete raw page set reconciled to target", severity, source_id, _target_table(source_id), {})
     if source_id in _BUILDING_SOURCES:
         return _building_reconciliation_check(db, run_id, source_id, pages, severity)
+    expected_authorities = _expected_authority_contract(statuses)
+    actual_authorities = {page.jurisdiction_expected for page in pages}
+    if source_id in _ACCOMMODATION_SOURCES and (
+        len(actual_authorities) > 1
+        or (expected_authorities is not None and len(expected_authorities) > 1)
+    ):
+        return _accommodation_reconciliation_check(
+            db,
+            run_id,
+            source_id,
+            pages,
+            expected_authorities,
+            severity,
+        )
     groups: dict[tuple[str, str | None], list[_ArtifactPage]] = defaultdict(list)
     for page in pages:
         groups[(page.operation, page.partition)].append(page)
@@ -894,6 +925,106 @@ def _reconciliation_check(db: Database, run_id: UUID, source_id: str, pages: lis
         outcomes.append({"operation": operation, "partition": partition, "raw_total": expected, "page_numbers": page_numbers, "expected_pages": expected_pages, "target_rows": actual, "target_table": _target_table(source_id)})
     passed = all(item["raw_total"] is not None and item["page_numbers"] == item["expected_pages"] and item["target_rows"] == item["raw_total"] for item in outcomes)
     return CheckResult("raw_total_matches_staging", "passed" if passed else "failed", outcomes, "raw total equals run-scoped target rows for each source/operation/partition", severity, source_id, _target_table(source_id), {"partitions": outcomes})
+
+
+def _accommodation_reconciliation_check(
+    db: Database,
+    run_id: UUID,
+    source_id: str,
+    pages: list[_ArtifactPage],
+    expected_authorities: set[str] | None,
+    severity: Severity,
+) -> CheckResult:
+    groups: dict[tuple[str, str | None], list[_ArtifactPage]] = defaultdict(list)
+    for page in pages:
+        groups[(page.operation, page.partition)].append(page)
+    outcomes: list[dict[str, object]] = []
+    actual_authorities = {
+        page.jurisdiction_expected
+        for page in pages
+        if page.jurisdiction_expected is not None
+    }
+    passed = (
+        expected_authorities is not None
+        and actual_authorities == expected_authorities
+    )
+    for (operation, partition), grouped in sorted(groups.items()):
+        shard_groups: dict[str | None, list[_ArtifactPage]] = defaultdict(list)
+        for page in grouped:
+            shard_groups[page.jurisdiction_expected].append(page)
+        shard_outcomes: list[dict[str, object]] = []
+        raw_total = 0
+        for authority, shard_pages in sorted(
+            shard_groups.items(), key=lambda item: str(item[0])
+        ):
+            totals = {page.total_count for page in shard_pages}
+            sizes = {page.page_size for page in shard_pages}
+            total = next(iter(totals)) if len(totals) == 1 else None
+            page_size = next(iter(sizes)) if len(sizes) == 1 else None
+            page_numbers = sorted(
+                page.page_no for page in shard_pages if page.page_no is not None
+            )
+            expected_pages = (
+                list(range(1, _expected_page_count(total, page_size) + 1))
+                if total is not None and page_size is not None
+                else []
+            )
+            raw_rows = sum(len(page.rows or []) for page in shard_pages)
+            shard_passed = (
+                authority is not None
+                and total is not None
+                and page_numbers == expected_pages
+                and raw_rows == total
+            )
+            passed = passed and shard_passed
+            if total is not None:
+                raw_total += total
+            shard_outcomes.append(
+                {
+                    "jurisdiction_expected": authority,
+                    "raw_total": total,
+                    "raw_rows": raw_rows,
+                    "page_numbers": page_numbers,
+                    "expected_pages": expected_pages,
+                }
+            )
+        target_rows = _target_count(db, run_id, source_id, operation, partition)
+        passed = passed and target_rows == raw_total
+        outcomes.append(
+            {
+                "operation": operation,
+                "partition": partition,
+                "raw_total": raw_total,
+                "target_rows": target_rows,
+                "target_table": _target_table(source_id),
+                "jurisdictions": shard_outcomes,
+            }
+        )
+    return CheckResult(
+        "raw_total_matches_staging",
+        "passed" if passed else "failed",
+        outcomes,
+        "every jurisdiction shard reconciles and their total equals run-scoped target rows",
+        severity,
+        source_id,
+        _target_table(source_id),
+        {"partitions": outcomes},
+    )
+
+
+def _expected_authority_contract(
+    statuses: list[tuple[str, dict[str, object]]],
+) -> set[str] | None:
+    for _, detail in reversed(statuses):
+        jurisdiction_filter = detail.get("jurisdiction_filter")
+        if not isinstance(jurisdiction_filter, dict):
+            continue
+        expected = jurisdiction_filter.get("expected")
+        if isinstance(expected, list) and expected:
+            return {str(value) for value in expected}
+        if isinstance(expected, str) and expected:
+            return {expected}
+    return None
 
 
 def _building_reconciliation_check(
@@ -1116,7 +1247,9 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
         source_rows = by_source[source_id]
         count = len(source_rows)
         checks.append(CheckResult("busan_rows_present", "passed" if count else "failed", count, ">0 after READY accommodation source", "required", source_id, "staging_license_snapshot", {"run_id": str(run_id), "staged_row_count": count}))
-        jurisdiction_count = sum(row[5] == _BUSAN_AUTHORITY_CODE for row in source_rows)
+        jurisdiction_count = sum(
+            row[5] in BUSAN_DISTRICT_AUTHORITY_SET for row in source_rows
+        )
         date_count = sum(
             row[6] is not None
             and row[7] == "parsed"
@@ -1144,7 +1277,7 @@ def _accommodation_checks(db: Database, run_id: UUID, source_ids: list[str]) -> 
                     source_id,
                     jurisdiction_count,
                     count,
-                    "OPN_ATMY_GRP_CD=6260000 for every accepted row",
+                    "OPN_ATMY_GRP_CD is one of the 16 reviewed Busan district authority codes",
                     run_id,
                 ),
                 _coverage_check(

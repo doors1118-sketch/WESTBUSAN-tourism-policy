@@ -11,7 +11,7 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
-    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    parameter_partitions: {"cond[OPN_ATMY_GRP_CD::EQ]": ["3250000", "3260000", "3270000", "3280000", "3290000", "3300000", "3310000", "3320000", "3330000", "3340000", "3350000", "3360000", "3370000", "3380000", "3390000", "3400000"]}
     temporal_semantics: current_snapshot_only
   - source_id: tourist_accommodations
     url: https://apis.data.go.kr/1741000/tourist_accommodations
@@ -23,7 +23,7 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
-    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    parameter_partitions: {"cond[OPN_ATMY_GRP_CD::EQ]": ["3250000", "3260000", "3270000", "3280000", "3290000", "3300000", "3310000", "3320000", "3330000", "3340000", "3350000", "3360000", "3370000", "3380000", "3390000", "3400000"]}
     temporal_semantics: current_snapshot_only
   - source_id: foreigner_city_homestays
     url: https://apis.data.go.kr/1741000/foreigner_city_homestays
@@ -35,7 +35,7 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
-    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    parameter_partitions: {"cond[OPN_ATMY_GRP_CD::EQ]": ["3250000", "3260000", "3270000", "3280000", "3290000", "3300000", "3310000", "3320000", "3330000", "3340000", "3350000", "3360000", "3370000", "3380000", "3390000", "3400000"]}
     temporal_semantics: current_snapshot_only
   - source_id: rural_homestays
     url: https://apis.data.go.kr/1741000/rural_homestays
@@ -47,7 +47,7 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
-    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    parameter_partitions: {"cond[OPN_ATMY_GRP_CD::EQ]": ["3250000", "3260000", "3270000", "3280000", "3290000", "3300000", "3310000", "3320000", "3330000", "3340000", "3350000", "3360000", "3370000", "3380000", "3390000", "3400000"]}
     temporal_semantics: current_snapshot_only
   - source_id: hanok_experience
     url: https://apis.data.go.kr/1741000/hanok_experience
@@ -59,7 +59,7 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
-    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    parameter_partitions: {"cond[OPN_ATMY_GRP_CD::EQ]": ["3250000", "3260000", "3270000", "3280000", "3290000", "3300000", "3310000", "3320000", "3330000", "3340000", "3350000", "3360000", "3370000", "3380000", "3390000", "3400000"]}
     temporal_semantics: current_snapshot_only
   - source_id: tourist_pensions
     url: https://apis.data.go.kr/1741000/tourist_pensions
@@ -71,7 +71,7 @@ sources:
     format_parameter: returnType
     format_value: json
     response_row_path: data
-    required_parameters: {"cond[OPN_ATMY_GRP_CD::EQ]": "6260000"}
+    parameter_partitions: {"cond[OPN_ATMY_GRP_CD::EQ]": ["3250000", "3260000", "3270000", "3280000", "3290000", "3300000", "3310000", "3320000", "3330000", "3340000", "3350000", "3360000", "3370000", "3380000", "3390000", "3400000"]}
     temporal_semantics: current_snapshot_only
     additive_facility: false
 

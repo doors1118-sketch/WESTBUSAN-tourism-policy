@@ -1575,7 +1575,7 @@ def _valid_run(
     for source_id in _CORE_ACCOMMODATION_SOURCES:
         official_row = {
             "MNG_NO": "L1",
-            "OPN_ATMY_GRP_CD": "6260000",
+            "OPN_ATMY_GRP_CD": "3340000",
             "LCPMT_YMD": "20200102",
             "SALS_STTS_CD": "01",
             "SALS_STTS_NM": "영업",
@@ -1637,7 +1637,7 @@ def _valid_run(
             detailed_status_name, source_payload_json, record_hash
         ) values (
             'lodgings', ?, ?, ?, ?, 'resolved', 'west', '사하구', 1, 'reported',
-            '6260000', '2020-01-02', 'parsed', 'missing', '20250831',
+            '3340000', '2020-01-02', 'parsed', 'missing', '20250831',
             '2025-08-31', 'parsed', '2025-09-01', 'parsed',
             '01', '영업', 'active', '01', '정상', '{}', ?
         )
@@ -1657,7 +1657,7 @@ def _valid_run(
                detailed_status_code, detailed_status_name, source_payload_json,
                record_hash
            ) values (?, 'lodgings', ?, '2026-08-16', 1, 'resolved', 'west',
-                     '사하구', 1, 'reported', '6260000', '2020-01-02',
+                     '사하구', 1, 'reported', '3340000', '2020-01-02',
                      'parsed', 'missing', '20250831', '2025-08-31', 'parsed',
                      '2025-09-01', 'parsed', '01', '영업', 'active', '01',
                      '정상', '{}', ?)

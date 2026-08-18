@@ -20,6 +20,10 @@ import pyarrow as pa
 from pyarrow import csv as arrow_csv
 from pyarrow import parquet
 
+from westbusan.accommodation.contracts import (
+    BUSAN_AUTHORITY_PARAMETER,
+    BUSAN_DISTRICT_AUTHORITY_SET,
+)
 from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.analytics.build import build_marts, mart_manifest_is_valid
@@ -62,8 +66,7 @@ _OPERATIONAL_ERRORS = (
     TypeError,
     ValueError,
 )
-_ACCOMMODATION_JURISDICTION_PARAMETER = "cond[OPN_ATMY_GRP_CD::EQ]"
-_BUSAN_JURISDICTION_CODE = "6260000"
+_ACCOMMODATION_JURISDICTION_PARAMETER = BUSAN_AUTHORITY_PARAMETER
 
 
 @dataclass(frozen=True, slots=True)
@@ -1070,7 +1073,7 @@ class Pipeline:
     ) -> int:
         self._refresh_lease(run.run_id)
         spec = self.registry.get(source_id)
-        jurisdiction_parameter, jurisdiction_expected = _jurisdiction_contract(spec)
+        jurisdiction_parameter, jurisdiction_values = _jurisdiction_contract(spec)
         service_key = self.settings.service_key.get_secret_value()
         if not service_key:
             raise AuthenticationError("DATA_GO_KR_SERVICE_KEY is not configured")
@@ -1105,13 +1108,21 @@ class Pipeline:
             checkpoint_evidence, dict
         ):
             raise SchemaError("accommodation checkpoint evidence is malformed")
-        received_rows = int(
-            (checkpoint_evidence or {}).get("received_rows", 0)
-        )
-        expected_total_value = (checkpoint_evidence or {}).get("total_count")
-        expected_total = (
-            int(expected_total_value) if expected_total_value is not None else None
-        )
+        evidence = checkpoint_evidence or {}
+        jurisdiction_index = int(evidence.get("jurisdiction_index", 0))
+        if jurisdiction_index < 0 or jurisdiction_index >= len(jurisdiction_values):
+            raise SchemaError("accommodation checkpoint jurisdiction index is invalid")
+        if len(jurisdiction_values) == 1:
+            completed_received_rows = 0
+            completed_expected_total = 0
+            received_rows = int(evidence.get("received_rows", 0))
+            expected_total_value = evidence.get("total_count")
+        else:
+            completed_received_rows = int(evidence.get("received_rows", 0))
+            completed_expected_total = int(evidence.get("total_count", 0))
+            received_rows = int(evidence.get("partition_received_rows", 0))
+            expected_total_value = evidence.get("partition_total_count")
+        expected_total = int(expected_total_value) if expected_total_value is not None else None
         if next_page > 1 and expected_total is None:
             raise SchemaError(
                 "nonfirst accommodation checkpoint lacks cumulative paging evidence"
@@ -1119,14 +1130,16 @@ class Pipeline:
         client = SafeHttpClient()
         page_no = next_page
         loaded = 0
-        accepted_total = received_rows
+        accepted_total = completed_received_rows + received_rows
         out_of_scope_total = 0
         rejected_total = 0
         started = monotonic()
         while True:
             self._refresh_lease(run.run_id)
+            jurisdiction_expected = jurisdiction_values[jurisdiction_index]
             parameters = {
                 **dict(spec.required_parameters),
+                jurisdiction_parameter: jurisdiction_expected,
                 "serviceKey": service_key,
                 "pageNo": page_no,
                 "numOfRows": spec.page_size,
@@ -1250,14 +1263,39 @@ class Pipeline:
                     page_no + 1,
                     run.run_id,
                     evidence={
-                        "received_rows": received_rows,
-                        "total_count": expected_total,
+                        "jurisdiction_index": jurisdiction_index,
+                        "received_rows": completed_received_rows,
+                        "total_count": completed_expected_total,
+                        "partition_received_rows": received_rows,
+                        "partition_total_count": expected_total,
                     },
                 )
             if completed:
-                break
+                completed_received_rows += received_rows
+                completed_expected_total += expected_total
+                jurisdiction_index += 1
+                if jurisdiction_index == len(jurisdiction_values):
+                    break
+                page_no = 1
+                received_rows = 0
+                expected_total = None
+                self._checkpoint(
+                    source_id,
+                    partition,
+                    "running",
+                    page_no,
+                    run.run_id,
+                    evidence={
+                        "jurisdiction_index": jurisdiction_index,
+                        "received_rows": completed_received_rows,
+                        "total_count": completed_expected_total,
+                        "partition_received_rows": 0,
+                        "partition_total_count": None,
+                    },
+                )
+                continue
             page_no += 1
-        status = "READY" if received_rows else "EMPTY"
+        status = "READY" if completed_received_rows else "EMPTY"
         self._complete_source_partition(
             run,
             source_id,
@@ -1267,12 +1305,16 @@ class Pipeline:
             {
                 "operation": spec.operation,
                 "partition": as_of.isoformat(),
-                "row_count": received_rows,
-                "received_rows": received_rows,
-                "total_count": expected_total,
+                "row_count": completed_received_rows,
+                "received_rows": completed_received_rows,
+                "total_count": completed_expected_total,
                 "jurisdiction_filter": {
                     "parameter": jurisdiction_parameter,
-                    "expected": jurisdiction_expected,
+                    "expected": (
+                        jurisdiction_values[0]
+                        if len(jurisdiction_values) == 1
+                        else list(jurisdiction_values)
+                    ),
                 },
                 "counts": {
                     "accepted": accepted_total,
@@ -1419,13 +1461,22 @@ class Pipeline:
             status="HTTP_FAILED",
         )
 
-def _jurisdiction_contract(spec: SourceSpec) -> tuple[str, str]:
-    value = spec.required_parameters.get(_ACCOMMODATION_JURISDICTION_PARAMETER)
-    if str(value) != _BUSAN_JURISDICTION_CODE:
-        raise SchemaError(
-            "accommodation source is missing the reviewed Busan jurisdiction filter"
+def _jurisdiction_contract(spec: SourceSpec) -> tuple[str, tuple[str, ...]]:
+    values = tuple(
+        str(value)
+        for value in spec.parameter_partitions.get(
+            _ACCOMMODATION_JURISDICTION_PARAMETER, ()
         )
-    return _ACCOMMODATION_JURISDICTION_PARAMETER, _BUSAN_JURISDICTION_CODE
+    )
+    if (
+        values
+        and len(values) == len(set(values))
+        and all(value in BUSAN_DISTRICT_AUTHORITY_SET for value in values)
+    ):
+        return _ACCOMMODATION_JURISDICTION_PARAMETER, values
+    raise SchemaError(
+        "accommodation source is missing the reviewed Busan jurisdiction filter"
+    )
 
 
 class _JsonlLogger:

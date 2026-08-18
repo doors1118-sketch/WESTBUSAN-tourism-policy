@@ -45,6 +45,7 @@ class SourceSpec:
     inspection_required: bool = False
     immutable_file_hashing: bool = False
     temporal_semantics: str = "unspecified"
+    parameter_partitions: Mapping[str, tuple[object, ...]] = field(default_factory=dict)
 
     @property
     def endpoint_url(self) -> str:
