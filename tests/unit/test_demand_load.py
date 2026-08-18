@@ -75,6 +75,37 @@ def test_collection_plan_respects_current_and_bounded_source_history() -> None:
     assert related[-1] == "2025-04"
 
 
+def test_historical_backfill_resumes_after_each_completed_month(tmp_path: Path) -> None:
+    """A quota failure must not refetch every fully reconciled historical month."""
+    db = Database(tmp_path / "monthly-resume.duckdb", Path("sql"))
+    db.migrate()
+    operation = "locgoRegnVisitrDDList"
+    spec = SourceSpec(
+        "tourism_data_lab",
+        "https://example.test/tourism",
+        operation=operation,
+        group="tourism",
+        required_parameters={"startYmd": "{startYmd}", "endYmd": "{endYmd}"},
+    )
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2022, 3, 1, tzinfo=UTC),
+        business_date=date(2022, 3, 1),
+    )
+    january = demand_load_module.YearMonth(2022, 1)
+    demand_load_module._record_month_checkpoint(
+        db, spec.source_id, operation, january, lambda: None
+    )
+
+    months, phase = demand_load_module._planned_months(
+        spec.source_id, spec, date(2022, 1, 1), date(2022, 2, 28), run, db
+    )
+
+    assert phase == "initial"
+    assert [str(month) for month in months] == ["2022-02"]
+
+
 def test_demand_row_maps_saha_stay_intensity_to_west() -> None:
     """A district mapping regression would put West Busan demand in the wrong region."""
     row = json.loads(
@@ -1124,8 +1155,8 @@ def test_backfill_starts_at_2022_and_persists_two_empty_year_stop_state(
     assert calls == [f"2022{month:02d}" for month in range(1, 13)]
     checkpoint = json.loads(
         db.query(
-            "select checkpoint_json from collection_checkpoint where source_id = ?",
-            ["area_tourism_demand"],
+            "select checkpoint_json from collection_checkpoint where source_id = ? and partition_key = ?",
+            ["area_tourism_demand", "tourism_backfill:areaTarSjrnDsList"],
         )[0][0]
     )
     assert checkpoint["phase"] == "older_yearly"
@@ -1137,8 +1168,8 @@ def test_backfill_starts_at_2022_and_persists_two_empty_year_stop_state(
     assert calls == [f"2021{month:02d}" for month in range(1, 13)]
     checkpoint = json.loads(
         db.query(
-            "select checkpoint_json from collection_checkpoint where source_id = ?",
-            ["area_tourism_demand"],
+            "select checkpoint_json from collection_checkpoint where source_id = ? and partition_key = ?",
+            ["area_tourism_demand", "tourism_backfill:areaTarSjrnDsList"],
         )[0][0]
     )
     assert checkpoint["phase"] == "stopped_after_two_empty_years"
@@ -1389,7 +1420,10 @@ def test_backfill_caps_future_end_at_the_injected_latest_complete_month(
     assert calls[0] == "202201"
     assert calls[-1] == "202601"
     checkpoint = json.loads(
-        db.query("select checkpoint_json from collection_checkpoint")[0][0]
+        db.query(
+            "select checkpoint_json from collection_checkpoint where partition_key = ?",
+            ["tourism_backfill:areaTarSjrnDsList"],
+        )[0][0]
     )
     assert checkpoint["initial_complete_through"] == "2026-01"
 
@@ -1439,6 +1473,9 @@ def test_partial_empty_initial_year_does_not_count_toward_the_two_year_stop(
     )
 
     checkpoint = json.loads(
-        db.query("select checkpoint_json from collection_checkpoint")[0][0]
+        db.query(
+            "select checkpoint_json from collection_checkpoint where partition_key = ?",
+            ["tourism_backfill:areaTarSjrnDsList"],
+        )[0][0]
     )
     assert checkpoint["consecutive_explicitly_empty_years"] == 0

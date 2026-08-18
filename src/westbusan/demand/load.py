@@ -399,6 +399,15 @@ def load_tourism_demand(
                         run,
                         heartbeat,
                     )
+                month_statuses = page_statuses.get(month.year, {}).get(
+                    month.month, []
+                )
+                if month_statuses and all(
+                    status in {"READY", "EMPTY"} for status in month_statuses
+                ):
+                    _record_month_checkpoint(
+                        db, source_id, spec.operation, month, heartbeat
+                    )
             if backfill_phase is not None:
                 _record_backfill_checkpoint(
                     db,
@@ -566,11 +575,16 @@ def _planned_months(
     if checkpoint is None:
         if end < _INITIAL_BACKFILL_MONTH.first_day:
             return (), None
+        planned = tuple(
+            iter_collection_months(
+                source_id, _INITIAL_BACKFILL_MONTH.first_day, end
+            )
+        )
         return (
             tuple(
-                iter_collection_months(
-                    source_id, _INITIAL_BACKFILL_MONTH.first_day, end
-                )
+                month
+                for month in planned
+                if not _month_checkpoint_complete(db, source_id, spec.operation, month)
             ),
             "initial",
         )
@@ -581,13 +595,68 @@ def _planned_months(
         return (), None
     if date(next_year, 1, 1) > end:
         return (), None
+    planned = tuple(
+        iter_collection_months(
+            source_id, date(next_year, 1, 1), min(date(next_year, 12, 31), end)
+        )
+    )
     return (
         tuple(
-            iter_collection_months(
-                source_id, date(next_year, 1, 1), min(date(next_year, 12, 31), end)
-            )
+            month
+            for month in planned
+            if not _month_checkpoint_complete(db, source_id, spec.operation, month)
         ),
         "older_yearly",
+    )
+
+
+def _month_checkpoint_complete(
+    db: Database, source_id: str, operation: str | None, month: YearMonth
+) -> bool:
+    if operation is None:
+        return False
+    rows = db.query(
+        "select checkpoint_json from collection_checkpoint where source_id = ? and partition_key = ?",
+        [source_id, f"tourism_month:{operation}:{month}"],
+    )
+    if not rows:
+        return False
+    try:
+        value = json.loads(rows[0][0])
+    except (TypeError, ValueError):
+        return False
+    return isinstance(value, dict) and value.get("status") == "completed"
+
+
+def _record_month_checkpoint(
+    db: Database,
+    source_id: str,
+    operation: str | None,
+    month: YearMonth,
+    progress: ProgressCallback,
+) -> None:
+    if operation is None:
+        return
+    progress()
+    db.connection.execute(
+        """
+        insert into collection_checkpoint (
+            source_id, partition_key, checkpoint_json, updated_at
+        ) values (?, ?, ?, ?)
+        on conflict (source_id, partition_key) do update set
+            checkpoint_json = excluded.checkpoint_json,
+            updated_at = excluded.updated_at
+        """,
+        [
+            source_id,
+            f"tourism_month:{operation}:{month}",
+            json.dumps(
+                {"status": "completed", "month": str(month)},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            datetime.now(UTC),
+        ],
     )
 
 
