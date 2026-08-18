@@ -8,7 +8,7 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import xmltodict
@@ -151,7 +151,13 @@ def inspection_command(arguments: list[str] | None = None) -> int:
     return 0
 
 
-def probe_source(spec: SourceSpec, client: SafeHttpClient, db: Database) -> SourceStatus:
+def probe_source(
+    spec: SourceSpec,
+    client: SafeHttpClient,
+    db: Database,
+    *,
+    probe_date: date | None = None,
+) -> SourceStatus:
     """Read one row and persist a credential-free source-access classification."""
     spec = _apply_recorded_inspection(spec, db)
     if spec.source_type != "api":
@@ -194,7 +200,9 @@ def probe_source(spec: SourceSpec, client: SafeHttpClient, db: Database) -> Sour
         )
 
     params: dict[str, object] = {
-        **spec.required_parameters,
+        **_resolved_probe_parameters(
+            spec.required_parameters, probe_date or datetime.now(UTC).date()
+        ),
         **{
             key: values[0]
             for key, values in spec.parameter_partitions.items()
@@ -409,6 +417,23 @@ def _valid_parameters(value: object) -> bool:
     return isinstance(value, Mapping) and all(
         isinstance(key, str) and key.strip() for key in value
     )
+
+
+def _resolved_probe_parameters(
+    parameters: Mapping[str, object], as_of: date
+) -> dict[str, object]:
+    """Resolve reviewed date placeholders to the latest fully closed month."""
+    closed_month_end = as_of.replace(day=1) - timedelta(days=1)
+    closed_month_start = closed_month_end.replace(day=1)
+    replacements = {
+        "{baseYm}": closed_month_end.strftime("%Y%m"),
+        "{startYmd}": closed_month_start.strftime("%Y%m%d"),
+        "{endYmd}": closed_month_end.strftime("%Y%m%d"),
+    }
+    return {
+        key: replacements.get(value, value) if isinstance(value, str) else value
+        for key, value in parameters.items()
+    }
 
 
 def _valid_parameter_partitions(value: object) -> bool:

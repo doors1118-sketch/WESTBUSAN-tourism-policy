@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -369,6 +370,53 @@ def test_inspection_records_operation_details_before_probe(tmp_path: Path, monke
         ["unresolved_source"],
     )[0][0]
     assert "https://data.go.kr/detail/example" in detail
+
+
+def test_probe_resolves_reviewed_date_placeholders_to_latest_closed_month(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Catches a live probe sending literal ``{baseYm}`` values to the provider."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-service-key")
+    registry = SourceRegistry.load(Path("tests/fixtures/sources.yaml"))
+    db = Database(tmp_path / "status.duckdb", Path("sql"))
+    db.migrate()
+    record_inspection(
+        registry.get("unresolved_source"),
+        db,
+        operation="selectedOperation",
+        required_parameters={
+            "baseYm": "{baseYm}",
+            "startYmd": "{startYmd}",
+            "endYmd": "{endYmd}",
+        },
+        response_row_path="response.body.items.item",
+        portal_detail_url="https://data.go.kr/detail/example",
+    )
+    captured: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(request.url.params)
+        return httpx.Response(
+            200,
+            json={
+                "response": {
+                    "body": {"items": {"item": [{"id": "one"}]}, "totalCount": 1}
+                }
+            },
+        )
+
+    client = SafeHttpClient(
+        httpx.Client(transport=httpx.MockTransport(handler)), sleeper=lambda _: None
+    )
+
+    status = probe_source(
+        registry.get("unresolved_source"), client, db, probe_date=date(2026, 8, 19)
+    )
+
+    assert status.status == "READY"
+    assert captured["baseYm"] == "202607"
+    assert captured["startYmd"] == "20260701"
+    assert captured["endYmd"] == "20260731"
 
 
 def test_probe_rejects_inspection_response_with_mismatched_row_path(
