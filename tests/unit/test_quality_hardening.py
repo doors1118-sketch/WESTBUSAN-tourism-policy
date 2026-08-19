@@ -18,6 +18,7 @@ from tests.integrity_fixtures import (
 )
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.db import Database
+from westbusan.demand.load import normalize_demand_row
 from westbusan.entity_resolution.match import build_facilities
 from westbusan.http import HttpResult
 from westbusan.models import RunContext, SourceStatus
@@ -1102,12 +1103,19 @@ def test_tourism_reconciliation_scopes_each_monthly_partition(tmp_path: Path) ->
     db = _db(tmp_path)
     run_id = uuid4()
     operation = "locgoRegnVisitrDDList"
-    body = json.dumps(
-        {"data": [{"id": "one"}], "totalCount": 1, "pageNo": 1, "numOfRows": 1}
-    ).encode()
-    page = parse_data_page(body, "application/json")
-    approve_schema_baseline(db, "tourism_data_lab", operation, page.schema_fingerprint)
     for month in ("2026-01", "2026-02"):
+        row = {
+            "baseYmd": f"{month}-15",
+            "signguCode": "26380",
+            "signguNm": "사하구",
+            "touNum": 1,
+        }
+        body = json.dumps(
+            {"data": [row], "totalCount": 1, "pageNo": 1, "numOfRows": 1},
+            ensure_ascii=False,
+        ).encode()
+        page = parse_data_page(body, "application/json")
+        approve_schema_baseline(db, "tourism_data_lab", operation, page.schema_fingerprint)
         artifact_id = uuid4()
         path = tmp_path / f"tourism-{month}.json"
         path.write_bytes(body)
@@ -1121,30 +1129,8 @@ def test_tourism_reconciliation_scopes_each_monthly_partition(tmp_path: Path) ->
             date.fromisoformat(f"{month}-01"),
             artifact_id=artifact_id,
         )
-        db.connection.execute(
-            """
-            insert into fact_tourism_demand (
-                source_id, metric_code, period, district, region_group, dimension_json,
-                dimension_json_hash, source_revision, metric_value, unit,
-                source_payload_json, artifact_id, loaded_run_id, observation_key
-            ) values (?, ?, ?, '사하구', 'west', '{}', ?, 'fixture', 1, 'count',
-                      '{}', ?, ?, ?)
-            """,
-            [
-                "tourism_data_lab",
-                "locgo_regn_visitr_dd_list.visitor_count",
-                f"{month}-15",
-                month,
-                artifact_id,
-                run_id,
-                f"tourism-{month}",
-            ],
-        )
-        db.connection.execute(
-            """insert into run_fact_observation (
-                   run_id, family, observation_key
-               ) values (?, 'tourism', ?)""",
-            [run_id, f"tourism-{month}"],
+        _insert_tourism_fact_from_row(
+            db, run_id, artifact_id, "tourism_data_lab", row, body
         )
     db.record_source_status(
         SourceStatus("tourism_data_lab", datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, run_id)
@@ -1155,6 +1141,126 @@ def test_tourism_reconciliation_scopes_each_monthly_partition(tmp_path: Path) ->
     check = _check(report, "raw_total_matches_staging", "tourism_data_lab")
     assert check.status == "passed"
     assert [row["target_rows"] for row in check.actual] == [1, 1]
+
+
+def test_tourism_reconciliation_excludes_metropolitan_aggregate_from_fact_count(
+    tmp_path: Path,
+) -> None:
+    """The official Busan aggregate is valid raw evidence but not district-grain fact data."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    source_id = "area_tourism_consumption"
+    operation = "areaCulResDemList"
+    rows = [
+        {
+            "baseYm": "202605",
+            "signguCd": "26000",
+            "signguNm": "_",
+            "culResDemIxCd": "1101",
+            "culResDemIxVal": "1.0",
+        },
+        {
+            "baseYm": "202605",
+            "signguCd": "26380",
+            "signguNm": "사하구",
+            "culResDemIxCd": "1101",
+            "culResDemIxVal": "2.0",
+        },
+    ]
+    body = json.dumps(
+        {"data": rows, "totalCount": 2, "pageNo": 1, "numOfRows": 100},
+        ensure_ascii=False,
+    ).encode()
+    page = parse_data_page(body, "application/json")
+    approve_schema_baseline(db, source_id, operation, page.schema_fingerprint)
+    artifact_id = uuid4()
+    path = tmp_path / "area-consumption-with-aggregate.json"
+    path.write_bytes(body)
+    _record_raw_page(
+        db,
+        run_id,
+        source_id,
+        path,
+        body,
+        operation,
+        date(2026, 5, 1),
+        artifact_id=artifact_id,
+    )
+    _insert_tourism_fact_from_row(
+        db, run_id, artifact_id, source_id, rows[1], body
+    )
+    db.record_source_status(
+        SourceStatus(source_id, datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, run_id)
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    check = _check(report, "raw_total_matches_staging", source_id)
+    assert check.status == "passed"
+    assert check.actual[0]["raw_rows"] == 2
+    assert check.actual[0]["expected_facts"] == 1
+    assert check.actual[0]["target_rows"] == 1
+
+
+def test_tourism_reconciliation_validates_repeated_page_numbers_per_request_shard(
+    tmp_path: Path,
+) -> None:
+    """Two district shards may each have page 1 without forming a duplicate page set."""
+    db = _db(tmp_path)
+    run_id = uuid4()
+    source_id = "related_tourism_destinations"
+    operation = "areaBasedList1"
+    template = {
+        "baseYm": "202503",
+        "areaCd": "26",
+        "areaNm": "부산광역시",
+        "rlteCtgryLclsNm": "관광지",
+        "rlteCtgryMclsNm": "문화관광",
+        "rlteCtgrySclsNm": "역사관광",
+        "rlteRank": "4",
+        "rlteRegnCd": "26",
+        "rlteRegnNm": "부산광역시",
+        "rlteSignguCd": "26140",
+        "rlteSignguNm": "서구",
+        "rlteTatsCd": "B2",
+        "rlteTatsNm": "감천문화마을",
+    }
+    rows = [
+        {**template, "signguCd": "26380", "signguNm": "사하구", "tAtsCd": "A1", "tAtsNm": "다대포"},
+        {**template, "signguCd": "26320", "signguNm": "북구", "tAtsCd": "A2", "tAtsNm": "화명생태공원"},
+    ]
+    for index, row in enumerate(rows, start=1):
+        body = json.dumps(
+            {"data": [row], "totalCount": 1, "pageNo": 1, "numOfRows": 100},
+            ensure_ascii=False,
+        ).encode()
+        page = parse_data_page(body, "application/json")
+        approve_schema_baseline(db, source_id, operation, page.schema_fingerprint)
+        artifact_id = uuid4()
+        path = tmp_path / f"related-shard-{index}.json"
+        path.write_bytes(body)
+        _record_raw_page(
+            db,
+            run_id,
+            source_id,
+            path,
+            body,
+            operation,
+            date(2025, 3, 1),
+            artifact_id=artifact_id,
+            parameters={"baseYm": "202503", "areaCd": "26", "signguCd": row["signguCd"]},
+        )
+        _insert_tourism_fact_from_row(db, run_id, artifact_id, source_id, row, body)
+    db.record_source_status(
+        SourceStatus(source_id, datetime(2026, 8, 16, tzinfo=UTC), "READY", {}, run_id)
+    )
+
+    report = run_quality_suite(db, run_id)
+
+    check = _check(report, "raw_total_matches_staging", source_id)
+    assert check.status == "passed"
+    assert check.actual[0]["shard_count"] == 2
+    assert check.actual[0]["expected_facts"] == 2
 
 
 def test_building_reconciliation_uses_the_raw_operation_and_parcel_target(
@@ -1704,10 +1810,13 @@ def _record_raw_page(
     *,
     artifact_id=None,
     quality_partition: str | None = None,
+    parameters: dict[str, object] | None = None,
 ) -> None:
     request: dict[str, object] = {"operation": operation}
     if quality_partition is not None:
         request["quality_partition"] = quality_partition
+    if parameters is not None:
+        request["parameters"] = parameters
     db.connection.execute(
         """
         insert into raw_artifact (
@@ -1726,6 +1835,61 @@ def _record_raw_page(
             datetime(2026, 8, 16, tzinfo=UTC),
             source_date,
         ],
+    )
+
+
+def _insert_tourism_fact_from_row(
+    db: Database,
+    run_id,
+    artifact_id,
+    source_id: str,
+    row: dict[str, object],
+    body: bytes,
+) -> None:
+    record = normalize_demand_row(source_id, row)
+    dimensions_json = json.dumps(
+        record.dimensions, ensure_ascii=False, sort_keys=True, default=str
+    )
+    dimensions_hash = hashlib.sha256(dimensions_json.encode()).hexdigest()
+    payload_json = json.dumps(
+        record.source_payload_json, ensure_ascii=False, sort_keys=True, default=str
+    )
+    source_revision = hashlib.sha256(body).hexdigest()
+    observation_key = hashlib.sha256(
+        (
+            f"{record.source_id}|{record.metric_code}|{record.period}|"
+            f"{record.district}|{dimensions_hash}|{source_revision}"
+        ).encode()
+    ).hexdigest()
+    db.connection.execute(
+        """
+        insert into fact_tourism_demand (
+            source_id, metric_code, period, district, region_group, dimension_json,
+            dimension_json_hash, source_revision, metric_value, unit,
+            source_payload_json, artifact_id, loaded_run_id, observation_key
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            record.source_id,
+            record.metric_code,
+            record.period,
+            record.district,
+            record.region_group,
+            dimensions_json,
+            dimensions_hash,
+            source_revision,
+            record.metric_value,
+            record.unit,
+            payload_json,
+            artifact_id,
+            run_id,
+            observation_key,
+        ],
+    )
+    db.connection.execute(
+        """insert into run_fact_observation (run_id, family, observation_key)
+           values (?, 'tourism', ?)""",
+        [run_id, observation_key],
     )
 
 

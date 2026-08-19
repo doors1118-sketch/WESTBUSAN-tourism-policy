@@ -16,6 +16,10 @@ import duckdb
 
 from westbusan.accommodation.contracts import BUSAN_DISTRICT_AUTHORITY_SET
 from westbusan.db import Database, ensure_run_rebuildable
+from westbusan.demand.load import (
+    TourismFactExpectation,
+    tourism_fact_expectations,
+)
 from westbusan.http import SchemaError
 from westbusan.inventory import (
     is_active_status,
@@ -118,6 +122,7 @@ class _ArtifactPage:
     requested_start: date | None
     requested_end: date | None
     jurisdiction_expected: str | None
+    request_signature: str
 
 
 def run_quality_suite(
@@ -392,6 +397,7 @@ def _parse_artifacts(
             and jurisdiction_filter.get("expected") not in (None, "")
             else None
         )
+        request_signature = _request_signature(metadata)
         partition = (
             _metadata_partition(metadata) or _partition(source_date)
             if source_id in _BUILDING_SOURCES
@@ -465,6 +471,7 @@ def _parse_artifacts(
                     requested_start,
                     requested_end,
                     jurisdiction_expected,
+                    request_signature,
                 )
             )
         else:
@@ -489,9 +496,31 @@ def _parse_artifacts(
                     requested_start,
                     requested_end,
                     jurisdiction_expected,
+                    request_signature,
                 )
             )
     return pages
+
+
+def _request_signature(metadata: dict[str, object]) -> str:
+    """Bind paging to one provider request shard without exposing its parameters."""
+    parameters = metadata.get("parameters")
+    if not isinstance(parameters, dict):
+        parameters = {}
+    safe_parameters = {
+        str(key): value
+        for key, value in parameters.items()
+        if str(key).lower()
+        not in {"servicekey", "service_key", "pageno", "numofrows"}
+    }
+    encoded = json.dumps(
+        safe_parameters,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _raw_contract_checks(db: Database, run_id: UUID, source_id: str, pages: list[_ArtifactPage], statuses: list[tuple[str, dict[str, object]]], required: bool) -> list[CheckResult]:
@@ -906,6 +935,10 @@ def _reconciliation_check(
     statuses: list[tuple[str, dict[str, object]]],
     severity: Severity,
 ) -> CheckResult:
+    if source_id in _TOURISM_SOURCES:
+        return _tourism_reconciliation_check(
+            db, run_id, source_id, pages, severity
+        )
     if any(page.error or page.total_count is None or page.page_no is None for page in pages):
         return CheckResult("raw_total_matches_staging", "failed", "MISSING_PAGE_TOTAL_OR_PAGE_NUMBER", "complete raw page set reconciled to target", severity, source_id, _target_table(source_id), {})
     if source_id in _BUILDING_SOURCES:
@@ -938,6 +971,144 @@ def _reconciliation_check(
         outcomes.append({"operation": operation, "partition": partition, "raw_total": expected, "page_numbers": page_numbers, "expected_pages": expected_pages, "target_rows": actual, "target_table": _target_table(source_id)})
     passed = all(item["raw_total"] is not None and item["page_numbers"] == item["expected_pages"] and item["target_rows"] == item["raw_total"] for item in outcomes)
     return CheckResult("raw_total_matches_staging", "passed" if passed else "failed", outcomes, "raw total equals run-scoped target rows for each source/operation/partition", severity, source_id, _target_table(source_id), {"partitions": outcomes})
+
+
+def _tourism_reconciliation_check(
+    db: Database,
+    run_id: UUID,
+    source_id: str,
+    pages: list[_ArtifactPage],
+    severity: Severity,
+) -> CheckResult:
+    """Validate provider paging per request shard and exact normalized fact tuples."""
+    actual_source_rows = db.query(
+        """select fact.observation_key, fact.metric_code, fact.period,
+                  fact.district, fact.region_group, fact.dimension_json,
+                  fact.dimension_json_hash, fact.source_revision,
+                  fact.metric_value, fact.unit, fact.source_payload_json,
+                  fact.artifact_id,
+                  membership.observation_key is not null as is_membered
+           from fact_tourism_demand as fact
+           left join run_fact_observation as membership
+             on membership.run_id = ?
+            and membership.family = 'tourism'
+            and membership.observation_key = fact.observation_key
+           where fact.source_id = ?""",
+        [run_id, source_id],
+    )
+    groups: dict[tuple[str, str | None], list[_ArtifactPage]] = defaultdict(list)
+    for page in pages:
+        groups[(page.operation, page.partition)].append(page)
+    outcomes: list[dict[str, object]] = []
+    passed = bool(groups)
+    for (operation, partition), grouped in sorted(groups.items()):
+        shard_groups: dict[str, list[_ArtifactPage]] = defaultdict(list)
+        for page in grouped:
+            shard_groups[page.request_signature].append(page)
+        shard_outcomes: list[dict[str, object]] = []
+        paging_passed = True
+        for signature, shard_pages in sorted(shard_groups.items()):
+            totals = {page.total_count for page in shard_pages}
+            sizes = {page.page_size for page in shard_pages}
+            total = next(iter(totals)) if len(totals) == 1 else None
+            page_size = next(iter(sizes)) if len(sizes) == 1 else None
+            page_numbers = sorted(
+                page.page_no for page in shard_pages if page.page_no is not None
+            )
+            expected_pages = (
+                list(range(1, _expected_page_count(total, page_size) + 1))
+                if total is not None and page_size is not None
+                else []
+            )
+            raw_rows = sum(len(page.rows or []) for page in shard_pages)
+            shard_passed = (
+                all(page.error is None and page.rows is not None for page in shard_pages)
+                and total is not None
+                and page_size is not None
+                and page_numbers == expected_pages
+                and raw_rows == total
+            )
+            paging_passed = paging_passed and shard_passed
+            shard_outcomes.append(
+                {
+                    "request_shard": signature[:12],
+                    "raw_total": total,
+                    "raw_rows": raw_rows,
+                    "page_numbers": page_numbers,
+                    "expected_pages": expected_pages,
+                }
+            )
+
+        expectations = [
+            expectation
+            for page in grouped
+            for expectation in tourism_fact_expectations(
+                source_id, page.rows or [], page.source_revision
+            )
+        ]
+        expected_by_key = {
+            expectation.observation_key: _tourism_expectation_tuple(expectation)
+            for expectation in expectations
+        }
+        artifact_ids = {page.artifact_id for page in grouped}
+        selected_actual = [
+            row
+            for row in actual_source_rows
+            if str(row[0]) in expected_by_key or row[11] in artifact_ids
+        ]
+        actual_by_key = {str(row[0]): tuple(row[1:11]) for row in selected_actual}
+        unmembered = sorted(str(row[0]) for row in selected_actual if not row[12])
+        missing = sorted(expected_by_key.keys() - actual_by_key.keys())
+        extra = sorted(actual_by_key.keys() - expected_by_key.keys())
+        mismatched = sorted(
+            key
+            for key in expected_by_key.keys() & actual_by_key.keys()
+            if expected_by_key[key] != actual_by_key[key]
+        )
+        facts_passed = not missing and not extra and not mismatched and not unmembered
+        passed = passed and paging_passed and facts_passed
+        outcomes.append(
+            {
+                "operation": operation,
+                "partition": partition,
+                "raw_rows": sum(len(page.rows or []) for page in grouped),
+                "shard_count": len(shard_groups),
+                "expected_facts": len(expected_by_key),
+                "target_rows": len(actual_by_key),
+                "missing_observation_keys": missing,
+                "extra_observation_keys": extra,
+                "mismatched_observation_keys": mismatched,
+                "unmembered_target_keys": unmembered,
+                "request_shards": shard_outcomes,
+            }
+        )
+    return CheckResult(
+        "raw_total_matches_staging",
+        "passed" if passed else "failed",
+        outcomes,
+        "complete request shards and exact district-grain tourism facts reconcile",
+        severity,
+        source_id,
+        "fact_tourism_demand",
+        {"partitions": outcomes},
+    )
+
+
+def _tourism_expectation_tuple(
+    expectation: TourismFactExpectation,
+) -> tuple[object, ...]:
+    return (
+        expectation.metric_code,
+        expectation.period,
+        expectation.district,
+        expectation.region_group,
+        expectation.dimension_json,
+        expectation.dimension_json_hash,
+        expectation.source_revision,
+        expectation.metric_value,
+        expectation.unit,
+        expectation.source_payload_json,
+    )
 
 
 def _accommodation_reconciliation_check(

@@ -159,6 +159,24 @@ class DemandRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class TourismFactExpectation:
+    """Deterministic tourism fact identity shared by loading and quality checks."""
+
+    source_id: str
+    metric_code: str
+    period: str
+    district: str
+    region_group: str
+    dimension_json: str
+    dimension_json_hash: str
+    source_revision: str
+    metric_value: int | float
+    unit: str
+    source_payload_json: str
+    observation_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class LoadResult:
     """The durable output of a bounded collection window."""
 
@@ -250,6 +268,22 @@ def _exclude_area_aggregate(row: Mapping[str, object]) -> None:
     district_code = str(row.get("signguCd", "")).strip()
     if district_name in {"", "_"} or district_code in {"_", "26000"}:
         raise _OutOfScopeRow("metropolitan aggregate is outside district grain")
+
+
+def tourism_fact_expectations(
+    source_id: str,
+    rows: list[dict[str, object]],
+    source_revision: str,
+) -> tuple[TourismFactExpectation, ...]:
+    """Derive exact district-grain facts, excluding official out-of-scope totals."""
+    expectations: list[TourismFactExpectation] = []
+    for row in rows:
+        try:
+            record = normalize_demand_row(source_id, row)
+        except _OutOfScopeRow:
+            continue
+        expectations.append(_record_fact_expectation(record, source_revision))
+    return tuple(expectations)
 
 
 def load_tourism_demand(
@@ -838,6 +872,45 @@ def _persist_record(
     run: RunContext,
     progress: ProgressCallback,
 ) -> None:
+    expectation = _record_fact_expectation(record, source_revision)
+    progress()
+    db.connection.execute(
+        """
+        insert into fact_tourism_demand (
+            source_id, metric_code, period, district, region_group, dimension_json,
+            dimension_json_hash, source_revision, metric_value, unit, source_payload_json,
+            artifact_id, loaded_run_id, observation_key
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict (source_id, metric_code, period, district, dimension_json_hash, source_revision)
+        do nothing
+        """,
+        [
+            expectation.source_id,
+            expectation.metric_code,
+            expectation.period,
+            expectation.district,
+            expectation.region_group,
+            expectation.dimension_json,
+            expectation.dimension_json_hash,
+            expectation.source_revision,
+            expectation.metric_value,
+            expectation.unit,
+            expectation.source_payload_json,
+            artifact_id,
+            run.run_id,
+            expectation.observation_key,
+        ],
+    )
+    db.connection.execute(
+        """insert into run_fact_observation (run_id, family, observation_key)
+           values (?, 'tourism', ?) on conflict do nothing""",
+        [run.run_id, expectation.observation_key],
+    )
+
+
+def _record_fact_expectation(
+    record: DemandRecord, source_revision: str
+) -> TourismFactExpectation:
     dimensions_json = json.dumps(
         record.dimensions, ensure_ascii=False, sort_keys=True, default=str
     )
@@ -851,38 +924,19 @@ def _persist_record(
             f"{record.district}|{dimensions_hash}|{source_revision}"
         ).encode()
     ).hexdigest()
-    progress()
-    db.connection.execute(
-        """
-        insert into fact_tourism_demand (
-            source_id, metric_code, period, district, region_group, dimension_json,
-            dimension_json_hash, source_revision, metric_value, unit, source_payload_json,
-            artifact_id, loaded_run_id, observation_key
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        on conflict (source_id, metric_code, period, district, dimension_json_hash, source_revision)
-        do nothing
-        """,
-        [
-            record.source_id,
-            record.metric_code,
-            record.period,
-            record.district,
-            record.region_group,
-            dimensions_json,
-            dimensions_hash,
-            source_revision,
-            record.metric_value,
-            record.unit,
-            payload_json,
-            artifact_id,
-            run.run_id,
-            observation_key,
-        ],
-    )
-    db.connection.execute(
-        """insert into run_fact_observation (run_id, family, observation_key)
-           values (?, 'tourism', ?) on conflict do nothing""",
-        [run.run_id, observation_key],
+    return TourismFactExpectation(
+        record.source_id,
+        record.metric_code,
+        record.period,
+        record.district,
+        record.region_group,
+        dimensions_json,
+        dimensions_hash,
+        source_revision,
+        record.metric_value,
+        record.unit,
+        payload_json,
+        observation_key,
     )
 
 
