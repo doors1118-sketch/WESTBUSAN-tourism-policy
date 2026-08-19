@@ -1009,22 +1009,21 @@ def _tourism_reconciliation_check(
         paging_passed = True
         for signature, shard_pages in sorted(shard_groups.items()):
             totals = {page.total_count for page in shard_pages}
-            sizes = {page.page_size for page in shard_pages}
             total = next(iter(totals)) if len(totals) == 1 else None
-            page_size = next(iter(sizes)) if len(sizes) == 1 else None
+            page_sizes = [page.page_size for page in shard_pages]
             page_numbers = sorted(
                 page.page_no for page in shard_pages if page.page_no is not None
             )
             expected_pages = (
-                list(range(1, _expected_page_count(total, page_size) + 1))
-                if total is not None and page_size is not None
+                list(range(1, max(page_numbers) + 1))
+                if total is not None and page_numbers
                 else []
             )
             raw_rows = sum(len(page.rows or []) for page in shard_pages)
             shard_passed = (
                 all(page.error is None and page.rows is not None for page in shard_pages)
                 and total is not None
-                and page_size is not None
+                and all(page_size is not None for page_size in page_sizes)
                 and page_numbers == expected_pages
                 and raw_rows == total
             )
@@ -1035,6 +1034,7 @@ def _tourism_reconciliation_check(
                     "raw_total": total,
                     "raw_rows": raw_rows,
                     "page_numbers": page_numbers,
+                    "page_sizes": page_sizes,
                     "expected_pages": expected_pages,
                 }
             )
