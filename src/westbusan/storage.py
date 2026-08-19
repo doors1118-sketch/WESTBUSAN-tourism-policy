@@ -97,9 +97,30 @@ class RawStore:
         """Persist parsed response rows beside the immutable raw response."""
         path = artifact.path.with_suffix(".parquet")
         if not path.exists():
-            table = pa.Table.from_pylist([_arrow_safe(row) for row in rows])
+            table = pa.Table.from_pylist(_arrow_safe_rows(rows))
             _atomic_parquet_write(path, table)
         return path
+
+
+def _arrow_safe_rows(
+    rows: Sequence[dict[str, object]],
+) -> list[dict[str, object]]:
+    string_columns = {
+        str(key)
+        for row in rows
+        for key, value in row.items()
+        if isinstance(value, int)
+        and not isinstance(value, bool)
+        and not -(2**63) <= value <= 2**63 - 1
+    }
+    normalized: list[dict[str, object]] = []
+    for row in rows:
+        safe = {str(key): _arrow_safe(value) for key, value in row.items()}
+        for key in string_columns:
+            if safe.get(key) is not None:
+                safe[key] = str(safe[key])
+        normalized.append(safe)
+    return normalized
 
 
 def _arrow_safe(value: object) -> object:

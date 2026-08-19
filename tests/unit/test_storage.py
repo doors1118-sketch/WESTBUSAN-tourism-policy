@@ -73,12 +73,15 @@ def test_parquet_rows_preserve_oversized_numeric_identifiers_as_text(
 
     parquet_path = store.write_rows(
         artifact,
-        [{"mgmPmsrgstPk": identifier, "rnum": 1}],
+        [
+            {"mgmPmsrgstPk": 1234, "rnum": 1},
+            {"mgmPmsrgstPk": identifier, "rnum": 2},
+        ],
     )
 
-    row = pq.read_table(parquet_path).to_pylist()[0]
-    assert row["mgmPmsrgstPk"] == str(identifier)
-    assert row["rnum"] == 1
+    rows = pq.read_table(parquet_path).to_pylist()
+    assert [row["mgmPmsrgstPk"] for row in rows] == ["1234", str(identifier)]
+    assert [row["rnum"] for row in rows] == [1, 2]
 
 
 def test_raw_store_rehashes_existing_content_addressed_file_before_reuse(
