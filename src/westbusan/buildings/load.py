@@ -20,7 +20,7 @@ from westbusan.db import Database
 from westbusan.entity_resolution.normalize import NormalizedAddress
 from westbusan.http import SafeHttpClient
 from westbusan.models import RunContext, SourceStatus
-from westbusan.sources.datagokr import DataGoKrPager
+from westbusan.sources.datagokr import DataGoKrPager, parse_data_page
 from westbusan.sources.registry import SourceRegistry
 from westbusan.storage import RawStore
 
@@ -210,7 +210,9 @@ def collect_buildings_for_licenses(
         if parcel_hash in completed_parcels:
             continue
         heartbeat()
-        responses = _parcel_responses(
+        responses = _replay_parcel_responses(
+            db, run, query, raw_store, heartbeat
+        ) or _parcel_responses(
             pager,
             registry,
             query,
@@ -551,6 +553,160 @@ def _parcel_responses(
             rows.extend(page.rows)
         responses[source_id] = rows
     return responses
+
+
+def _replay_parcel_responses(
+    db: Database,
+    run: RunContext,
+    query: ParcelQuery,
+    raw_store: RawStore,
+    progress: ProgressCallback,
+) -> dict[str, list[dict[str, object]]] | None:
+    """Rebuild same-day run evidence from a fully verified immutable parcel bundle."""
+    checkpoint_rows = db.query(
+        """select checkpoint_json from collection_checkpoint
+           where source_id = ? and partition_key = ?""",
+        [_BUILDING_CHECKPOINT_SOURCE, query.request_hash],
+    )
+    if not checkpoint_rows:
+        return None
+    try:
+        checkpoint = json.loads(str(checkpoint_rows[0][0]))
+        donor_run_id = UUID(str(checkpoint["run_id"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if checkpoint.get("status") != "completed" or donor_run_id == run.run_id:
+        return None
+    donor = db.query(
+        "select business_date from pipeline_run where run_id = ?", [donor_run_id]
+    )
+    if donor != [(run.cutoff_date,)]:
+        return None
+
+    rows = db.query(
+        """select response.source_id, response.operation, response.page_no,
+                  response.total_count, response.row_count,
+                  response.schema_fingerprint, artifact.path,
+                  artifact.content_hash, artifact.request_json
+           from staging_building_response as response
+           join raw_artifact as artifact
+             on artifact.artifact_id = response.artifact_id
+            and artifact.run_id = response.run_id
+           where response.run_id = ? and response.parcel_hash = ?
+           order by response.source_id, response.page_no""",
+        [donor_run_id, query.request_hash],
+    )
+    required_sources = {
+        "building_register_title",
+        "building_register_basis_outline",
+        "building_permit_basis_outline",
+        "building_permit_site",
+        "closed_register_basis_outline",
+    }
+    if {str(row[0]) for row in rows} != required_sources:
+        return None
+
+    verified: list[tuple[str, str, object, dict[str, object], bytes]] = []
+    by_source: dict[str, list[tuple[object, ...]]] = defaultdict(list)
+    for row in rows:
+        by_source[str(row[0])].append(row)
+    for source_id, source_rows in by_source.items():
+        page_numbers = [int(row[2]) for row in source_rows]
+        totals = {int(row[3]) for row in source_rows}
+        if page_numbers != list(range(1, len(page_numbers) + 1)) or len(totals) != 1:
+            return None
+        if sum(int(row[4]) for row in source_rows) != next(iter(totals)):
+            return None
+        for row in source_rows:
+            (
+                _,
+                operation,
+                page_no,
+                total_count,
+                row_count,
+                fingerprint,
+                path,
+                content_hash,
+                request_json,
+            ) = row
+            try:
+                body = Path(str(path)).read_bytes()
+                if hashlib.sha256(body).hexdigest() != str(content_hash):
+                    return None
+                page = parse_data_page(body, "application/json")
+                metadata = json.loads(str(request_json))
+            except (OSError, TypeError, ValueError):
+                return None
+            if (
+                page.page_no != int(page_no)
+                or page.total_count != int(total_count)
+                or len(page.rows) != int(row_count)
+                or page.schema_fingerprint != str(fingerprint)
+            ):
+                return None
+            if page.rows and not _building_schema_is_approved(
+                db,
+                source_id,
+                str(operation),
+                query.request_hash,
+                page.schema_fingerprint,
+            ):
+                return None
+            verified.append((source_id, str(operation), page, metadata, body))
+
+    responses: dict[str, list[dict[str, object]]] = {
+        source_id: [] for source_id in required_sources
+    }
+    for source_id, operation, page, metadata, body in verified:
+        progress()
+        artifact = raw_store.write(
+            run,
+            source_id,
+            metadata,
+            body,
+            ".json",
+            source_date=run.cutoff_date,
+        )
+        db.record_artifact(artifact)
+        _record_building_page(
+            db,
+            run,
+            source_id,
+            operation,
+            query,
+            page,
+            artifact.artifact_id,
+            progress,
+        )
+        if page.rows:
+            raw_store.write_rows(artifact, page.rows)
+        responses[source_id].extend(page.rows)
+    return responses
+
+
+def _building_schema_is_approved(
+    db: Database,
+    source_id: str,
+    operation: str,
+    partition: str,
+    fingerprint: str,
+) -> bool:
+    rows = db.query(
+        """select baseline.approved_schema_fingerprint
+           from quality_schema_baseline as baseline
+           join quality_schema_approval_event as event
+             on event.approval_event_id = baseline.approval_event_id
+            and event.source_id = baseline.source_id
+            and event.operation = baseline.operation
+            and event.partition_key = baseline.partition_key
+            and event.approved_schema_fingerprint = baseline.approved_schema_fingerprint
+           where baseline.source_id = ? and baseline.operation = ?
+             and baseline.partition_key in (?, '*')
+           order by case when baseline.partition_key = ? then 0 else 1 end
+           limit 1""",
+        [source_id, operation, partition, partition],
+    )
+    return bool(rows and str(rows[0][0]) == fingerprint)
 
 
 def _record_building_page(

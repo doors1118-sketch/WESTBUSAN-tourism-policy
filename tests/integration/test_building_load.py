@@ -206,6 +206,103 @@ def test_building_collection_resumes_after_completed_parcel(
     assert len(cleanup_statements) == 4
 
 
+def test_same_day_retry_replays_verified_building_bundle_without_api_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A terminal retry may rebuild its own evidence from same-day immutable raw bytes."""
+    db = Database(tmp_path / "building-replay.duckdb", Path("sql"))
+    db.migrate()
+    load_legal_dong_codes(Path("tests/fixtures/reference/legal_dong_codes.csv"), db)
+    observed_on = date(2026, 8, 19)
+    first = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 19, 1, tzinfo=UTC),
+        business_date=observed_on,
+    )
+    retry = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 19, 2, tzinfo=UTC),
+        business_date=observed_on,
+    )
+    record = normalize_license(
+        "lodgings",
+        {"MNG_NO": "BUSAN-12", "LOTNO_ADDR": "부산광역시 서구 충무동1가 12-3"},
+        observed_on,
+    )
+    for run, status in ((first, "BLOCKED"), (retry, "RUNNING")):
+        db.connection.execute(
+            """insert into pipeline_run (
+                   run_id, mode, started_at, status, business_date
+               ) values (?, ?, ?, ?, ?)""",
+            [run.run_id, run.mode, run.started_at, status, run.business_date],
+        )
+        db.connection.execute(
+            "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+            [run.run_id, run.run_id],
+        )
+        load_license_snapshot(db, [record], run.run_id)
+
+    calls = 0
+
+    class EmptyPager:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def iter_url(self, *_: object, **__: object) -> list[ApiPage]:
+            nonlocal calls
+            calls += 1
+            return [
+                ApiPage(
+                    [],
+                    0,
+                    1,
+                    0,
+                    b'{"data":[],"totalCount":0}',
+                    "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+                )
+            ]
+
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(building_load, "DataGoKrPager", EmptyPager)
+    raw_store = RawStore(tmp_path / "data")
+    collect_buildings_for_licenses(
+        db,
+        SourceRegistry.load(Path("config/sources.yaml")),
+        first,
+        raw_store=raw_store,
+    )
+    assert calls == 5
+
+    class FailingPager:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def iter_url(self, *_: object, **__: object) -> list[ApiPage]:
+            raise AssertionError("same-day verified bundle should be replayed")
+
+    monkeypatch.setattr(building_load, "DataGoKrPager", FailingPager)
+    result = collect_buildings_for_licenses(
+        db,
+        SourceRegistry.load(Path("config/sources.yaml")),
+        retry,
+        raw_store=raw_store,
+    )
+
+    assert result.parcel_queries == 1
+    assert db.query(
+        "select count(*) from raw_artifact where run_id = ?", [retry.run_id]
+    ) == [(5,)]
+    assert db.query(
+        "select count(*) from staging_building_response where run_id = ?",
+        [retry.run_id],
+    ) == [(5,)]
+    assert db.query(
+        "select count(*) from source_status where run_id = ?", [retry.run_id]
+    ) == [(5,)]
+
+
 def test_same_day_building_correction_appends_system_time_version(
     tmp_path: Path,
 ) -> None:
