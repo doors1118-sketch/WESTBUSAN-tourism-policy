@@ -179,19 +179,27 @@ def collect_buildings_for_licenses(
         license_parcels[license_key] = query.request_hash
 
     completed_parcels = _completed_building_parcels(db, run.run_id)
-    for source_id, source_record_id in captured_licenses:
-        if license_parcels.get((source_id, source_record_id)) in completed_parcels:
-            continue
+    pending_licenses = sorted(
+        license
+        for license in captured_licenses
+        if license_parcels.get(license) not in completed_parcels
+    )
+    if pending_licenses:
         heartbeat()
+        source_ids, source_record_ids = map(list, zip(*pending_licenses, strict=True))
         db.connection.execute(
             """delete from run_license_building_observation
-               where run_id = ? and source_id = ? and source_record_id = ?""",
-            [run.run_id, source_id, source_record_id],
+               where run_id = ? and (source_id, source_record_id) in (
+                   select unnest(?::varchar[]), unnest(?::varchar[])
+               )""",
+            [run.run_id, source_ids, source_record_ids],
         )
         db.connection.execute(
             """delete from run_license_building_snapshot
-               where producer_run_id = ? and source_id = ? and source_record_id = ?""",
-            [run.run_id, source_id, source_record_id],
+               where producer_run_id = ? and (source_id, source_record_id) in (
+                   select unnest(?::varchar[]), unnest(?::varchar[])
+               )""",
+            [run.run_id, source_ids, source_record_ids],
         )
 
     pager = DataGoKrPager(client=SafeHttpClient(), service_key=service_key)
@@ -283,13 +291,18 @@ def collect_buildings_for_licenses(
                 heartbeat,
             )
         _record_building_parcel_checkpoint(db, run.run_id, parcel_hash)
-    for source_id, source_record_id in captured_licenses:
+    if captured_licenses:
         heartbeat()
+        source_ids, source_record_ids = map(
+            list, zip(*sorted(captured_licenses), strict=True)
+        )
         db.connection.execute(
             """insert into run_license_building_snapshot (
                    producer_run_id, source_id, source_record_id
-               ) values (?, ?, ?) on conflict do nothing""",
-            [run.run_id, source_id, source_record_id],
+               )
+               select ?, unnest(?::varchar[]), unnest(?::varchar[])
+               on conflict do nothing""",
+            [run.run_id, source_ids, source_record_ids],
         )
     return BuildingCollectionResult(len(queries), building_rows, bridge_rows)
 

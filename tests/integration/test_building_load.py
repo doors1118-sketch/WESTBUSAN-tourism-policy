@@ -156,6 +156,25 @@ def test_building_collection_resumes_after_completed_parcel(
 
     monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
     monkeypatch.setattr(building_load, "DataGoKrPager", InterruptingPager)
+    raw_connection = db.connection
+    cleanup_statements: list[str] = []
+
+    class CountingConnection:
+        def execute(self, sql: str, parameters: object = None):
+            normalized = " ".join(sql.split()).lower()
+            if normalized.startswith(
+                (
+                    "delete from run_license_building_observation",
+                    "delete from run_license_building_snapshot",
+                )
+            ):
+                cleanup_statements.append(normalized)
+            return raw_connection.execute(sql, parameters)
+
+        def __getattr__(self, name: str):
+            return getattr(raw_connection, name)
+
+    db.connection = CountingConnection()
 
     with pytest.raises(QuotaError, match="quota"):
         collect_buildings_for_licenses(
@@ -184,6 +203,7 @@ def test_building_collection_resumes_after_completed_parcel(
            where producer_run_id = ?""",
         [run.run_id],
     ) == [(2,)]
+    assert len(cleanup_statements) == 4
 
 
 def test_same_day_building_correction_appends_system_time_version(
