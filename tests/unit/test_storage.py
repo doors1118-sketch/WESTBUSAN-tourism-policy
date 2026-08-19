@@ -2,6 +2,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
+import pyarrow.parquet as pq
 import pytest
 
 from westbusan.db import Database
@@ -53,6 +54,31 @@ def test_identical_same_day_reruns_keep_one_raw_file_but_two_run_artifacts(
     assert first.path == second.path
     assert first.artifact_id != second.artifact_id
     assert db.query("select count(*) from raw_artifact") == [(2,)]
+
+
+def test_parquet_rows_preserve_oversized_numeric_identifiers_as_text(
+    tmp_path: Path,
+) -> None:
+    """Public-register identifiers may exceed signed 64-bit integer range."""
+    store = RawStore(tmp_path / "data")
+    run = RunContext.start("backfill", datetime(2026, 8, 19, tzinfo=UTC))
+    artifact = store.write(
+        run,
+        "building_permit_basis_outline",
+        {"pageNo": 1},
+        b"{}",
+        ".json",
+    )
+    identifier = 1_000_000_000_000_000_644_516
+
+    parquet_path = store.write_rows(
+        artifact,
+        [{"mgmPmsrgstPk": identifier, "rnum": 1}],
+    )
+
+    row = pq.read_table(parquet_path).to_pylist()[0]
+    assert row["mgmPmsrgstPk"] == str(identifier)
+    assert row["rnum"] == 1
 
 
 def test_raw_store_rehashes_existing_content_addressed_file_before_reuse(
