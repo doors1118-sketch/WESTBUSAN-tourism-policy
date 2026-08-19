@@ -25,6 +25,7 @@ from westbusan.sources.registry import SourceRegistry
 from westbusan.storage import RawStore
 
 ProgressCallback = Callable[[], None]
+_BUILDING_CHECKPOINT_SOURCE = "building_parcel_bundle"
 
 
 def _noop_progress() -> None:
@@ -134,6 +135,7 @@ def collect_buildings_for_licenses(
 
     licenses_by_parcel: dict[str, list[tuple[str, str]]] = defaultdict(list)
     queries: dict[str, ParcelQuery] = {}
+    license_parcels: dict[tuple[str, str], str] = {}
     if db.query("select 1 from pipeline_run where run_id = ?", [run.run_id]):
         license_rows = db.query(
             """with eligible as (
@@ -162,7 +164,24 @@ def collect_buildings_for_licenses(
         (str(source_id), str(source_record_id))
         for source_id, source_record_id, _ in license_rows
     }
+    for source_id, source_record_id, lot_address in license_rows:
+        heartbeat()
+        if lot_address is None or not str(lot_address).strip():
+            continue
+        query = parcel_query(
+            NormalizedAddress(value=str(lot_address), district=None, is_busan=True), db
+        )
+        if query is None:
+            continue
+        queries[query.request_hash] = query
+        license_key = (str(source_id), str(source_record_id))
+        licenses_by_parcel[query.request_hash].append(license_key)
+        license_parcels[license_key] = query.request_hash
+
+    completed_parcels = _completed_building_parcels(db, run.run_id)
     for source_id, source_record_id in captured_licenses:
+        if license_parcels.get((source_id, source_record_id)) in completed_parcels:
+            continue
         heartbeat()
         db.connection.execute(
             """delete from run_license_building_observation
@@ -174,23 +193,14 @@ def collect_buildings_for_licenses(
                where producer_run_id = ? and source_id = ? and source_record_id = ?""",
             [run.run_id, source_id, source_record_id],
         )
-    for source_id, source_record_id, lot_address in license_rows:
-        heartbeat()
-        if lot_address is None or not str(lot_address).strip():
-            continue
-        query = parcel_query(
-            NormalizedAddress(value=str(lot_address), district=None, is_busan=True), db
-        )
-        if query is None:
-            continue
-        queries[query.request_hash] = query
-        licenses_by_parcel[query.request_hash].append((str(source_id), str(source_record_id)))
 
     pager = DataGoKrPager(client=SafeHttpClient(), service_key=service_key)
     raw_store = raw_store or RawStore(Path("data"))
     building_rows = 0
     bridge_rows = 0
     for parcel_hash, query in queries.items():
+        if parcel_hash in completed_parcels:
+            continue
         heartbeat()
         responses = _parcel_responses(
             pager,
@@ -272,15 +282,51 @@ def collect_buildings_for_licenses(
                 valid_title_ids,
                 heartbeat,
             )
+        _record_building_parcel_checkpoint(db, run.run_id, parcel_hash)
     for source_id, source_record_id in captured_licenses:
         heartbeat()
         db.connection.execute(
             """insert into run_license_building_snapshot (
                    producer_run_id, source_id, source_record_id
-               ) values (?, ?, ?)""",
+               ) values (?, ?, ?) on conflict do nothing""",
             [run.run_id, source_id, source_record_id],
         )
     return BuildingCollectionResult(len(queries), building_rows, bridge_rows)
+
+
+def _completed_building_parcels(db: Database, run_id: UUID) -> set[str]:
+    completed: set[str] = set()
+    for partition_key, checkpoint_json in db.query(
+        """select partition_key, checkpoint_json from collection_checkpoint
+           where source_id = ?""",
+        [_BUILDING_CHECKPOINT_SOURCE],
+    ):
+        try:
+            checkpoint = json.loads(str(checkpoint_json))
+        except (TypeError, ValueError):
+            continue
+        if checkpoint.get("run_id") == str(run_id) and checkpoint.get("status") == "completed":
+            completed.add(str(partition_key))
+    return completed
+
+
+def _record_building_parcel_checkpoint(
+    db: Database, run_id: UUID, parcel_hash: str
+) -> None:
+    checkpoint = json.dumps(
+        {"run_id": str(run_id), "status": "completed"},
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    db.connection.execute(
+        """insert into collection_checkpoint (
+               source_id, partition_key, checkpoint_json, updated_at
+           ) values (?, ?, ?, ?)
+           on conflict (source_id, partition_key) do update set
+               checkpoint_json = excluded.checkpoint_json,
+               updated_at = excluded.updated_at""",
+        [_BUILDING_CHECKPOINT_SOURCE, parcel_hash, checkpoint, datetime.now(UTC)],
+    )
 
 
 def _store_ambiguous_building_candidates(

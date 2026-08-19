@@ -15,6 +15,7 @@ from westbusan.buildings.load import (
 )
 from westbusan.buildings.normalize import BuildingRecord
 from westbusan.db import Database
+from westbusan.http import QuotaError
 from westbusan.models import ApiPage, RunContext
 from westbusan.sources.registry import SourceRegistry
 from westbusan.storage import RawStore
@@ -114,6 +115,75 @@ def test_same_parcel_is_requested_once_and_links_each_license(
     ]
     events = db.query("select building_id, event_type, source_payload_json from fact_building_event")
     assert events == [(None, "closed_register", '{"mgmShtregPk":"CLOSED-1001","shterGbCdNm":"폐쇄말소"}')]
+
+
+def test_building_collection_resumes_after_completed_parcel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A quota interruption must not refetch already completed parcel bundles."""
+    db = Database(tmp_path / "building-resume.duckdb", Path("sql"))
+    db.migrate()
+    load_legal_dong_codes(Path("tests/fixtures/reference/legal_dong_codes.csv"), db)
+    run = RunContext.start("backfill", datetime.now(UTC))
+    records = [
+        normalize_license(
+            "lodgings",
+            {
+                "MNG_NO": record_id,
+                "LOTNO_ADDR": f"부산광역시 서구 충무동1가 {lot}",
+            },
+            run.started_at.date(),
+        )
+        for record_id, lot in (("BUSAN-12", "12-3"), ("BUSAN-13", "13-4"))
+    ]
+    load_license_snapshot(db, records, run.run_id)
+    calls: list[tuple[str, str]] = []
+    interrupt = True
+
+    class InterruptingPager:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def iter_url(
+            self, url: str, parameters: dict[str, object], **__: object
+        ) -> list[ApiPage]:
+            nonlocal interrupt
+            bun = str(parameters["bun"])
+            calls.append((bun, url.rsplit("/", 1)[-1]))
+            if interrupt and bun == "0013":
+                raise QuotaError("daily quota exhausted")
+            return [ApiPage([], 0, 1, 0, b'{"data":[],"totalCount":0}', "empty")]
+
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(building_load, "DataGoKrPager", InterruptingPager)
+
+    with pytest.raises(QuotaError, match="quota"):
+        collect_buildings_for_licenses(
+            db,
+            SourceRegistry.load(Path("config/sources.yaml")),
+            run,
+            raw_store=RawStore(tmp_path / "data"),
+        )
+
+    interrupt = False
+    result = collect_buildings_for_licenses(
+        db,
+        SourceRegistry.load(Path("config/sources.yaml")),
+        run,
+        raw_store=RawStore(tmp_path / "data"),
+    )
+
+    assert result.parcel_queries == 2
+    assert sum(bun == "0012" for bun, _ in calls) == 5
+    assert db.query(
+        """select count(*) from collection_checkpoint
+           where source_id = 'building_parcel_bundle'"""
+    ) == [(2,)]
+    assert db.query(
+        """select count(*) from run_license_building_snapshot
+           where producer_run_id = ?""",
+        [run.run_id],
+    ) == [(2,)]
 
 
 def test_same_day_building_correction_appends_system_time_version(

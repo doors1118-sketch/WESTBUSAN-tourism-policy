@@ -264,6 +264,11 @@ class Pipeline:
                         collect_buildings_for_licenses, run.run_id
                     ),
                 )
+            except QuotaError as error:
+                for source_id in selected:
+                    if self.registry.get(source_id).group == "building":
+                        self._record_failure(run, source_id, error, logger)
+                raise
             except Exception as error:  # noqa: BLE001 - terminal family boundary
                 for source_id in selected:
                     if self.registry.get(source_id).group == "building":

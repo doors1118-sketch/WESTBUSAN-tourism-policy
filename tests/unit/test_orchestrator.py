@@ -14,6 +14,7 @@ import westbusan.orchestrator as orchestrator_module
 from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.entity_resolution.match import build_facilities
+from westbusan.http import QuotaError
 from westbusan.models import SourceSpec, SourceStatus
 from westbusan.orchestrator import (
     Pipeline,
@@ -1149,6 +1150,58 @@ def test_family_loader_failures_finalize_a_run_scoped_blocked_summary(
                order by checked_at desc limit 1""",
             [summary.run_id, spec.source_id],
         ) == "HTTP_FAILED"
+
+
+def test_building_quota_interruption_keeps_attempt_resumable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Daily building quota exhaustion must preserve the same RUNNING attempt."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.fixture_dir = None
+    pipeline.registry = SourceRegistry(
+        (
+            SourceSpec(
+                "building_register_title",
+                "file://building-title",
+                source_type="file",
+                group="building",
+                cadence="monthly",
+            ),
+        )
+    )
+
+    def quota(*args, **kwargs):
+        raise QuotaError("daily quota exhausted")
+
+    monkeypatch.setattr(orchestrator_module, "collect_buildings_for_licenses", quota)
+    with pytest.raises(QuotaError, match="quota"):
+        pipeline.backfill(
+            date(2026, 8, 1),
+            date(2026, 8, 19),
+            source_ids=["building_register_title"],
+        )
+
+    run_id = pipeline.db.scalar("select run_id from pipeline_run")
+    assert pipeline.db.scalar(
+        "select status from pipeline_run where run_id = ?", [run_id]
+    ) == "RUNNING"
+    assert pipeline.db.scalar(
+        "select count(*) from pipeline_run_summary where run_id = ?", [run_id]
+    ) == 0
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "collect_buildings_for_licenses",
+        lambda *args, **kwargs: SimpleNamespace(building_rows=0),
+    )
+    retried = pipeline.backfill(
+        date(2026, 8, 1),
+        date(2026, 8, 19),
+        source_ids=["building_register_title"],
+    )
+
+    assert retried.run_id == run_id
+    assert retried.status == "BLOCKED"
 
 
 def test_optional_family_crash_is_a_required_failure_and_preserves_lkg(
