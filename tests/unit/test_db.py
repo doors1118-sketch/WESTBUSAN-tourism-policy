@@ -163,12 +163,70 @@ def test_vacant_house_assessment_schema_rejects_cross_run_lineage_links(
         )
     with pytest.raises(duckdb.ConstraintException):
         db.connection.execute(
+            """insert into vacant_house_assessment_publication_audit (
+                event_id, assessment_run_id, new_assessment_run_id, action, actor,
+                reason, manifest_id, evidence_json, event_at
+            ) values (?, ?, ?, 'publish', 'tester', 'test', ?, '{}', ?)""",
+            [uuid4(), assessment_run_id, other_assessment_run_id, other_manifest_id, now],
+        )
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
             """insert into vacant_house_assessment_publication_current (
                 pointer_id, assessment_run_id, published_at, publisher,
                 publication_event_id, manifest_id
             ) values (?, ?, ?, 'tester', ?, ?)""",
             [uuid4(), other_assessment_run_id, now, uuid4(), manifest_id],
         )
+
+
+def test_vacant_house_assessment_schema_rejects_mismatched_spatial_lineage(
+    tmp_path: Path,
+) -> None:
+    """Catches an assessment that mixes a spatial run with other published inputs."""
+    db = Database(tmp_path / "vacant-house-assessment-spatial-lineage.duckdb", Path("sql"))
+    db.migrate()
+    now = datetime(2026, 8, 20, tzinfo=UTC)
+    inventory_run_id, record_id = uuid4(), uuid4()
+    _insert_assessment_inventory(db, inventory_run_id, record_id, now)
+    base_published_run_id, spatial_run_id, boundary_version_id = _insert_assessment_inputs(
+        db, now
+    )
+    other_base_published_run_id, other_boundary_version_id = uuid4(), uuid4()
+    db.connection.execute(
+        """insert into pipeline_run (run_id, mode, started_at, status)
+           values (?, 'assessment-test', ?, 'PUBLISHED')""",
+        [other_base_published_run_id, now],
+    )
+    db.connection.execute(
+        """insert into spatial_boundary_version (
+            boundary_version_id, raw_artifact_id, content_hash, source_organization,
+            source_url, source_date, source_version, crs, district_count, dong_count,
+            approved_by, approval_rationale, approved_at
+        ) values (?, ?, repeat('f', 64), 'test', 'https://example.invalid',
+                  '2026-08-20', 'v2', 'EPSG:4326', 0, 0, 'tester', 'test', ?)""",
+        [other_boundary_version_id, uuid4(), now],
+    )
+    run_sql = """insert into vacant_house_assessment_run (
+        assessment_run_id, inventory_run_id, base_published_run_id, spatial_run_id,
+        boundary_version_id, policy_version, status, fence_epoch, started_at
+    ) values (?, ?, ?, ?, ?, 'vh-screen-v1', 'RUNNING', 0, ?)"""
+
+    for base_run_id, boundary_id in (
+        (other_base_published_run_id, boundary_version_id),
+        (base_published_run_id, other_boundary_version_id),
+    ):
+        with pytest.raises(duckdb.ConstraintException):
+            db.connection.execute(
+                run_sql,
+                [
+                    uuid4(),
+                    inventory_run_id,
+                    base_run_id,
+                    spatial_run_id,
+                    boundary_id,
+                    now,
+                ],
+            )
 
 
 def test_vacant_house_assessment_exact_locations_are_enrichment_only(

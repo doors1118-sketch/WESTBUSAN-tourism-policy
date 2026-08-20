@@ -1,9 +1,58 @@
+create table spatial_run_summary_038 (
+    spatial_run_id uuid primary key,
+    base_published_run_id uuid not null,
+    boundary_version_id uuid not null,
+    policy_version varchar not null,
+    business_date date not null,
+    table_counts_json varchar not null check (json_valid(table_counts_json)),
+    table_digests_json varchar not null check (json_valid(table_digests_json)),
+    started_at timestamp with time zone not null,
+    completed_at timestamp with time zone not null,
+    published_at timestamp with time zone not null,
+    publication_event_id uuid not null,
+    publisher varchar not null,
+    previous_spatial_run_id uuid,
+    publication_action varchar not null,
+    publication_reason varchar not null,
+    unique (spatial_run_id, base_published_run_id, boundary_version_id)
+);
+
+insert into spatial_run_summary_038
+select spatial_run_id,
+       base_published_run_id,
+       boundary_version_id,
+       policy_version,
+       business_date,
+       table_counts_json,
+       table_digests_json,
+       started_at,
+       completed_at,
+       published_at,
+       publication_event_id,
+       publisher,
+       previous_spatial_run_id,
+       publication_action,
+       publication_reason
+from spatial_run_summary;
+
+create temporary table spatial_run_summary_038_guard (
+    identities_complete boolean not null check (identities_complete)
+);
+
+insert into spatial_run_summary_038_guard
+select (select count(*) from spatial_run_summary_038)
+     = (select count(*) from spatial_run_summary);
+
+drop table spatial_run_summary;
+alter table spatial_run_summary_038 rename to spatial_run_summary;
+drop table spatial_run_summary_038_guard;
+
 create table vacant_house_assessment_run (
     assessment_run_id uuid primary key,
     inventory_run_id uuid not null references vacant_house_import_run(vacant_run_id),
     base_published_run_id uuid not null references pipeline_run(run_id),
-    spatial_run_id uuid not null references spatial_run_summary(spatial_run_id),
-    boundary_version_id uuid not null references spatial_boundary_version(boundary_version_id),
+    spatial_run_id uuid not null,
+    boundary_version_id uuid not null,
     policy_version varchar not null,
     status varchar not null check (status in ('RUNNING', 'FAILED', 'COMPLETED')),
     owner_token uuid,
@@ -19,7 +68,11 @@ create table vacant_house_assessment_run (
     failure_evidence_json varchar check (
         failure_evidence_json is null or json_valid(failure_evidence_json)
     ),
-    unique (assessment_run_id, inventory_run_id)
+    unique (assessment_run_id, inventory_run_id),
+    foreign key (spatial_run_id, base_published_run_id, boundary_version_id)
+        references spatial_run_summary(
+            spatial_run_id, base_published_run_id, boundary_version_id
+        )
 );
 
 create table vacant_house_enrichment (
@@ -131,6 +184,7 @@ create table vacant_house_assessment_publication_audit (
     manifest_id uuid not null,
     evidence_json varchar not null check (json_valid(evidence_json)),
     event_at timestamp with time zone not null,
+    check (assessment_run_id = new_assessment_run_id),
     foreign key (new_assessment_run_id, manifest_id)
         references vacant_house_assessment_manifest(assessment_run_id, manifest_id),
     unique (assessment_run_id, new_assessment_run_id, event_at)
