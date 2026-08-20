@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
@@ -123,3 +123,27 @@ class StagedVacantBundle:
             "file_hashes",
             MappingProxyType(dict(self.file_hashes)),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class VacantHouseLeaseToken:
+    """Exact shared-writer ownership for one vacant-house import epoch."""
+
+    vacant_run_id: UUID
+    owner_token: UUID
+    fence_epoch: int
+    lease_expires_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class VacantHouseImportSummary:
+    """Aggregate, non-identifying evidence for one completed private import."""
+
+    vacant_run_id: UUID
+    source_row_count: int
+    source_artifact_count: int
+    revision_count: int
+    current_count: int
+    exact_duplicate_count: int
+    ambiguous_duplicate_count: int
+    exception_count: int
