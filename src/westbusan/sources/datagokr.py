@@ -29,7 +29,11 @@ def parse_data_page(
     """Parse the JSON or XML envelope forms used by data.go.kr APIs."""
     decoded = _decode(body, content_type)
     raise_for_portal_error(body, content_type)
-    response = _mapping(decoded.get("response")) if isinstance(decoded, dict) else None
+    response = (
+        _mapping(decoded.get("response")) or _mapping(decoded.get("Response"))
+        if isinstance(decoded, dict)
+        else None
+    )
     root = response or _mapping(decoded)
     if root is None:
         raise SchemaError("response root is not an object")

@@ -185,6 +185,44 @@ def test_parse_response_body_json_item_object_as_a_row() -> None:
     assert page.total_count == 1
 
 
+def test_parse_capitalized_response_envelope_used_by_transport_api() -> None:
+    """Catches the official transport envelope being rejected as an unknown schema."""
+    body = json.dumps(
+        {
+            "Response": {
+                "header": {"resultCode": "200", "resultMsg": "SUCCESS"},
+                "body": {
+                    "items": {
+                        "item": [
+                            {
+                                "opr_ym": "202601",
+                                "dptre_sgg_cd": "26380",
+                                "arvl_sgg_cd": "26440",
+                                "trfvlm": "117",
+                            }
+                        ]
+                    },
+                    "totalCount": 1,
+                    "pageNo": 1,
+                    "numOfRows": 1000,
+                },
+            }
+        }
+    ).encode()
+
+    page = parse_data_page(body, "application/json")
+
+    assert page.rows == [
+        {
+            "opr_ym": "202601",
+            "dptre_sgg_cd": "26380",
+            "arvl_sgg_cd": "26440",
+            "trfvlm": "117",
+        }
+    ]
+    assert (page.total_count, page.page_no, page.page_size) == (1, 1, 1000)
+
+
 def test_parse_xml_page() -> None:
     body = b"""<response><body><items><item><name>A</name></item></items><totalCount>1</totalCount><pageNo>1</pageNo><numOfRows>10</numOfRows></body></response>"""
     page = parse_data_page(body, "application/xml")

@@ -1,5 +1,6 @@
 import json
 import os
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -290,7 +291,9 @@ def test_public_transport_od_requests_every_inclusive_month(
     db = Database(data_dir / "test.duckdb", Path("sql"))
     db.migrate()
     full_registry = SourceRegistry.load(Path("config/sources.yaml"))
-    spec = full_registry.get("public_transport_od_usage")
+    spec = replace(
+        full_registry.get("public_transport_od_usage"), parameter_partitions={}
+    )
     registry = SourceRegistry((spec,))
     record_inspection(
         spec,
@@ -331,6 +334,103 @@ def test_public_transport_od_requests_every_inclusive_month(
 
     assert requested == ["202601", "202602"]
     assert [item.month for item in result.source_months] == ["2026-01", "2026-02"]
+
+
+def test_public_transport_od_requests_every_busan_district_pair(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches a nominal Busan OD run collecting only one district pair."""
+    district_codes = {
+        "26110",
+        "26140",
+        "26170",
+        "26200",
+        "26230",
+        "26260",
+        "26290",
+        "26320",
+        "26350",
+        "26380",
+        "26410",
+        "26440",
+        "26470",
+        "26500",
+        "26530",
+        "26710",
+    }
+    db = Database(tmp_path / "transport-busan-od.duckdb", Path("sql"))
+    db.migrate()
+    registry = SourceRegistry.load(Path("config/sources.yaml"))
+    spec = registry.get("public_transport_od_usage")
+    record_inspection(
+        spec,
+        db,
+        operation="getMonthlyODUsageforGeneralBusesandUrbanRailways",
+        required_parameters={
+            "opr_ym": "{baseYm}",
+            "dptre_ctpv_cd": "26",
+            "arvl_ctpv_cd": "26",
+        },
+        response_row_path="Response.body.items.item",
+        portal_detail_url="https://www.data.go.kr/data/15142069/openapi.do",
+    )
+    monkeypatch.setenv("WESTBUSAN_ENABLE_LIVE_TRANSPORT", "true")
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-only-key")
+    requests: list[dict[str, object]] = []
+
+    class FixtureClient:
+        def get(self, url: str, params: dict[str, object]) -> HttpResult:
+            requests.append(dict(params))
+            return HttpResult(
+                200,
+                json.dumps(
+                    {
+                        "Response": {
+                            "header": {
+                                "resultCode": "200",
+                                "resultMsg": "SUCCESS",
+                            },
+                            "body": {
+                                "items": {"item": []},
+                                "totalCount": 0,
+                                "pageNo": 1,
+                                "numOfRows": 1000,
+                            },
+                        }
+                    }
+                ).encode(),
+                "application/json",
+            )
+
+    result = load_transport(
+        db,
+        SourceRegistry((spec,)),
+        date(2026, 1, 1),
+        date(2026, 1, 31),
+        RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC)),
+        client=FixtureClient(),
+    )
+
+    observed_pairs = {
+        (str(item["dptre_sgg_cd"]), str(item["arvl_sgg_cd"]))
+        for item in requests
+    }
+    assert observed_pairs == {
+        (departure, arrival)
+        for departure in district_codes
+        for arrival in district_codes
+    }
+    assert len(requests) == 256
+    assert all(
+        item["dptre_ctpv_cd"] == "26"
+        and item["arvl_ctpv_cd"] == "26"
+        and item["dataType"] == "JSON"
+        for item in requests
+    )
+    assert [
+        (item.month, item.record_count, item.explicit_empty)
+        for item in result.source_months
+    ] == [("2026-01", 0, True)]
 
 
 def test_repeated_file_hash_is_auditable_without_duplicate_transport_facts(tmp_path: Path) -> None:
@@ -422,6 +522,14 @@ def test_live_collectors_store_odcloud_and_data_go_pages_before_transport_facts(
     db = Database(data_dir / "test.duckdb", Path("sql"))
     db.migrate()
     registry = SourceRegistry.load(Path("config/sources.yaml"))
+    registry = SourceRegistry(
+        tuple(
+            replace(spec, parameter_partitions={})
+            if spec.source_id == "public_transport_od_usage"
+            else spec
+            for spec in (registry.get(source_id) for source_id in registry.ids())
+        )
+    )
     record_inspection(
         registry.get("public_transport_od_usage"),
         db,
