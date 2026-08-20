@@ -197,6 +197,52 @@ def test_two_row_grouped_headers_preserve_excel_source_row_number(
     assert set(rows[0].values) == set(REQUIRED_HEADERS)
 
 
+def test_operational_template_header_notes_map_to_canonical_fields(
+    tmp_path: Path,
+) -> None:
+    """Template guidance suffixes and its lot-type label must not drop a district."""
+    headers = [
+        {
+            "토지구분": "번지구분",
+            "본번": "본번*숫자만",
+            "부번": "부번*숫자만",
+            "빈집등급": "빈집",
+            "건축연도": "건축년도",
+        }.get(header, header)
+        for header in REQUIRED_HEADERS
+    ]
+    raw = _xlsx_bytes([headers, _source_values()])
+    archive_path = tmp_path / "operational-template.zip"
+    _write_archive(archive_path, [(PRIVATE_WORKBOOK_NAME, raw)])
+
+    rows = list(iter_archive_rows(archive_path, date(2025, 2, 28)))
+
+    assert len(rows) == 1
+    assert set(rows[0].values) == set(REQUIRED_HEADERS)
+    assert rows[0].values["토지구분"] == "대지"
+    assert rows[0].values["본번"] == 12
+    assert rows[0].values["부번"] == 3
+
+
+def test_instructional_rows_without_a_district_code_are_not_candidates(
+    tmp_path: Path,
+) -> None:
+    """Template examples and footer guidance must not inflate source evidence."""
+    guidance = [None] * len(REQUIRED_HEADERS)
+    guidance[REQUIRED_HEADERS.index("빈집등급")] = "작성 안내"
+    raw = _xlsx_bytes(
+        [list(REQUIRED_HEADERS), _source_values(), guidance]
+    )
+    archive_path = tmp_path / "template-guidance.zip"
+    _write_archive(archive_path, [(PRIVATE_WORKBOOK_NAME, raw)])
+
+    profile = profile_archive(archive_path)
+    rows = list(iter_archive_rows(archive_path, date(2025, 2, 28)))
+
+    assert profile.candidate_row_count == 1
+    assert len(rows) == 1
+
+
 def test_reads_legacy_workbook_through_xlrd_on_demand(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

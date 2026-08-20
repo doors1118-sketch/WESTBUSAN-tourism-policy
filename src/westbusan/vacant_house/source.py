@@ -42,6 +42,13 @@ REQUIRED_HEADERS = frozenset(
 _WORKBOOK_SUFFIXES = frozenset({".xlsx", ".xls"})
 _HEADER_SCAN_LIMIT = 50
 _PARENTHETICAL = re.compile(r"\([^()]*\)|（[^（）]*）")
+_HEADER_ALIASES = {
+    "번지구분": "토지구분",
+    "본번*숫자만": "본번",
+    "부번*숫자만": "부번",
+    "빈집": "빈집등급",
+    "건축년도": "건축연도",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,9 +226,10 @@ def _parse_sheet(
             for column_index, header in headers.items()
         }
         district_code = _source_code(values["시군구코드"])
+        if not district_code:
+            continue
         district_name = _source_text(values["시군구"])
-        if district_code:
-            district_codes.add(district_code)
+        district_codes.add(district_code)
         if district_name:
             district_names.add(district_name)
         parsed_rows.append((source_row_number, values, district_code))
@@ -280,7 +288,8 @@ def _normalize_header(value: object) -> str:
     while previous != text:
         previous = text
         text = _PARENTHETICAL.sub("", text)
-    return "".join(text.split())
+    normalized = "".join(text.split())
+    return _HEADER_ALIASES.get(normalized, normalized)
 
 
 def _is_empty_row(row: Sequence[object]) -> bool:
