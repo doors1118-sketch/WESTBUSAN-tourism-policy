@@ -11,6 +11,49 @@ from westbusan.models import RunContext
 from westbusan.storage import RawStore
 
 
+VACANT_TABLES = {
+    "vacant_house_import_run",
+    "vacant_house_source_artifact",
+    "vacant_house_revision",
+    "vacant_house_current",
+    "vacant_house_exception",
+    "vacant_house_completion_manifest",
+    "vacant_house_publication_current",
+    "vacant_house_publication_audit",
+}
+
+
+def test_empty_database_migration_creates_vacant_house_schema(tmp_path: Path) -> None:
+    db = Database(tmp_path / "vacant-house.duckdb", Path("sql"))
+    db.migrate()
+
+    assert VACANT_TABLES <= {row[0] for row in db.query("show tables")}
+
+
+def test_vacant_house_migration_upgrades_applied_036_without_rewriting_checksums(
+    tmp_path: Path,
+) -> None:
+    migrations_036 = tmp_path / "migrations-036"
+    migrations_036.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name <= "036_spatial_publication_identity.sql":
+            copy2(migration, migrations_036 / migration.name)
+
+    path = tmp_path / "applied-036.duckdb"
+    original = Database(path, migrations_036)
+    original.migrate()
+    original_checksums = dict(original.query("select version, checksum from schema_migrations"))
+    original.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+
+    assert dict(upgraded.query("select version, checksum from schema_migrations")).items() >= (
+        original_checksums.items()
+    )
+    assert VACANT_TABLES <= {row[0] for row in upgraded.query("show tables")}
+
+
 def test_empty_database_migration_creates_spatial_schema_tables(tmp_path: Path) -> None:
     """Catches a fresh spatial database missing a table required by later stages."""
     db = Database(tmp_path / "spatial.duckdb", Path("sql"))
