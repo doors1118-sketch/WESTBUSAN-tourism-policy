@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date
+from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 from uuid import UUID
@@ -24,6 +26,14 @@ class VacantHouseRowError(ValueError):
         self.code = code
         self.field = field
         super().__init__(f"{code}:{field}")
+
+
+class StagedVacantBundleError(ValueError):
+    """A staged-bundle failure identified only by a safe error code."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,3 +100,26 @@ class NormalizedVacantHouse:
     sheet_name_hash: str
     source_row_number: int
     source_format: Literal["xlsx", "xls"]
+
+
+@dataclass(frozen=True, slots=True)
+class StagedVacantBundle:
+    """Validated hashes and counts for one sealed private staging bundle."""
+
+    path: Path = field(repr=False)
+    archive_sha256: str
+    manifest_sha256: str
+    source_snapshot_date: date
+    schema_version: str
+    file_hashes: Mapping[str, str]
+    source_row_count: int
+    normalized_row_count: int
+    exception_count: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "path", Path(self.path))
+        object.__setattr__(
+            self,
+            "file_hashes",
+            MappingProxyType(dict(self.file_hashes)),
+        )
