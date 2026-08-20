@@ -91,6 +91,21 @@ def test_registry_configures_odcloud_file_detail_profile() -> None:
     assert source.portal_detail_url == "https://www.data.go.kr/data/3057229/fileData.do"
 
 
+def test_registry_pins_vworld_and_regeneration_assessment_contracts() -> None:
+    registry = SourceRegistry.load(Path("config/sources.yaml"))
+
+    for source_id in ("vworld_building_geometry", "vworld_land_use"):
+        source = registry.get(source_id)
+        assert source.url == "https://api.vworld.kr/req/data"
+        assert source.cadence == "daily"
+        assert source.raw_cache_reuse == "daily"
+        assert source.credential_env == "VWORLD_API_KEY"
+
+    regeneration = registry.get("urban_regeneration_snapshot")
+    assert regeneration.transport == "file_snapshot"
+    assert regeneration.endpoint_url is None
+
+
 def test_registry_loads_source_metadata_from_fixture() -> None:
     registry = SourceRegistry.load(Path("tests/fixtures/sources.yaml"))
     source = registry.get("ready_source")

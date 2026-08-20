@@ -309,6 +309,9 @@ def _source_spec(entry: object) -> SourceSpec:
         inspection_required=_boolean(entry, "inspection_required", False),
         immutable_file_hashing=_boolean(entry, "immutable_file_hashing", False),
         temporal_semantics=_string(entry, "temporal_semantics", "unspecified"),
+        raw_cache_reuse=_optional_string(entry, "raw_cache_reuse"),
+        credential_env=_optional_string(entry, "credential_env"),
+        transport=_optional_string(entry, "transport"),
     )
 
 

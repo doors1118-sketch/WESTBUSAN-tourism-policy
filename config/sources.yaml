@@ -203,3 +203,27 @@ sources:
     cadence: monthly
     source_type: file
     immutable_file_hashing: true
+
+  # VWorld requests are collected only through the immutable daily raw cache.
+  - source_id: vworld_building_geometry
+    url: https://api.vworld.kr/req/data
+    group: vacant_house_assessment
+    cadence: daily
+    raw_cache_reuse: daily
+    credential_env: VWORLD_API_KEY
+
+  - source_id: vworld_land_use
+    url: https://api.vworld.kr/req/data
+    group: vacant_house_assessment
+    cadence: daily
+    raw_cache_reuse: daily
+    credential_env: VWORLD_API_KEY
+
+  # This remains a manually approved immutable artifact until a live source is activated.
+  - source_id: urban_regeneration_snapshot
+    url: file://manual-provisioning/urban-regeneration-snapshot
+    group: vacant_house_assessment
+    cadence: yearly
+    source_type: file_snapshot
+    transport: file_snapshot
+    immutable_file_hashing: true

@@ -46,10 +46,15 @@ class SourceSpec:
     immutable_file_hashing: bool = False
     temporal_semantics: str = "unspecified"
     parameter_partitions: Mapping[str, tuple[object, ...]] = field(default_factory=dict)
+    raw_cache_reuse: str | None = None
+    credential_env: str | None = None
+    transport: str | None = None
 
     @property
-    def endpoint_url(self) -> str:
+    def endpoint_url(self) -> str | None:
         """Return the selected API operation endpoint, if one is registered."""
+        if self.transport == "file_snapshot":
+            return None
         if self.operation is None:
             return self.url
         return f"{self.url.rstrip('/')}/{self.operation.lstrip('/')}"

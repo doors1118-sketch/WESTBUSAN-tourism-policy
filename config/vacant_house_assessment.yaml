@@ -1,0 +1,34 @@
+policy_version: vh-screen-v1
+
+allowed_feasibility_classes:
+  - priority_review
+  - conditional_review
+  - deprioritise
+  - insufficient_evidence
+
+allowed_opportunity_bands:
+  - high
+  - medium
+  - low
+  - insufficient_evidence
+
+source_freshness:
+  vworld_building_geometry:
+    max_age_days: 365
+  vworld_land_use:
+    max_age_days: 90
+  published_core_context:
+    max_published_business_periods: 1
+  published_spatial_context:
+    max_published_business_periods: 1
+  urban_regeneration_snapshot:
+    max_age_days: 365
+
+# Numeric scoring parameters are versioned policy, never Python constants.
+opportunity_weights:
+  lodging_supply_gap: 0.25
+  tourism_demand: 0.20
+  transport_accessibility: 0.20
+  spatial_priority: 0.15
+  regeneration_context: 0.10
+  building_reuse: 0.10
