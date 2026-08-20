@@ -12,6 +12,7 @@ from openpyxl import Workbook
 
 from westbusan.db import Database
 from westbusan.storage import RawStore
+from westbusan.vacant_house.fencing import VacantHouseFenceError
 from westbusan.vacant_house.importer import import_staged_bundle, prepare_import
 from westbusan.vacant_house.models import VacantHouseLeaseToken
 from westbusan.vacant_house.publish import (
@@ -353,6 +354,99 @@ def test_import_manifest_and_publication_complete_and_release_exact_lease(
     output = capsys.readouterr()
     assert output.out == ""
     assert output.err == ""
+
+
+def test_finalizer_rejects_a_lease_that_expires_after_manifest_verification(
+    tmp_path: Path,
+) -> None:
+    """A suspended finalizer cannot resume after both owned leases expire."""
+    db = _database(tmp_path / "expired-finalizer.duckdb")
+    prior_run_id, prior_pointer = _seed_prior_pointer(db)
+    token = _seed_running(db)
+    write_vacant_manifest(db, token.vacant_run_id, token)
+
+    def expire_after_manifest(stage: str, run_id: UUID) -> None:
+        if stage != "after_manifest_verification":
+            return
+        expired_at = datetime.now(UTC) - timedelta(seconds=1)
+        db.connection.execute(
+            """update pipeline_writer_lease set lease_expires_at = ?
+               where lease_key = 'writer' and run_id = ?""",
+            [expired_at, run_id],
+        )
+        db.connection.execute(
+            """update vacant_house_import_run set lease_expires_at = ?
+               where vacant_run_id = ?""",
+            [expired_at, run_id],
+        )
+
+    with pytest.raises(VacantHouseFenceError, match="fence_lost"):
+        publish_vacant_run(
+            db,
+            token.vacant_run_id,
+            token,
+            actor="internal-operator",
+            reason="approved snapshot",
+            stage_hook=expire_after_manifest,
+        )
+
+    assert db.query(
+        "select * from vacant_house_publication_current where singleton_key = 1"
+    ) == [prior_pointer]
+    assert db.query(
+        "select status, owner_token from vacant_house_import_run where vacant_run_id = ?",
+        [token.vacant_run_id],
+    ) == [("RUNNING", token.owner_token)]
+    assert (
+        db.scalar(
+            "select count(*) from vacant_house_publication_audit where vacant_run_id = ?",
+            [token.vacant_run_id],
+        )
+        == 0
+    )
+    assert prior_run_id is not None
+
+
+def test_finalizer_rejects_writer_takeover_after_manifest_verification(
+    tmp_path: Path,
+) -> None:
+    """A new shared-writer epoch after hashing must leave publication unchanged."""
+    db = _database(tmp_path / "takeover-finalizer.duckdb")
+    _prior_run_id, prior_pointer = _seed_prior_pointer(db)
+    token = _seed_running(db)
+    write_vacant_manifest(db, token.vacant_run_id, token)
+
+    def replace_shared_epoch(stage: str, _run_id: UUID) -> None:
+        if stage != "after_manifest_verification":
+            return
+        db.connection.execute(
+            """update pipeline_writer_lease
+               set owner_token = ?, run_id = ?, fence_epoch = fence_epoch + 1,
+                   lease_expires_at = ?
+               where lease_key = 'writer'""",
+            [uuid4(), uuid4(), datetime.now(UTC) + timedelta(minutes=5)],
+        )
+
+    with pytest.raises(VacantHouseFenceError, match="fence_lost"):
+        publish_vacant_run(
+            db,
+            token.vacant_run_id,
+            token,
+            actor="internal-operator",
+            reason="approved snapshot",
+            stage_hook=replace_shared_epoch,
+        )
+
+    assert db.query(
+        "select * from vacant_house_publication_current where singleton_key = 1"
+    ) == [prior_pointer]
+    assert (
+        db.scalar(
+            "select count(*) from vacant_house_publication_audit where vacant_run_id = ?",
+            [token.vacant_run_id],
+        )
+        == 0
+    )
 
 
 @pytest.mark.parametrize(

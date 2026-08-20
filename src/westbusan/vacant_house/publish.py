@@ -18,6 +18,7 @@ from westbusan.vacant_house.fencing import (
     release_writer,
     rollback,
     touch_import,
+    touch_writer_epoch,
 )
 from westbusan.vacant_house.models import (
     VacantHouseLeaseToken,
@@ -137,7 +138,7 @@ def publish_vacant_run(
             result = _load_idempotent_publication(
                 db,
                 run_id,
-                token,
+                token.fence_epoch,
                 operator,
                 justification,
                 current,
@@ -151,6 +152,7 @@ def publish_vacant_run(
         refresh()
         manifest = _validate_manifest(db, run_id, progress=refresh)
         after_stage("after_manifest_verification", run_id)
+        refresh()
         previous_run_id = current[2] if current is not None else None
         action = _publication_action(db, previous_run_id, run[0])
         published_at = datetime.now(UTC)
@@ -159,25 +161,35 @@ def publish_vacant_run(
         anchor_manifest_id = manifest.anchor_manifest_id
         evidence_json = _publication_evidence(manifest)
 
-        refreshed_epoch = int(
-            db.scalar(
-                """select fence_epoch from pipeline_writer_lease
-                   where lease_key = 'writer' and run_id = ? and owner_token = ?""",
-                [run_id, token.owner_token],
-            )
-        )
-        if refreshed_epoch != token.fence_epoch:
-            raise VacantHouseFenceError("vacant_house_writer_fence_lost")
+        fence_checked_at = datetime.now(UTC)
         terminal = db.query(
             """update vacant_house_import_run
                set status = 'COMPLETED', completed_at = ?, owner_token = null,
                    lease_expires_at = null, failure_evidence_json = null
                where vacant_run_id = ? and status = 'RUNNING' and owner_token = ?
-                 and fence_epoch = ? returning vacant_run_id""",
-            [published_at, run_id, token.owner_token, token.fence_epoch],
+                 and fence_epoch = ? and lease_expires_at > ?
+                 and exists (
+                     select 1 from pipeline_writer_lease as writer
+                     where writer.lease_key = 'writer' and writer.run_id = ?
+                       and writer.owner_token = ? and writer.fence_epoch = ?
+                       and writer.lease_expires_at > ?
+                 )
+               returning vacant_run_id""",
+            [
+                published_at,
+                run_id,
+                token.owner_token,
+                token.fence_epoch,
+                fence_checked_at,
+                run_id,
+                token.owner_token,
+                token.fence_epoch,
+                fence_checked_at,
+            ],
         )
         if terminal != [(run_id,)]:
             raise VacantHouseFenceError("vacant_house_writer_fence_lost")
+        touch_writer_epoch(db, token)
         after_stage("after_terminal_run_update", run_id)
 
         db.connection.execute(
@@ -238,6 +250,37 @@ def publish_vacant_run(
     except Exception:
         rollback(db, began)
         raise
+
+
+def load_published_vacant_run(
+    db: Database,
+    run_id: UUID,
+    actor: str,
+    reason: str,
+) -> VacantPublication:
+    """Revalidate and return one already-current publication without writing."""
+    operator = actor.strip()
+    justification = reason.strip()
+    if not operator or not justification:
+        raise VacantPublicationError("actor_and_reason_required")
+    current = _current_pointer(db)
+    if current is None or current[2] != run_id:
+        raise VacantPublicationError("persisted_vacant_pointer_invalid")
+    rows = db.query(
+        """select fence_epoch from vacant_house_import_run
+           where vacant_run_id = ? and status = 'COMPLETED'""",
+        [run_id],
+    )
+    if len(rows) != 1:
+        raise VacantPublicationError("persisted_vacant_run_invalid")
+    return _load_idempotent_publication(
+        db,
+        run_id,
+        int(rows[0][0]),
+        operator,
+        justification,
+        current,
+    )
 
 
 def _manifest_entries(
@@ -494,7 +537,7 @@ def _publication_action(
 def _load_idempotent_publication(
     db: Database,
     run_id: UUID,
-    token: VacantHouseLeaseToken,
+    fence_epoch: int,
     actor: str,
     reason: str,
     current: tuple[object, ...],
@@ -511,7 +554,7 @@ def _load_idempotent_publication(
         or run[0][0] != "COMPLETED"
         or run[0][1] is not None
         or run[0][2] is not None
-        or int(run[0][3]) != token.fence_epoch
+        or int(run[0][3]) != fence_epoch
         or run[0][4] != current[3]
     ):
         raise VacantPublicationError("persisted_vacant_run_invalid")

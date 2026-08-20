@@ -116,12 +116,19 @@ def _row(
 
 
 def _xlsx(rows: list[list[object]]) -> bytes:
+    return _xlsx_sheets([rows])
+
+
+def _xlsx_sheets(sheets: list[list[list[object]]]) -> bytes:
     workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "비공개 원본"
-    sheet.append(list(HEADERS))
-    for row in rows:
-        sheet.append(row)
+    for index, rows in enumerate(sheets):
+        sheet = workbook.active if index == 0 else workbook.create_sheet()
+        sheet.title = f"비공개 원본 {index + 1}"
+        if not rows:
+            continue
+        sheet.append(list(HEADERS))
+        for row in rows:
+            sheet.append(row)
     output = BytesIO()
     workbook.save(output)
     workbook.close()
@@ -135,11 +142,15 @@ def _bundle(
     exact_duplicate: bool = False,
     ambiguous_duplicate: bool = False,
     invalid_identity: bool = False,
+    extra_empty_sheet: bool = False,
+    combine_last_district: bool = False,
+    merge_first_district_into_second: bool = False,
 ):
     tmp_path.mkdir(parents=True, exist_ok=True)
     archive_path = tmp_path / "source.zip"
     with ZipFile(archive_path, "w", compression=ZIP_DEFLATED) as archive:
-        for index, district_code in enumerate(districts):
+        workbook_districts = districts[:-1] if combine_last_district else districts
+        for index, district_code in enumerate(workbook_districts):
             rows = [_row(district_code)]
             if index == 0 and exact_duplicate:
                 rows.append(_row(district_code))
@@ -151,7 +162,19 @@ def _bundle(
                 invalid[12] = None
                 invalid[13] = None
                 rows.append(invalid)
-            archive.writestr(f"district-{index:02d}.xlsx", _xlsx(rows))
+            sheets = [rows]
+            if merge_first_district_into_second and index == 0:
+                sheets = [[]]
+            if merge_first_district_into_second and index == 1:
+                sheets.append([_row(districts[0])])
+            if index == 0 and combine_last_district:
+                sheets.append([_row(districts[-1])])
+            if index == 0 and extra_empty_sheet:
+                sheets.append([])
+            archive.writestr(
+                f"district-{index:02d}.xlsx",
+                _xlsx_sheets(sheets),
+            )
     return stage_archive(archive_path, tmp_path / "staged", SNAPSHOT_DATE)
 
 
@@ -321,6 +344,66 @@ def test_imports_complete_bundle_with_explicit_exact_duplicate_and_exception(
     assert output.err == ""
 
 
+def test_import_preserves_blank_sheet_as_zero_row_source_artifact(
+    tmp_path: Path,
+) -> None:
+    """Every readable workbook sheet remains independently hash-bound."""
+    bundle = _bundle(tmp_path, extra_empty_sheet=True)
+    db = _database(tmp_path / "empty-sheet-artifact.duckdb")
+
+    token = prepare_import(db, bundle, actor="internal-operator")
+    summary = import_staged_bundle(
+        db,
+        RawStore(tmp_path / "private-raw"),
+        bundle,
+        token,
+    )
+
+    assert bundle.workbook_count == 16
+    assert bundle.sheet_count == 17
+    assert summary.source_artifact_count == 17
+    assert (
+        db.scalar(
+            """select count(*) from vacant_house_source_artifact
+               where vacant_run_id = ? and source_row_count = 0""",
+            [token.vacant_run_id],
+        )
+        == 1
+    )
+
+
+def test_complete_district_set_in_fifteen_workbooks_fails_delivery_contract(
+    tmp_path: Path,
+) -> None:
+    """District codes alone cannot prove the expected workbook inventory arrived."""
+    bundle = _bundle(tmp_path, combine_last_district=True)
+    db = _database(tmp_path / "missing-workbook.duckdb")
+
+    with pytest.raises(VacantHouseImportError) as caught:
+        prepare_import(db, bundle, actor="internal-operator")
+
+    assert bundle.workbook_count == 15
+    assert set(bundle.district_codes) == set(DISTRICT_CODES)
+    assert caught.value.code == "incomplete_workbook_coverage"
+    assert db.scalar("select count(*) from vacant_house_revision") == 0
+
+
+def test_each_expected_workbook_must_map_to_exactly_one_district(
+    tmp_path: Path,
+) -> None:
+    """A blank workbook plus a two-district workbook is not a 16-part delivery."""
+    bundle = _bundle(tmp_path, merge_first_district_into_second=True)
+    db = _database(tmp_path / "misassigned-workbooks.duckdb")
+
+    with pytest.raises(VacantHouseImportError) as caught:
+        prepare_import(db, bundle, actor="internal-operator")
+
+    assert bundle.workbook_count == 16
+    assert set(bundle.district_codes) == set(DISTRICT_CODES)
+    assert caught.value.code == "incomplete_workbook_coverage"
+    assert db.scalar("select count(*) from vacant_house_revision") == 0
+
+
 def test_ambiguous_canonical_duplicates_create_exception_without_current(
     tmp_path: Path,
 ) -> None:
@@ -378,6 +461,7 @@ def test_incomplete_coverage_records_failed_run_and_preserves_publication(
     assert json.loads(failed[0][4]) == {
         "district_count": 15,
         "failure_code": "incomplete_district_coverage",
+        "workbook_count": 15,
     }
     assert (
         db.scalar(
@@ -515,6 +599,94 @@ def test_expired_owner_token_cannot_insert_any_target_rows(tmp_path: Path) -> No
         == 0
     )
     assert current.fence_epoch > stale.fence_epoch
+
+
+def test_expired_same_bundle_run_is_reclaimed_and_strictly_reused(
+    tmp_path: Path,
+) -> None:
+    """A crashed prepublication run resumes only from exact persisted targets."""
+    bundle = _bundle(tmp_path)
+    db = _database(tmp_path / "resume.duckdb")
+    stale = prepare_import(db, bundle, actor="owner-a")
+    import_staged_bundle(db, RawStore(tmp_path / "private-raw"), bundle, stale)
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    db.connection.execute(
+        "update pipeline_writer_lease set lease_expires_at = ? where lease_key = 'writer'",
+        [expired_at],
+    )
+    db.connection.execute(
+        """update vacant_house_import_run set lease_expires_at = ?
+           where vacant_run_id = ?""",
+        [expired_at, stale.vacant_run_id],
+    )
+
+    resumed = prepare_import(db, bundle, actor="owner-b")
+    summary = import_staged_bundle(
+        db,
+        RawStore(tmp_path / "private-raw"),
+        bundle,
+        resumed,
+    )
+
+    assert resumed.vacant_run_id == stale.vacant_run_id
+    assert resumed.owner_token != stale.owner_token
+    assert resumed.fence_epoch > stale.fence_epoch
+    assert summary.source_artifact_count == 16
+    assert summary.revision_count == 16
+    assert summary.current_count == 16
+    assert (
+        db.scalar(
+            "select count(*) from raw_artifact where run_id = ?",
+            [stale.vacant_run_id],
+        )
+        == 1
+    )
+    assert db.query(
+        """select status, owner_token, fence_epoch, accepted_record_count,
+                  failure_evidence_json
+           from vacant_house_import_run where vacant_run_id = ?""",
+        [stale.vacant_run_id],
+    ) == [("RUNNING", resumed.owner_token, resumed.fence_epoch, 16, None)]
+
+
+def test_resumed_same_bundle_rejects_any_changed_persisted_target(
+    tmp_path: Path,
+) -> None:
+    """Aggregate equality cannot authorise reuse of changed private row content."""
+    bundle = _bundle(tmp_path)
+    db = _database(tmp_path / "invalid-resume.duckdb")
+    stale = prepare_import(db, bundle, actor="owner-a")
+    import_staged_bundle(db, RawStore(tmp_path / "private-raw"), bundle, stale)
+    db.connection.execute(
+        """update vacant_house_revision set exact_address = 'changed-private-value'
+           where vacant_run_id = ? and source_row_id = (
+               select min(source_row_id) from vacant_house_revision
+               where vacant_run_id = ?
+           )""",
+        [stale.vacant_run_id, stale.vacant_run_id],
+    )
+    expired_at = datetime.now(UTC) - timedelta(seconds=1)
+    db.connection.execute(
+        "update pipeline_writer_lease set lease_expires_at = ? where lease_key = 'writer'",
+        [expired_at],
+    )
+    db.connection.execute(
+        """update vacant_house_import_run set lease_expires_at = ?
+           where vacant_run_id = ?""",
+        [expired_at, stale.vacant_run_id],
+    )
+    resumed = prepare_import(db, bundle, actor="owner-b")
+
+    with pytest.raises(VacantHouseImportError) as caught:
+        import_staged_bundle(
+            db,
+            RawStore(tmp_path / "private-raw"),
+            bundle,
+            resumed,
+        )
+
+    assert caught.value.code == "interrupted_import_state_invalid"
+    assert db.scalar("select count(*) from vacant_house_publication_current") == 0
 
 
 def test_release_requires_exact_current_token(tmp_path: Path) -> None:

@@ -25,9 +25,10 @@ from westbusan.vacant_house.fencing import (
 )
 from westbusan.vacant_house.importer import (
     VacantHouseImportError,
+    fail_import,
     import_staged_bundle,
+    load_completed_import,
     prepare_import,
-    release_import,
 )
 from westbusan.vacant_house.models import (
     StagedVacantBundleError,
@@ -35,6 +36,7 @@ from westbusan.vacant_house.models import (
 )
 from westbusan.vacant_house.publish import (
     VacantPublicationError,
+    load_published_vacant_run,
     publish_vacant_run,
     write_vacant_manifest,
 )
@@ -353,25 +355,34 @@ def vacant_house_import(
         staged = validate_staged_bundle(bundle)
         pipeline = _pipeline(root)
         pipeline.db.migrate()
-        token = prepare_import(pipeline.db, staged, actor)
-        summary = import_staged_bundle(
-            pipeline.db,
-            pipeline.raw_store,
-            staged,
-            token,
-        )
-        write_vacant_manifest(pipeline.db, summary.vacant_run_id, token)
-        publication = publish_vacant_run(
-            pipeline.db,
-            summary.vacant_run_id,
-            token,
-            actor,
-            reason,
-        )
+        summary = load_completed_import(pipeline.db, staged)
+        if summary is None:
+            token = prepare_import(pipeline.db, staged, actor)
+            summary = import_staged_bundle(
+                pipeline.db,
+                pipeline.raw_store,
+                staged,
+                token,
+            )
+            write_vacant_manifest(pipeline.db, summary.vacant_run_id, token)
+            publication = publish_vacant_run(
+                pipeline.db,
+                summary.vacant_run_id,
+                token,
+                actor,
+                reason,
+            )
+        else:
+            publication = load_published_vacant_run(
+                pipeline.db,
+                summary.vacant_run_id,
+                actor,
+                reason,
+            )
     except Exception as error:  # noqa: BLE001 - safe redaction boundary
         if token is not None:
             try:
-                release_import(pipeline.db, token)
+                fail_import(pipeline.db, token)
             except Exception:  # noqa: BLE001, S110 - preserve safe primary failure
                 pass
         _vacant_blocked(error, "vacant_house_import_failed")

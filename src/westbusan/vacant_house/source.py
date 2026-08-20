@@ -17,6 +17,7 @@ from openpyxl import load_workbook
 
 from westbusan.vacant_house.models import (
     ArchiveProfile,
+    VacantHouseSourceArtifact,
     VacantHouseSourceError,
     VacantHouseSourceRow,
 )
@@ -51,6 +52,14 @@ _HEADER_ALIASES = {
     "빈집": "빈집등급",
     "건축년도": "건축연도",
 }
+_EXPLICIT_SUPPORT_MARKERS = (
+    "작성안내",
+    "작성방법",
+    "유의사항",
+    "참고사항",
+    "합계",
+    "총계",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +123,36 @@ def iter_archive_rows(
                     values=values,
                     district_code=district_code,
                 )
+
+
+def iter_archive_artifacts(path: Path) -> Iterator[VacantHouseSourceArtifact]:
+    """Yield every readable workbook sheet even when it has no candidate rows."""
+    _, entries = _read_archive(Path(path))
+    for entry in entries:
+        workbook_sha256 = sha256(entry.raw).hexdigest()
+        provenance_kind = (
+            "native_xlsx"
+            if entry.source_format == "xlsx"
+            else "legacy_xls_reader"
+        )
+        for sheet in _parse_workbook(entry):
+            yield VacantHouseSourceArtifact(
+                workbook_sha256=workbook_sha256,
+                workbook_name_hash=entry.name_hash,
+                sheet_name_hash=sheet.sheet_name_hash,
+                source_format=entry.source_format,
+                provenance_kind=provenance_kind,
+                candidate_row_count=len(sheet.rows),
+                district_codes=tuple(
+                    sorted(
+                        {
+                            district_code
+                            for _, _, district_code in sheet.rows
+                            if district_code
+                        }
+                    )
+                ),
+            )
 
 
 def _read_archive(path: Path) -> tuple[str, tuple[_WorkbookEntry, ...]]:
@@ -218,6 +257,9 @@ def _read_xls_sheets(
 def _parse_sheet(
     sheet_name: str, rows: Sequence[Sequence[object]]
 ) -> _ParsedSheet:
+    sheet_name_hash = sha256(sheet_name.encode("utf-8")).hexdigest()
+    if not rows or all(_is_empty_row(row) for row in rows):
+        return _ParsedSheet(sheet_name_hash=sheet_name_hash, rows=())
     header_end, headers = _locate_headers(rows)
     parsed_rows: list[tuple[int, Mapping[str, object], str]] = []
     district_codes: set[str] = set()
@@ -233,10 +275,11 @@ def _parse_sheet(
             for column_index, header in headers.items()
         }
         district_code = _source_code(values["시군구코드"])
-        if not district_code:
-            continue
         district_name = _source_text(values["시군구"])
-        district_codes.add(district_code)
+        if not district_code and _is_explicit_support_row(values):
+            continue
+        if district_code:
+            district_codes.add(district_code)
         if district_name:
             district_names.add(district_name)
         parsed_rows.append((source_row_number, values, district_code))
@@ -245,7 +288,7 @@ def _parse_sheet(
         raise VacantHouseSourceError("mixed_district_sheet")
 
     return _ParsedSheet(
-        sheet_name_hash=sha256(sheet_name.encode("utf-8")).hexdigest(),
+        sheet_name_hash=sheet_name_hash,
         rows=tuple(parsed_rows),
     )
 
@@ -301,6 +344,19 @@ def _normalize_header(value: object) -> str:
 
 def _is_empty_row(row: Sequence[object]) -> bool:
     return all(value is None or (isinstance(value, str) and not value.strip()) for value in row)
+
+
+def _is_explicit_support_row(values: Mapping[str, object]) -> bool:
+    populated = [
+        "".join(str(value).split())
+        for value in values.values()
+        if value is not None and str(value).strip()
+    ]
+    return len(populated) <= 2 and any(
+        text.startswith(marker)
+        for text in populated
+        for marker in _EXPLICIT_SUPPORT_MARKERS
+    )
 
 
 def _source_code(value: object) -> str:

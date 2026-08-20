@@ -49,6 +49,19 @@ class ArchiveProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class VacantHouseSourceArtifact:
+    """One readable workbook sheet, including zero-row custody evidence."""
+
+    workbook_sha256: str
+    workbook_name_hash: str
+    sheet_name_hash: str
+    source_format: Literal["xlsx", "xls"]
+    provenance_kind: Literal["native_xlsx", "legacy_xls_reader"]
+    candidate_row_count: int
+    district_codes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class VacantHouseSourceRow:
     """One private source row with redaction-safe artifact labels."""
 
@@ -112,6 +125,11 @@ class StagedVacantBundle:
     source_snapshot_date: date
     schema_version: str
     file_hashes: Mapping[str, str]
+    workbook_count: int
+    modern_workbook_count: int
+    legacy_workbook_count: int
+    sheet_count: int
+    district_codes: tuple[str, ...]
     source_row_count: int
     normalized_row_count: int
     exception_count: int

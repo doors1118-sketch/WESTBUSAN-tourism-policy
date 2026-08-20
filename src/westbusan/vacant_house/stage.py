@@ -27,16 +27,30 @@ from westbusan.vacant_house.models import (
     VacantHouseSourceRow,
 )
 from westbusan.vacant_house.normalize import normalize_row
-from westbusan.vacant_house.source import iter_archive_rows
+from westbusan.vacant_house.source import iter_archive_artifacts, iter_archive_rows
 
-STAGING_SCHEMA_VERSION: Final = "vacant-house-staging-v1"
+STAGING_SCHEMA_VERSION: Final = "vacant-house-staging-v2"
 _BUNDLE_FILENAMES = (
     "source.zip",
+    "artifacts.parquet",
     "records.parquet",
     "exceptions.parquet",
     "manifest.json",
 )
 _HASHED_PAYLOAD_FILENAMES = _BUNDLE_FILENAMES[:-1]
+
+_ARTIFACT_SCHEMA = pa.schema(
+    [
+        pa.field("workbook_sha256", pa.string(), nullable=False),
+        pa.field("workbook_name_hash", pa.string(), nullable=False),
+        pa.field("sheet_name_hash", pa.string(), nullable=False),
+        pa.field("source_format", pa.string(), nullable=False),
+        pa.field("provenance_kind", pa.string(), nullable=False),
+        pa.field("candidate_row_count", pa.int64(), nullable=False),
+        pa.field("district_codes", pa.list_(pa.string()), nullable=False),
+        pa.field("conversion_provenance_json", pa.string(), nullable=False),
+    ]
+)
 
 _RECORD_SCHEMA = pa.schema(
     [
@@ -112,7 +126,7 @@ def stage_archive(
             raise StagedVacantBundleError("existing_bundle_mismatch")
         return bundle
 
-    records, exceptions, source_row_count = _normalize_archive(
+    artifacts, records, exceptions, source_row_count = _normalize_archive(
         Path(archive_path), snapshot_date
     )
     try:
@@ -132,6 +146,10 @@ def stage_archive(
     try:
         _write_bytes(temporary / "source.zip", archive_bytes)
         _write_parquet(
+            temporary / "artifacts.parquet",
+            pa.Table.from_pylist(artifacts, schema=_ARTIFACT_SCHEMA),
+        )
+        _write_parquet(
             temporary / "records.parquet",
             pa.Table.from_pylist(records, schema=_RECORD_SCHEMA),
         )
@@ -143,17 +161,43 @@ def stage_archive(
             filename: _file_descriptor(temporary / filename)
             for filename in _HASHED_PAYLOAD_FILENAMES
         }
+        payload_files["artifacts.parquet"]["row_count"] = len(artifacts)
         payload_files["records.parquet"]["row_count"] = len(records)
         payload_files["exceptions.parquet"]["row_count"] = len(exceptions)
+        workbook_formats = {
+            (
+                str(artifact["workbook_sha256"]),
+                str(artifact["workbook_name_hash"]),
+            ): str(artifact["source_format"])
+            for artifact in artifacts
+        }
+        district_codes = sorted(
+            {
+                str(code)
+                for artifact in artifacts
+                for code in artifact["district_codes"]  # type: ignore[union-attr]
+            }
+        )
         manifest = {
             "archive_sha256": archive_sha256,
             "created_at": f"{snapshot_date.isoformat()}T00:00:00Z",
+            "district_codes": district_codes,
             "exception_count": len(exceptions),
             "files": payload_files,
+            "legacy_workbook_count": sum(
+                source_format == "xls"
+                for source_format in workbook_formats.values()
+            ),
+            "modern_workbook_count": sum(
+                source_format == "xlsx"
+                for source_format in workbook_formats.values()
+            ),
             "normalized_row_count": len(records),
             "schema_version": STAGING_SCHEMA_VERSION,
+            "sheet_count": len(artifacts),
             "source_row_count": source_row_count,
             "source_snapshot_date": snapshot_date.isoformat(),
+            "workbook_count": len(workbook_formats),
         }
         _write_bytes(temporary / "manifest.json", _canonical_json(manifest))
         _fsync_directory(temporary)
@@ -192,7 +236,38 @@ def validate_staged_bundle(path: Path) -> StagedVacantBundle:
 
 def _normalize_archive(
     archive_path: Path, snapshot_date: date
-) -> tuple[list[dict[str, object]], list[dict[str, object]], int]:
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    list[dict[str, object]],
+    int,
+]:
+    artifacts = [
+        {
+            "workbook_sha256": artifact.workbook_sha256,
+            "workbook_name_hash": artifact.workbook_name_hash,
+            "sheet_name_hash": artifact.sheet_name_hash,
+            "source_format": artifact.source_format,
+            "provenance_kind": artifact.provenance_kind,
+            "candidate_row_count": artifact.candidate_row_count,
+            "district_codes": list(artifact.district_codes),
+            "conversion_provenance_json": _canonical_json(
+                {
+                    "kind": artifact.provenance_kind,
+                    "source_format": artifact.source_format,
+                    "source_workbook_sha256": artifact.workbook_sha256,
+                }
+            ).decode("utf-8"),
+        }
+        for artifact in iter_archive_artifacts(archive_path)
+    ]
+    artifacts.sort(
+        key=lambda item: (
+            str(item["workbook_sha256"]),
+            str(item["workbook_name_hash"]),
+            str(item["sheet_name_hash"]),
+        )
+    )
     records: list[dict[str, object]] = []
     exceptions: list[dict[str, object]] = []
     source_row_count = 0
@@ -210,7 +285,7 @@ def _normalize_archive(
             int(item["source_row_number"]),
         )
     )
-    return records, exceptions, source_row_count
+    return artifacts, records, exceptions, source_row_count
 
 
 def _record_payload(record: NormalizedVacantHouse) -> dict[str, object]:
@@ -286,12 +361,17 @@ def _validate_staged_bundle(path: Path) -> StagedVacantBundle:
     required_keys = {
         "archive_sha256",
         "created_at",
+        "district_codes",
         "exception_count",
         "files",
+        "legacy_workbook_count",
+        "modern_workbook_count",
         "normalized_row_count",
         "schema_version",
+        "sheet_count",
         "source_row_count",
         "source_snapshot_date",
+        "workbook_count",
     }
     if set(manifest) != required_keys:
         raise StagedVacantBundleError("invalid_staged_bundle")
@@ -328,10 +408,21 @@ def _validate_staged_bundle(path: Path) -> StagedVacantBundle:
     if file_hashes["source.zip"] != archive_sha256:
         raise StagedVacantBundleError("invalid_staged_bundle")
 
+    artifacts = pq.read_table(path / "artifacts.parquet")
     records = pq.read_table(path / "records.parquet")
     exceptions = pq.read_table(path / "exceptions.parquet")
-    if records.schema != _RECORD_SCHEMA or exceptions.schema != _EXCEPTION_SCHEMA:
+    if (
+        artifacts.schema != _ARTIFACT_SCHEMA
+        or records.schema != _RECORD_SCHEMA
+        or exceptions.schema != _EXCEPTION_SCHEMA
+    ):
         raise StagedVacantBundleError("invalid_staged_bundle")
+    artifact_rows = artifacts.to_pylist()
+    workbook_count = _count_value(manifest["workbook_count"])
+    modern_workbook_count = _count_value(manifest["modern_workbook_count"])
+    legacy_workbook_count = _count_value(manifest["legacy_workbook_count"])
+    sheet_count = _count_value(manifest["sheet_count"])
+    district_codes = _district_code_list(manifest["district_codes"])
     source_row_count = _count_value(manifest["source_row_count"])
     normalized_row_count = _count_value(manifest["normalized_row_count"])
     exception_count = _count_value(manifest["exception_count"])
@@ -339,10 +430,21 @@ def _validate_staged_bundle(path: Path) -> StagedVacantBundle:
         raise StagedVacantBundleError("invalid_staged_bundle")
     if normalized_row_count != records.num_rows or exception_count != exceptions.num_rows:
         raise StagedVacantBundleError("invalid_staged_bundle")
+    if files["artifacts.parquet"]["row_count"] != artifacts.num_rows:
+        raise StagedVacantBundleError("invalid_staged_bundle")
     if files["records.parquet"]["row_count"] != normalized_row_count:
         raise StagedVacantBundleError("invalid_staged_bundle")
     if files["exceptions.parquet"]["row_count"] != exception_count:
         raise StagedVacantBundleError("invalid_staged_bundle")
+    _validate_artifact_rows(
+        artifact_rows,
+        workbook_count,
+        modern_workbook_count,
+        legacy_workbook_count,
+        sheet_count,
+        district_codes,
+        source_row_count,
+    )
     _validate_record_order(records.to_pylist())
     _validate_exception_rows(exceptions.to_pylist())
 
@@ -355,6 +457,11 @@ def _validate_staged_bundle(path: Path) -> StagedVacantBundle:
         source_snapshot_date=snapshot_date,
         schema_version=STAGING_SCHEMA_VERSION,
         file_hashes=file_hashes,
+        workbook_count=workbook_count,
+        modern_workbook_count=modern_workbook_count,
+        legacy_workbook_count=legacy_workbook_count,
+        sheet_count=sheet_count,
+        district_codes=district_codes,
         source_row_count=source_row_count,
         normalized_row_count=normalized_row_count,
         exception_count=exception_count,
@@ -364,6 +471,70 @@ def _validate_staged_bundle(path: Path) -> StagedVacantBundle:
 def _validate_record_order(records: Sequence[Mapping[str, object]]) -> None:
     keys = [(str(row["record_id"]), str(row["source_row_id"])) for row in records]
     if keys != sorted(keys):
+        raise StagedVacantBundleError("invalid_staged_bundle")
+
+
+def _validate_artifact_rows(
+    artifacts: Sequence[Mapping[str, object]],
+    workbook_count: int,
+    modern_workbook_count: int,
+    legacy_workbook_count: int,
+    sheet_count: int,
+    district_codes: tuple[str, ...],
+    source_row_count: int,
+) -> None:
+    keys = [
+        (
+            str(row["workbook_sha256"]),
+            str(row["workbook_name_hash"]),
+            str(row["sheet_name_hash"]),
+        )
+        for row in artifacts
+    ]
+    if keys != sorted(keys) or len(keys) != len(set(keys)):
+        raise StagedVacantBundleError("invalid_staged_bundle")
+    formats_by_workbook: dict[tuple[str, str], str] = {}
+    observed_districts: set[str] = set()
+    observed_rows = 0
+    for row in artifacts:
+        workbook_sha256 = _digest_value(row["workbook_sha256"])
+        workbook_name_hash = _digest_value(row["workbook_name_hash"])
+        _digest_value(row["sheet_name_hash"])
+        source_format = str(row["source_format"])
+        provenance_kind = str(row["provenance_kind"])
+        expected_kind = (
+            "native_xlsx" if source_format == "xlsx" else "legacy_xls_reader"
+        )
+        if source_format not in {"xlsx", "xls"} or provenance_kind != expected_kind:
+            raise StagedVacantBundleError("invalid_staged_bundle")
+        workbook_key = (workbook_sha256, workbook_name_hash)
+        if formats_by_workbook.setdefault(workbook_key, source_format) != source_format:
+            raise StagedVacantBundleError("invalid_staged_bundle")
+        row_districts = _district_code_list(row["district_codes"])
+        observed_districts.update(row_districts)
+        observed_rows += _count_value(row["candidate_row_count"])
+        provenance_raw = str(row["conversion_provenance_json"])
+        provenance = json.loads(provenance_raw)
+        expected_provenance = {
+            "kind": provenance_kind,
+            "source_format": source_format,
+            "source_workbook_sha256": workbook_sha256,
+        }
+        if (
+            provenance != expected_provenance
+            or _canonical_json(provenance).decode("utf-8") != provenance_raw
+        ):
+            raise StagedVacantBundleError("invalid_staged_bundle")
+    observed_formats = tuple(formats_by_workbook.values())
+    if (
+        workbook_count != len(formats_by_workbook)
+        or sheet_count != len(artifacts)
+        or modern_workbook_count != observed_formats.count("xlsx")
+        or legacy_workbook_count != observed_formats.count("xls")
+        or workbook_count != modern_workbook_count + legacy_workbook_count
+        or district_codes != tuple(sorted(observed_districts))
+        or source_row_count != observed_rows
+    ):
         raise StagedVacantBundleError("invalid_staged_bundle")
 
 
@@ -411,6 +582,18 @@ def _count_value(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise StagedVacantBundleError("invalid_staged_bundle")
     return value
+
+
+def _district_code_list(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise StagedVacantBundleError("invalid_staged_bundle")
+    codes = tuple(str(code) for code in value)
+    if (
+        codes != tuple(sorted(set(codes)))
+        or any(len(code) != 5 or not code.isdigit() for code in codes)
+    ):
+        raise StagedVacantBundleError("invalid_staged_bundle")
+    return codes
 
 
 def _write_bytes(path: Path, raw: bytes) -> None:

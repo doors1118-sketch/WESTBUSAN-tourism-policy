@@ -10,6 +10,7 @@ import pytest
 from openpyxl import Workbook
 from typer.testing import CliRunner
 
+import westbusan.cli as cli_module
 from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.cli import app, exit_code_for_summary
@@ -221,20 +222,21 @@ def test_vacant_house_import_publishes_safe_aggregate_summary(
     monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
     monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "vacant-house-import",
-            str(bundle.path),
-            "internal-operator",
-            "approved snapshot",
-            "--root",
-            str(Path.cwd()),
-        ],
-    )
+    arguments = [
+        "vacant-house-import",
+        str(bundle.path),
+        "internal-operator",
+        "approved snapshot",
+        "--root",
+        str(Path.cwd()),
+    ]
+    result = CliRunner().invoke(app, arguments)
+    repeated = CliRunner().invoke(app, arguments)
 
     assert result.exit_code == 0
+    assert repeated.exit_code == 0
     output = json.loads(result.stdout)
+    assert json.loads(repeated.stdout) == output
     assert output["status"] == "COMPLETED"
     assert output["source_row_count"] == 16
     assert output["accepted_record_count"] == 16
@@ -244,6 +246,8 @@ def test_vacant_house_import_publishes_safe_aggregate_summary(
     assert "internal-operator" not in result.stdout
     assert "approved snapshot" not in result.stdout
     assert pipeline.db.scalar("select count(*) from vacant_house_publication_current") == 1
+    assert pipeline.db.scalar("select count(*) from vacant_house_publication_audit") == 1
+    assert pipeline.db.scalar("select count(*) from raw_artifact") == 1
 
 
 def test_vacant_house_import_rejects_tamper_without_private_input_echo(
@@ -274,6 +278,58 @@ def test_vacant_house_import_rejects_tamper_without_private_input_echo(
     }
     for private_value in (str(bundle.path), "PRIVATE-STAGED-TOKEN-7788", "Traceback"):
         assert private_value not in result.output
+
+
+def test_vacant_house_import_failure_is_retryable_without_partial_publication(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A prepublication failure must release safely and permit the exact retry."""
+    archive = _vacant_archive(tmp_path / "private-retry-source.zip")
+    bundle = stage_archive(archive, tmp_path / "private-retry-stage", date(2025, 2, 28))
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+    original_write = cli_module.write_vacant_manifest
+
+    def fail_before_publication(*_args, **_kwargs):
+        raise RuntimeError("PRIVATE-FAILURE-EVIDENCE-MUST-NOT-PRINT")
+
+    monkeypatch.setattr(cli_module, "write_vacant_manifest", fail_before_publication)
+    arguments = [
+        "vacant-house-import",
+        str(bundle.path),
+        "internal-operator",
+        "approved retry",
+        "--root",
+        str(Path.cwd()),
+    ]
+    failed = CliRunner().invoke(app, arguments)
+
+    assert failed.exit_code == 1
+    assert json.loads(failed.stdout) == {
+        "reason": "vacant_house_import_failed",
+        "status": "BLOCKED",
+    }
+    assert "PRIVATE-FAILURE-EVIDENCE" not in failed.output
+    assert pipeline.db.scalar("select count(*) from vacant_house_publication_current") == 0
+    assert pipeline.db.query(
+        "select status, owner_token from vacant_house_import_run"
+    ) == [("FAILED", None)]
+    assert (
+        pipeline.db.scalar(
+            "select run_id from pipeline_writer_lease where lease_key = 'writer'"
+        )
+        is None
+    )
+
+    monkeypatch.setattr(cli_module, "write_vacant_manifest", original_write)
+    retried = CliRunner().invoke(app, arguments)
+
+    assert retried.exit_code == 0
+    assert json.loads(retried.stdout)["status"] == "COMPLETED"
+    assert pipeline.db.scalar("select count(*) from vacant_house_publication_current") == 1
+    assert pipeline.db.scalar("select count(*) from vacant_house_publication_audit") == 1
 
 
 @pytest.mark.parametrize(

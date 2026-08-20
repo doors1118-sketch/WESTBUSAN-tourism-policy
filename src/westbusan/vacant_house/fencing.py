@@ -129,7 +129,7 @@ def release_writer(db: Database, token: VacantHouseLeaseToken) -> None:
            set owner_token = null, run_id = null, heartbeat_at = ?,
                lease_expires_at = ?, fence_touch = coalesce(fence_touch, 0) + 1
            where lease_key = 'writer' and run_id = ? and owner_token = ?
-             and fence_epoch = ?
+             and fence_epoch = ? and lease_expires_at > ?
            returning lease_key""",
         [
             now,
@@ -137,6 +137,7 @@ def release_writer(db: Database, token: VacantHouseLeaseToken) -> None:
             token.vacant_run_id,
             token.owner_token,
             token.fence_epoch,
+            now,
         ],
     )
     if released != [("writer",)]:

@@ -89,6 +89,10 @@ manifest SHA-256, source-row count, normalised-row count, and exception count.
 Confirm:
 
 - the archive hash matches the custody record;
+- the artifact inventory contains every workbook and every sheet, including
+  blank support sheets, and binds each sheet to workbook/name/sheet hashes;
+- exactly 16 distinct workbook hashes are present and each workbook maps to
+  exactly one of the 16 expected district codes;
 - `source_row_count = normalized_row_count + exception_count`;
 - the bundle validates without modification;
 - duplicate evidence and every rejected row are represented explicitly; and
@@ -200,33 +204,47 @@ recheck every existing service endpoint for HTTP 200.
 
 ## 6. Retry and last-known-good rules
 
-- Before publication, a failed attempt must leave no partial target rows and
-  must release or allow expiry of its writer lease. Revalidate the sealed bundle
-  and retry through the command; never resume by manually inserting rows.
+- The target-table load is one database transaction, so a process interruption
+  leaves either no committed target rows or one complete prepublication target
+  set. A controlled prepublication failure marks the run retryable and releases
+  its writer lease. The same-bundle command may reuse a complete target set only
+  after every persisted artifact, row, duplicate decision, exception, raw hash,
+  owner, and fence epoch matches the sealed bundle; any difference blocks.
+- An expired process may reclaim the same run only through the command and a new
+  shared-writer fence epoch. Never resume by manually inserting, deleting, or
+  editing rows or control tables.
 - A publication crash must leave the previous current pointer byte-for-byte
   unchanged. Retry only after confirming fence ownership and bundle/manifest
   validity.
-- The same completed run is idempotent: it must not create a second publication
-  audit or pointer. If an operator-level same-bundle re-run is not accepted as
-  idempotent by the released command, stop and obtain a reviewed fix; do not
-  manufacture a new run or alter the existing one.
+- The same completed bundle command is idempotent: it returns the persisted
+  publication without creating a second publication audit, raw-artifact row, or
+  pointer. Any mismatch blocks; do not manufacture a new run or alter the
+  existing one.
 - A rejected or corrected delivery is new evidence. Preserve the last-known-good
   publication and ingest the corrected immutable archive as a new run.
 
 ## 7. Rollback
 
-Rollback means publishing an already validated complete prior snapshot through
-the same fenced, manifest-bound publication path with an explicit approved
-reason. It does not mean deleting tables, truncating rows, rewriting audit
-history, editing the current pointer directly, restoring selected rows from a
-spreadsheet, or purging the failed run.
+Phase 1 does **not** provide a supported command for repointing to a prior
+vacant-house run. Do not describe or attempt a direct pointer edit as rollback.
+A failed new publication transaction keeps the prior pointer unchanged and
+needs no rollback.
 
-Before rollback, keep the service read-only if required, capture the current
-vacant pointer/manifest as aggregate evidence, verify the chosen prior manifest,
-take a fresh recoverable database backup, and obtain the normal writer lease.
-After rollback, repeat all publication, core/spatial non-impact, fact/mart, and
-HTTP health checks. Preserve both the superseded and restored publications and
-their audit records.
+If a successfully published snapshot is later found to be wrong, stop its
+downstream use, preserve the evidence, and use one of these reviewed recovery
+paths:
+
+1. preferred: obtain a corrected immutable source delivery, stage it as a new
+   bundle, pass the full release gate, and publish it as a new audited run; or
+2. emergency: under an approved service outage, restore the entire verified
+   pre-import database backup with the service stopped. Do not restore selected
+   vacant-house rows or combine database files. Reopen the restored database
+   read-only first and verify its migration checksums, core/spatial/vacant
+   pointers, fact/mart counts, and manifest digests before restarting service.
+
+After either recovery, repeat all publication, non-impact, count/digest, and
+HTTP health checks. A prior-run repoint requires a separately designed,
+implemented, tested, and audited feature; it is not an operator workaround.
 
 ## 8. Internal detailed-location use
 
@@ -237,3 +255,26 @@ must be audited and show the source snapshot date plus the warning
 support logs, and incident reports use masked locations and aggregate evidence.
 Phase 1 provides the inventory/publication foundation; it does not assert
 permit status, legality, investment grade, or enriched land-use feasibility.
+
+## 9. Pre-release checkpoint (2026-08-20)
+
+The read-only server gate completed without an operational change:
+
+- system volume: 77% used, 10.8 GiB available;
+- tourism data volume: 8% used, 85.6 GiB available;
+- memory: 15.6 GiB total, 14.0 GiB available, negligible swap use;
+- active core writer processes: 0;
+- `RUNNING` pipeline runs: 0;
+- active shared writer leases: 0;
+- current core run: `6ca4fa4f-e413-53d8-a5bf-b5f28a776fae`;
+- current spatial run: `f4966cf3-db14-5e16-9e06-e1a47ff8e8cf`, business
+  date `2026-08-20`;
+- spatial reconciliation: 3,544 grids, 3,544 grid-mart rows, and 77,968
+  evidence rows; and
+- all 11 existing public/service verification endpoints returned HTTP 200.
+
+Production backup, import, and pointer publication were deliberately not run.
+The Seo-gu workbook remains blocked as `encrypted_office_source`; an authorised
+password or source-owner-provided decrypted workbook is required. Repeat the
+entire pre-import gate after the custody-preserving correction produces a
+readable 16-district archive.

@@ -12,7 +12,11 @@ from openpyxl import Workbook
 
 from westbusan.vacant_house import source
 from westbusan.vacant_house.models import VacantHouseSourceError
-from westbusan.vacant_house.source import iter_archive_rows, profile_archive
+from westbusan.vacant_house.source import (
+    iter_archive_artifacts,
+    iter_archive_rows,
+    profile_archive,
+)
 
 REQUIRED_HEADERS = (
     "시군구코드",
@@ -131,6 +135,52 @@ def test_profile_counts_mixed_workbook_formats_and_ignores_directory_member(
         profile.workbook_count = 0  # type: ignore[misc]
 
 
+def test_artifact_inventory_includes_a_readable_header_only_sheet(
+    tmp_path: Path,
+) -> None:
+    """A workbook with zero candidate rows must remain hash-bound evidence."""
+    populated = _xlsx_bytes([list(REQUIRED_HEADERS), _source_values()])
+    header_only = _xlsx_bytes([list(REQUIRED_HEADERS)])
+    archive_path = tmp_path / "artifact-inventory.zip"
+    _write_archive(
+        archive_path,
+        [("populated.xlsx", populated), ("header-only.xlsx", header_only)],
+    )
+
+    artifacts = list(iter_archive_artifacts(archive_path))
+
+    assert len(artifacts) == 2
+    assert sorted(artifact.candidate_row_count for artifact in artifacts) == [0, 1]
+    assert {artifact.source_format for artifact in artifacts} == {"xlsx"}
+    assert all(len(artifact.workbook_sha256) == 64 for artifact in artifacts)
+    assert all(len(artifact.workbook_name_hash) == 64 for artifact in artifacts)
+    assert all(len(artifact.sheet_name_hash) == 64 for artifact in artifacts)
+
+
+def test_artifact_inventory_includes_a_completely_blank_sheet(
+    tmp_path: Path,
+) -> None:
+    """A blank support sheet is still an independently hash-bound artifact."""
+    workbook = Workbook()
+    populated = workbook.active
+    populated.title = "Private Populated Sheet"
+    populated.append(list(REQUIRED_HEADERS))
+    populated.append(_source_values())
+    workbook.create_sheet("Private Blank Sheet")
+    output = BytesIO()
+    workbook.save(output)
+    workbook.close()
+    archive_path = tmp_path / "blank-sheet-inventory.zip"
+    _write_archive(archive_path, [(PRIVATE_WORKBOOK_NAME, output.getvalue())])
+
+    artifacts = list(iter_archive_artifacts(archive_path))
+    rows = list(iter_archive_rows(archive_path, date(2025, 2, 28)))
+
+    assert len(artifacts) == 2
+    assert sorted(artifact.candidate_row_count for artifact in artifacts) == [0, 1]
+    assert len(rows) == 1
+
+
 def test_iterates_multiline_headers_with_hashed_labels_and_immutable_values(
     tmp_path: Path,
 ) -> None:
@@ -241,6 +291,49 @@ def test_instructional_rows_without_a_district_code_are_not_candidates(
 
     assert profile.candidate_row_count == 1
     assert len(rows) == 1
+
+
+def test_nonempty_missing_district_row_inside_candidate_block_is_preserved(
+    tmp_path: Path,
+) -> None:
+    """A malformed record between valid rows must reach normalization as evidence."""
+    raw = _xlsx_bytes(
+        [
+            list(REQUIRED_HEADERS),
+            _source_values("26380"),
+            _source_values(None),
+            _source_values("26380"),
+        ]
+    )
+    archive_path = tmp_path / "missing-district-record.zip"
+    _write_archive(archive_path, [(PRIVATE_WORKBOOK_NAME, raw)])
+
+    rows = list(iter_archive_rows(archive_path, date(2025, 2, 28)))
+
+    assert len(rows) == 3
+    assert [row.district_code for row in rows] == ["26380", "", "26380"]
+    assert rows[1].values["도로명주소"] == PRIVATE_ADDRESS
+
+
+def test_nonempty_missing_district_rows_at_candidate_edges_are_preserved(
+    tmp_path: Path,
+) -> None:
+    """Malformed first/last records are evidence unless explicitly instructional."""
+    raw = _xlsx_bytes(
+        [
+            list(REQUIRED_HEADERS),
+            _source_values(None),
+            _source_values("26380"),
+            _source_values(None),
+        ]
+    )
+    archive_path = tmp_path / "missing-district-edge-records.zip"
+    _write_archive(archive_path, [(PRIVATE_WORKBOOK_NAME, raw)])
+
+    rows = list(iter_archive_rows(archive_path, date(2025, 2, 28)))
+
+    assert len(rows) == 3
+    assert [row.district_code for row in rows] == ["", "26380", ""]
 
 
 def test_reads_legacy_workbook_through_xlrd_on_demand(

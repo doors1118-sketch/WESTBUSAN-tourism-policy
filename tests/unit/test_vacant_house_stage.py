@@ -133,6 +133,7 @@ def test_stages_deterministic_sorted_bundle_with_exact_counts_and_safe_metadata(
     assert first.file_hashes == second.file_hashes == repeated.file_hashes
     assert set(first.file_hashes) == {
         "source.zip",
+        "artifacts.parquet",
         "records.parquet",
         "exceptions.parquet",
         "manifest.json",
@@ -158,6 +159,14 @@ def test_stages_deterministic_sorted_bundle_with_exact_counts_and_safe_metadata(
         "code": "invalid_flag",
         "field": "is_unlicensed",
     }
+
+    artifacts = pq.read_table(first.path / "artifacts.parquet").to_pylist()
+    assert len(artifacts) == 2
+    assert sum(artifact["candidate_row_count"] for artifact in artifacts) == 3
+    assert {artifact["provenance_kind"] for artifact in artifacts} == {
+        "native_xlsx"
+    }
+    assert all(len(artifact["workbook_sha256"]) == 64 for artifact in artifacts)
 
     manifest = json.loads((first.path / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["created_at"] == "2025-02-28T00:00:00Z"
@@ -199,7 +208,13 @@ def test_stages_deterministic_sorted_bundle_with_exact_counts_and_safe_metadata(
 
 @pytest.mark.parametrize(
     "filename",
-    ["source.zip", "records.parquet", "exceptions.parquet", "manifest.json"],
+    [
+        "source.zip",
+        "artifacts.parquet",
+        "records.parquet",
+        "exceptions.parquet",
+        "manifest.json",
+    ],
 )
 def test_validation_rejects_every_tampered_bundle_file(
     tmp_path: Path, filename: str
