@@ -421,6 +421,10 @@ def test_public_transport_od_requests_every_busan_district_pair(
         for arrival in district_codes
     }
     assert len(requests) == 256
+    assert (
+        requests[0]["dptre_sgg_cd"],
+        requests[0]["arvl_sgg_cd"],
+    ) == ("26380", "26440")
     assert all(
         item["dptre_ctpv_cd"] == "26"
         and item["arvl_ctpv_cd"] == "26"
