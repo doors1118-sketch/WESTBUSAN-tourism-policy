@@ -147,3 +147,41 @@ class VacantHouseImportSummary:
     exact_duplicate_count: int
     ambiguous_duplicate_count: int
     exception_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class VacantManifestEntry:
+    """One deterministic target-table digest for a vacant-house run."""
+
+    manifest_id: UUID
+    table_name: str
+    row_count: int
+    row_digest_sha256: str
+    schema_version: str
+    manifest_json: str
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class VacantManifest:
+    """The exact four-table completion evidence for one import run."""
+
+    vacant_run_id: UUID
+    entries: tuple[VacantManifestEntry, ...]
+    anchor_manifest_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class VacantPublication:
+    """Stable identity of one atomic vacant-house pointer transition."""
+
+    published: bool
+    pointer_id: UUID
+    publication_event_id: UUID
+    vacant_run_id: UUID
+    previous_vacant_run_id: UUID | None
+    action: str
+    actor: str
+    reason: str
+    manifest_id: UUID
+    published_at: datetime
