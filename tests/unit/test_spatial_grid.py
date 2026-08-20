@@ -242,6 +242,58 @@ def test_equal_area_district_tie_uses_the_same_dong_identity_order(
     ) == [("중구", "0001", "오른쪽행정동")]
 
 
+def test_primary_dong_is_selected_within_the_largest_aggregate_district(
+    tmp_path: Path,
+) -> None:
+    """Catches a cross-district cell rejecting valid split-dong boundaries."""
+    original = _controlled_boundary(tmp_path, 382250.0)
+    document = json.loads(original.read_text(encoding="utf-8"))
+    to_wgs84 = Transformer.from_crs("EPSG:5174", "EPSG:4326", always_xy=True)
+
+    def polygon(west: float, east: float):
+        return mapping(
+            transform(
+                to_wgs84.transform,
+                box(west, 168000.1, east, 168499.9),
+            )
+        )
+
+    document["features"][0]["properties"].update(
+        {"district": "강서구", "dong_code": "0002", "dong_name": "강서큰동"}
+    )
+    document["features"][0]["geometry"] = polygon(382000.1, 382150.0)
+    document["features"][1]["properties"].update(
+        {"district": "강서구", "dong_code": "0003", "dong_name": "강서작은동"}
+    )
+    document["features"][1]["geometry"] = polygon(382150.0, 382275.0)
+    document["features"].append(
+        {
+            "type": "Feature",
+            "properties": {
+                "district": "사상구",
+                "dong_code": "0001",
+                "dong_name": "사상단일동",
+            },
+            "geometry": polygon(382275.0, 382499.9),
+        }
+    )
+    boundary = tmp_path / "aggregate-district.geojson"
+    boundary.write_text(
+        json.dumps(document, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    db, boundary_id = _approved_fixture(tmp_path, boundary)
+
+    build_grid(db, boundary_id, SpatialConfig.default())
+
+    assert db.query(
+        """select district_name, primary_dong_code, primary_dong_name
+           from dim_spatial_grid_500m
+           where boundary_version_id = ? and grid_id = 'g5174_500_764_336'""",
+        [boundary_id],
+    ) == [("강서구", "0002", "강서큰동")]
+
+
 def test_rebuild_rejects_changed_existing_rows_without_overwriting(tmp_path: Path) -> None:
     """Catches an idempotent rebuild silently replacing previously materialized bytes."""
     db, boundary_id = _approved_fixture(tmp_path)

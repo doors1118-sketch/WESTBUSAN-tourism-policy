@@ -46,6 +46,9 @@ def render_map(bundle_data: PublicSpatialData) -> str:
         "{{BOUNDARY_VERSION}}": html.escape(
             str(bundle_data.metadata.get("boundary_version", "-"))
         ),
+        "{{BOUNDARY_SOURCE}}": html.escape(
+            str(bundle_data.metadata.get("boundary_source_organization", "공식 원천기관"))
+        ),
         "{{POLICY_VERSION}}": html.escape(
             str(bundle_data.metadata.get("policy_version", "-"))
         ),

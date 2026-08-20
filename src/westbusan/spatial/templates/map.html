@@ -20,7 +20,7 @@
   <aside id="filters-panel" aria-label="지도 필터">
     <h2>필터와 현황</h2>
     <label>자치구<select id="district-filter"><option value="">전체</option></select></label>
-    <label>행정동<select id="dong-filter"><option value="">전체</option></select></label>
+    <label>읍면동<select id="dong-filter"><option value="">전체</option></select></label>
     <label>기간<select id="period-filter"><option value="">전체</option></select></label>
     <label>구성요소<select id="component-filter">
       <option value="">전체</option><option value="small-scale">소규모</option>
@@ -49,6 +49,7 @@
       <button id="zoom-reset" aria-label="지도 원래 크기">초기화</button></div>
     {{SVG}}
     <p class="map-note">색상과 텍스트 등급을 함께 제공합니다. 기본 화면은 Priority 1 위치를 먼저 보여줍니다.</p>
+    <p class="map-note">경계 출처 {{BOUNDARY_SOURCE}}</p>
   </section>
   <aside id="evidence-panel" aria-live="polite" aria-label="선택 대상 근거">
     <h2>선택 대상 근거</h2><dl id="selected-evidence">{{DEFAULT_EVIDENCE}}</dl>

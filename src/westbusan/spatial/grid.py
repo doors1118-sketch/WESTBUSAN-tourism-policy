@@ -164,19 +164,6 @@ def _build_row(
             "dong overlap ratios do not sum approximately to one"
         )
 
-    maximum_dong_area = max(overlap[3] for overlap in overlaps)
-    primary_candidates = [
-        overlap
-        for overlap in overlaps
-        if math.isclose(
-            overlap[3],
-            maximum_dong_area,
-            rel_tol=1e-12,
-            abs_tol=_AREA_TIE_ABSOLUTE_TOLERANCE,
-        )
-    ]
-    primary = min(primary_candidates, key=lambda overlap: (overlap[1], overlap[2]))
-
     district_areas: dict[str, float] = defaultdict(float)
     for district, _code, _name, area in overlaps:
         district_areas[district] += area
@@ -199,10 +186,22 @@ def _build_row(
             if dong_district == candidate
         ),
     )
-    if district != primary[0]:
-        raise BoundaryApprovalError(
-            "largest-area district does not match the primary dong district"
+
+    district_overlaps = [
+        overlap for overlap in overlaps if overlap[0] == district
+    ]
+    maximum_dong_area = max(overlap[3] for overlap in district_overlaps)
+    primary_candidates = [
+        overlap
+        for overlap in district_overlaps
+        if math.isclose(
+            overlap[3],
+            maximum_dong_area,
+            rel_tol=1e-12,
+            abs_tol=_AREA_TIE_ABSOLUTE_TOLERANCE,
         )
+    ]
+    primary = min(primary_candidates, key=lambda overlap: (overlap[1], overlap[2]))
 
     dong_evidence = [
         {

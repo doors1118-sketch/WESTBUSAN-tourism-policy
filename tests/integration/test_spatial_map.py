@@ -81,6 +81,7 @@ def _map_data() -> PublicSpatialData:
         ),
         metadata={
             "business_date": "2026-08-17",
+            "boundary_source_organization": "국토교통부",
             "boundary_version": "2026-08-official",
             "policy_version": "policy-v1",
         },
@@ -133,6 +134,8 @@ def test_map_has_filters_interactions_keyboard_labels_and_caveats() -> None:
         "점유율이 아닙니다",
         "안전·위생·법적 적합성 평가가 아닙니다",
         "원천기관에 정정 요청",
+        "읍면동",
+        "경계 출처 국토교통부",
     ):
         assert marker in rendered
 

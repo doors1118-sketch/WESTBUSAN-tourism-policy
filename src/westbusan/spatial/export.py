@@ -219,6 +219,7 @@ class _PublicationIdentity:
     base_run_id: UUID
     boundary_version_id: UUID
     boundary_version: str
+    boundary_source_organization: str
     policy_version: str
     business_date: date
     started_at: datetime
@@ -419,7 +420,8 @@ def _load_current_identity(db: Database) -> _PublicationIdentity:
     if summary_counts != counts or summary_digests != digests:
         raise SpatialExportError("current spatial publication summary is invalid")
     boundary_rows = db.query(
-        """select source_version from spatial_boundary_version
+        """select source_version, source_organization
+           from spatial_boundary_version
            where boundary_version_id = ?""",
         [run[1]],
     )
@@ -430,6 +432,7 @@ def _load_current_identity(db: Database) -> _PublicationIdentity:
         base_run_id=run[0],
         boundary_version_id=run[1],
         boundary_version=str(boundary_rows[0][0]),
+        boundary_source_organization=str(boundary_rows[0][1]),
         policy_version=str(run[2]),
         business_date=run[3],
         started_at=run[5],
@@ -481,6 +484,7 @@ def _build_artifacts(
         facility_geojson=facility_collection,
         evidence=tuple(evidence),
         metadata={
+            "boundary_source_organization": identity.boundary_source_organization,
             "boundary_version": identity.boundary_version,
             "business_date": identity.business_date.isoformat(),
             "policy_version": identity.policy_version,
