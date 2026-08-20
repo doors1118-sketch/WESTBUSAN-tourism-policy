@@ -314,6 +314,25 @@ def test_unknown_workbook_magic_is_rejected_with_safe_code(
     assert output.err == ""
 
 
+def test_encrypted_office_container_is_blocked_with_actionable_safe_code(
+    tmp_path: Path,
+) -> None:
+    """An encrypted OOXML package must not be misreported as a legacy workbook."""
+    encrypted = (
+        bytes.fromhex("D0CF11E0A1B11AE1")
+        + "EncryptedPackage".encode("utf-16le")
+        + "EncryptionInfo".encode("utf-16le")
+    )
+    archive_path = tmp_path / "encrypted-source.zip"
+    _write_archive(archive_path, [(PRIVATE_WORKBOOK_NAME, encrypted)])
+
+    with pytest.raises(VacantHouseSourceError) as caught:
+        profile_archive(archive_path)
+
+    assert caught.value.code == "encrypted_office_source"
+    assert PRIVATE_WORKBOOK_NAME not in str(caught.value)
+
+
 def test_missing_required_headers_are_rejected_without_source_labels(
     tmp_path: Path,
 ) -> None:

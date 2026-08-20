@@ -23,6 +23,8 @@ from westbusan.vacant_house.models import (
 
 XLSX_MAGIC = b"PK\x03\x04"
 XLS_MAGIC = bytes.fromhex("D0CF11E0A1B11AE1")
+_ENCRYPTED_PACKAGE_STREAM = "EncryptedPackage".encode("utf-16le")
+_ENCRYPTION_INFO_STREAM = "EncryptionInfo".encode("utf-16le")
 REQUIRED_HEADERS = frozenset(
     {
         "시군구코드",
@@ -149,6 +151,11 @@ def _detect_workbook_format(raw: bytes) -> Literal["xlsx", "xls"]:
     if raw.startswith(XLSX_MAGIC):
         return "xlsx"
     if raw.startswith(XLS_MAGIC):
+        if (
+            _ENCRYPTED_PACKAGE_STREAM in raw
+            and _ENCRYPTION_INFO_STREAM in raw
+        ):
+            raise VacantHouseSourceError("encrypted_office_source")
         return "xls"
     raise VacantHouseSourceError("unsupported_workbook_format")
 
