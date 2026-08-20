@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Literal
+from uuid import UUID
 
 
 class VacantHouseSourceError(ValueError):
@@ -14,6 +15,15 @@ class VacantHouseSourceError(ValueError):
     def __init__(self, code: str) -> None:
         self.code = code
         super().__init__(code)
+
+
+class VacantHouseRowError(ValueError):
+    """A row-level failure identified only by a safe code and field."""
+
+    def __init__(self, code: str, field: str) -> None:
+        self.code = code
+        self.field = field
+        super().__init__(f"{code}:{field}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,3 +52,41 @@ class VacantHouseSourceRow:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+
+
+@dataclass(frozen=True, slots=True)
+class NormalizedVacantHouse:
+    """One canonical row ready for deterministic private staging."""
+
+    record_id: UUID
+    source_row_id: str
+    record_hash: str
+    district_code: str
+    district_name: str | None
+    legal_dong_code: str
+    legal_dong_name: str | None
+    lot_type: str | None
+    main_lot: str | None = field(repr=False)
+    sub_lot: str | None = field(repr=False)
+    road_code: str | None = field(repr=False)
+    building_main: str | None = field(repr=False)
+    building_sub: str | None = field(repr=False)
+    building_name: str | None = field(repr=False)
+    dong_name: str | None = field(repr=False)
+    unit_name: str | None = field(repr=False)
+    road_address: str | None = field(repr=False)
+    exact_address: str | None = field(repr=False)
+    housing_type: str | None
+    construction_year: int | None
+    building_area: float | None
+    land_area: float | None
+    is_unlicensed: bool | None
+    demolition_needed: bool | None
+    vacant_grade: int | None
+    original_grade_text: str | None
+    cleanup_status: str | None
+    workbook_sha256: str
+    workbook_name_hash: str
+    sheet_name_hash: str
+    source_row_number: int
+    source_format: Literal["xlsx", "xls"]
