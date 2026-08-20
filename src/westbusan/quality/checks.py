@@ -54,6 +54,7 @@ _FILE_TRANSPORT_SOURCES = frozenset(
         "srt_station_boarding_file",
     }
 )
+_API_TRANSPORT_SOURCES = frozenset({"public_transport_od_usage"})
 _UNAVAILABLE = frozenset({"AUTH_FAILED", "QUOTA_EXCEEDED", "SPEC_UNRESOLVED", "HTTP_FAILED", "SCHEMA_CHANGED"})
 _OFFICIAL_OVERALL_STATUS_CODES = frozenset({"01", "02", "03", "04"})
 _IDENTIFIER_FIELDS = frozenset({"MNG_NO", "MGT_NO", "management_number", "source_record_id", "id"})
@@ -439,6 +440,8 @@ def _parse_artifacts(
                 total_count = page.total_count
                 schema_fingerprint = page.schema_fingerprint
             else:
+                if source_id in _API_TRANSPORT_SOURCES:
+                    requested_start, requested_end = _transport_window(metadata)
                 page = parse_data_page(
                     body,
                     "application/json",
@@ -937,6 +940,10 @@ def _reconciliation_check(
 ) -> CheckResult:
     if source_id in _TOURISM_SOURCES:
         return _tourism_reconciliation_check(
+            db, run_id, source_id, pages, severity
+        )
+    if source_id in _API_TRANSPORT_SOURCES:
+        return _transport_page_reconciliation_check(
             db, run_id, source_id, pages, severity
         )
     if any(page.error or page.total_count is None or page.page_no is None for page in pages):
@@ -1962,6 +1969,10 @@ def _target_table(source_id: str) -> str:
         return "fact_tourism_demand"
     if source_id in _BUILDING_SOURCES:
         return "staging_building_response"
+    if source_id in _API_TRANSPORT_SOURCES or source_id in _FILE_TRANSPORT_SOURCES:
+        return "fact_transport_flow"
+    if source_id == "busan_metro_odcloud_discovery":
+        return "fact_transport_flow"
     return "unmapped_run_scoped_target"
 
 

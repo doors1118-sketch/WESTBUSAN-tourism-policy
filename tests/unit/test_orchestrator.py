@@ -63,6 +63,70 @@ def test_phase_progress_coalesces_hot_loop_lease_refreshes(
     assert refreshes == [run_id, run_id]
 
 
+def test_production_run_does_not_apply_generic_probe_to_building_collectors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A generic building probe must not poison a successful dedicated collection."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.fixture_dir = None
+    pipeline.registry = SourceRegistry(
+        (
+            SourceSpec(
+                "building_register_title",
+                "https://example.test/building",
+                operation="getBrTitleInfo",
+                group="building",
+            ),
+        )
+    )
+
+    def incompatible_generic_probe(spec, client, db):
+        status = SourceStatus(
+            spec.source_id,
+            datetime.now(UTC),
+            "SCHEMA_CHANGED",
+            {"error": "no recognized data.go.kr row container"},
+        )
+        db.record_source_status(status)
+        return status
+
+    def dedicated_building_collector(db, registry, run, **kwargs):
+        db.record_source_status(
+            SourceStatus(
+                "building_register_title",
+                datetime.now(UTC),
+                "EMPTY",
+                {"operation": "getBrTitleInfo"},
+                run.run_id,
+            )
+        )
+        return SimpleNamespace(building_rows=0)
+
+    monkeypatch.setattr(
+        orchestrator_module, "probe_source", incompatible_generic_probe
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "collect_buildings_for_licenses",
+        dedicated_building_collector,
+    )
+    monkeypatch.setattr(
+        pipeline, "_finish_run", lambda run, total_rows, logger: run.run_id
+    )
+
+    run_id = pipeline._execute_production(
+        "daily",
+        date(2026, 8, 20),
+        date(2026, 8, 20),
+        ["building_register_title"],
+    )
+
+    assert pipeline.db.query(
+        "select status from source_status where run_id = ? order by checked_at",
+        [run_id],
+    ) == [("EMPTY",)]
+
+
 def test_current_only_backfill_uses_one_restartable_snapshot(tmp_path: Path) -> None:
     """Catches replaying one current-state source once per historical month."""
     pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))

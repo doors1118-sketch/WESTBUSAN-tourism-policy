@@ -31,7 +31,7 @@ from westbusan.quality.checks import (
 from westbusan.quality.checks import run_quality_suite as _run_quality_suite
 from westbusan.quality.publish import current_published_run, publish_if_valid
 from westbusan.sources.datagokr import parse_data_page
-from westbusan.sources.registry import SourceRegistry
+from westbusan.sources.registry import SourceRegistry, record_inspection
 from westbusan.storage import RawStore
 from westbusan.transport.load import load_transport
 
@@ -640,6 +640,95 @@ def test_odcloud_explicit_empty_reconciles_only_without_any_target_facts(
     assert reconciliation.actual["target_facts"] == (
         0 if stray_kind == "none" else 1
     )
+
+
+def test_data_go_transport_explicit_empty_uses_transport_fact_contract(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid zero-row OD month must reconcile against the transport fact table."""
+    db = _db(tmp_path)
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 20, tzinfo=UTC),
+        business_date=date(2026, 7, 31),
+    )
+    ensure_integrity_run(db, run.run_id, business_date=run.cutoff_date)
+    spec = replace(
+        SourceRegistry.load(Path("config/sources.yaml")).get(
+            "public_transport_od_usage"
+        ),
+        parameter_partitions={},
+    )
+    record_inspection(
+        spec,
+        db,
+        operation="getMonthlyODUsageforGeneralBusesandUrbanRailways",
+        required_parameters={
+            "opr_ym": "{baseYm}",
+            "dptre_ctpv_cd": "26",
+            "arvl_ctpv_cd": "26",
+        },
+        response_row_path="Response.body.items.item",
+        portal_detail_url="https://www.data.go.kr/data/15142069/openapi.do",
+    )
+    monkeypatch.setenv("WESTBUSAN_ENABLE_LIVE_TRANSPORT", "true")
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-only-key")
+
+    class EmptyOdClient:
+        def get(self, url: str, params: dict[str, object]) -> HttpResult:
+            return HttpResult(
+                200,
+                json.dumps(
+                    {
+                        "Response": {
+                            "header": {
+                                "resultCode": "200",
+                                "resultMsg": "SUCCESS",
+                            },
+                            "body": {
+                                "items": {"item": []},
+                                "totalCount": 0,
+                                "pageNo": 1,
+                                "numOfRows": 1000,
+                            },
+                        }
+                    }
+                ).encode(),
+                "application/json",
+            )
+
+    load_transport(
+        db,
+        SourceRegistry((spec,)),
+        date(2026, 7, 1),
+        date(2026, 7, 31),
+        run,
+        client=EmptyOdClient(),
+    )
+
+    report = _run_quality_suite(db, run.run_id)
+    reconciliation = _check(
+        report,
+        "raw_total_matches_staging",
+        "public_transport_od_usage",
+    )
+
+    assert reconciliation.status == "passed"
+    assert reconciliation.table_name == "fact_transport_flow"
+    assert reconciliation.actual["page_windows"] == [
+        {
+            "requested_start": "2026-07-01",
+            "requested_end": "2026-07-31",
+            "raw_total": 0,
+            "raw_rows": 0,
+            "page_numbers": [1],
+            "page_sizes": [1000],
+            "expected_pages": [1],
+        }
+    ]
+    assert reconciliation.actual["expected_facts"] == 0
+    assert reconciliation.actual["target_facts"] == 0
 
 
 def test_monthly_freshness_uses_run_business_cutoff_not_wall_clock(

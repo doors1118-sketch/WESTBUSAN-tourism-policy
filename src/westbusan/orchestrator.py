@@ -223,7 +223,7 @@ class Pipeline:
         for source_id in selected:
             self._refresh_lease(run.run_id)
             spec = self.registry.get(source_id)
-            if spec.source_type != "api":
+            if spec.source_type != "api" or spec.group == "building":
                 continue
             try:
                 status = probe_source(spec, client, self.db)

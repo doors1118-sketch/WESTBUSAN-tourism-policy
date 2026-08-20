@@ -9,7 +9,7 @@ import re
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -613,6 +613,12 @@ def _load_od(
     evidence: list[SourceMonthEvidence] = []
     for month in _iter_months(start, end):
         progress()
+        month_start = _month_date(month)
+        next_month = (
+            date(month_start.year + 1, 1, 1)
+            if month_start.month == 12
+            else date(month_start.year, month_start.month + 1, 1)
+        )
         parameters = {**dict(spec.required_parameters), "opr_ym": month.replace("-", "")}
         pager_spec = replace(
             spec,
@@ -640,10 +646,12 @@ def _load_od(
                     "pageNo": page.page_no,
                     "numOfRows": page.page_size,
                     "schema_fingerprint": page.schema_fingerprint,
+                    "requested_start": month_start.isoformat(),
+                    "requested_end": (next_month - timedelta(days=1)).isoformat(),
                 },
                 page.raw_body,
                 ".json",
-                _month_date(month),
+                month_start,
             )
             progress()
             db.record_artifact(artifact)
