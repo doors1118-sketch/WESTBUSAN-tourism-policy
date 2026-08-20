@@ -6,7 +6,7 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class InsightRequest(BaseModel):
@@ -38,6 +38,9 @@ class ModelFinding(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    decision_area: Literal[
+        "tourism_overview", "supply_gap", "private_investment"
+    ]
     title: str = Field(min_length=1, max_length=80)
     claim: str = Field(min_length=1, max_length=400)
     metric_ids: list[str] = Field(min_length=1, max_length=6)
@@ -50,6 +53,10 @@ class ModelPolicyOption(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    priority_rank: int = Field(ge=1, le=5)
+    investment_type: Literal[
+        "new_supply", "remodel", "vacant_conversion", "content"
+    ]
     action: str = Field(min_length=1, max_length=120)
     target_area: str = Field(min_length=1, max_length=60)
     rationale: str = Field(min_length=1, max_length=400)
@@ -66,6 +73,16 @@ class ModelInsight(BaseModel):
     executive_summary: str = Field(min_length=1, max_length=700)
     findings: list[ModelFinding] = Field(min_length=3, max_length=7)
     policy_options: list[ModelPolicyOption] = Field(min_length=2, max_length=5)
+
+    @model_validator(mode="after")
+    def validate_decision_coverage_and_priorities(self) -> ModelInsight:
+        required = {"tourism_overview", "supply_gap", "private_investment"}
+        if {item.decision_area for item in self.findings} != required:
+            raise ValueError("findings must cover all decision areas")
+        ranks = [item.priority_rank for item in self.policy_options]
+        if len(ranks) != len(set(ranks)):
+            raise ValueError("policy priority ranks must be unique")
+        return self
 
 
 class InsightResponse(BaseModel):
