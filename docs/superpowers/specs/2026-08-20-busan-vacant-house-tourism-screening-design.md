@@ -1,7 +1,7 @@
 # Busan Vacant-House Tourism-Accommodation Screening Design
 
 **Date:** 2026-08-20
-**Status:** Approved approach B; awaiting written-spec review
+**Status:** Approved
 **Target branch:** `codex/busan-authority-filter`
 
 ## 1. Purpose
