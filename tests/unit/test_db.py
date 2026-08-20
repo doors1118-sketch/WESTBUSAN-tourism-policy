@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from shutil import copy2
 from uuid import uuid4
@@ -9,7 +9,6 @@ import pytest
 from westbusan.db import Database
 from westbusan.models import RunContext
 from westbusan.storage import RawStore
-
 
 VACANT_TABLES = {
     "vacant_house_import_run",
@@ -162,6 +161,79 @@ def test_vacant_house_schema_rejects_cross_record_and_cross_run_publication_link
         ) values (?, ?, ?, 'publish', 'tester', 'test', ?, '{}', ?)""",
         [uuid4(), run_id, run_id, manifest_id, now],
     )
+
+
+def test_vacant_house_control_row_can_finalize_after_fenced_prepublication_write(
+    tmp_path: Path,
+) -> None:
+    """Prepublication evidence must not block the fenced terminal transition."""
+    db = Database(tmp_path / "vacant-house-finalize.duckdb", Path("sql"))
+    db.migrate()
+    run_id, owner = uuid4(), uuid4()
+    now = datetime(2026, 8, 20, tzinfo=UTC)
+    expires = now.replace(hour=23)
+    db.connection.execute(
+        """insert into vacant_house_import_run (
+               vacant_run_id, source_snapshot_date, archive_sha256,
+               bundle_manifest_sha256, schema_version, status, owner_token,
+               fence_epoch, lease_expires_at, started_at
+           ) values (?, '2026-08-20', repeat('a', 64), repeat('b', 64), 'v1',
+                     'RUNNING', ?, 1, ?, ?)""",
+        [run_id, owner, expires, now],
+    )
+    db.connection.execute(
+        """insert into pipeline_writer_lease (
+               lease_key, owner_token, run_id, fence_epoch, heartbeat_at,
+               lease_expires_at, fence_touch
+           ) values ('writer', ?, ?, 1, ?, ?, 0)""",
+        [owner, run_id, now, expires],
+    )
+    db.connection.execute(
+        """insert into vacant_house_exception (
+               exception_id, vacant_run_id, exception_code, safe_message,
+               evidence_json, resolution_status, created_at
+           ) values (?, ?, 'safe_test', 'safe', '{}', 'OPEN', ?)""",
+        [uuid4(), run_id, now],
+    )
+
+    db.connection.execute("begin transaction")
+    db.connection.execute(
+        """update pipeline_writer_lease as writer
+           set fence_touch = writer.fence_touch + 1
+           where writer.lease_key = 'writer' and writer.run_id = ?
+             and writer.owner_token = ?
+             and exists (
+                 select 1 from vacant_house_import_run as run
+                 where run.vacant_run_id = writer.run_id and run.status = 'RUNNING'
+                   and run.owner_token = writer.owner_token
+                   and run.fence_epoch = writer.fence_epoch
+             )""",
+        [run_id, owner],
+    )
+    db.connection.execute(
+        """update pipeline_writer_lease set lease_expires_at = ?
+           where lease_key = 'writer' and run_id = ? and owner_token = ?""",
+        [expires + timedelta(hours=1), run_id, owner],
+    )
+    db.connection.execute(
+        """update vacant_house_import_run set lease_expires_at = ?
+           where vacant_run_id = ? and owner_token = ? and fence_epoch = 1
+           returning fence_epoch""",
+        [expires + timedelta(hours=1), run_id, owner],
+    )
+    db.connection.execute(
+        """update vacant_house_import_run
+           set status = 'COMPLETED', completed_at = ?, owner_token = null,
+               lease_expires_at = null
+           where vacant_run_id = ? and owner_token = ? and fence_epoch = 1""",
+        [now, run_id, owner],
+    )
+    db.connection.execute("commit")
+
+    assert db.scalar(
+        "select status from vacant_house_import_run where vacant_run_id = ?",
+        [run_id],
+    ) == "COMPLETED"
 
 
 def test_empty_database_migration_creates_spatial_schema_tables(tmp_path: Path) -> None:

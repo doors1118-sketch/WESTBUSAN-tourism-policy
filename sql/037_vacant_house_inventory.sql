@@ -20,7 +20,7 @@ create table vacant_house_import_run (
 
 create table vacant_house_source_artifact (
     artifact_id uuid primary key,
-    vacant_run_id uuid not null references vacant_house_import_run(vacant_run_id),
+    vacant_run_id uuid not null,
     artifact_kind varchar not null,
     archive_sha256 varchar not null check (length(archive_sha256) = 64),
     workbook_sha256 varchar not null check (length(workbook_sha256) = 64),
@@ -35,7 +35,7 @@ create table vacant_house_source_artifact (
 );
 
 create table vacant_house_revision (
-    vacant_run_id uuid not null references vacant_house_import_run(vacant_run_id),
+    vacant_run_id uuid not null,
     source_row_id varchar not null,
     record_id uuid not null,
     district_code varchar,
@@ -76,7 +76,7 @@ create table vacant_house_revision (
 );
 
 create table vacant_house_current (
-    vacant_run_id uuid not null references vacant_house_import_run(vacant_run_id),
+    vacant_run_id uuid not null,
     record_id uuid not null,
     selected_source_row_id varchar not null,
     selected_at timestamp with time zone not null,
@@ -87,7 +87,7 @@ create table vacant_house_current (
 
 create table vacant_house_exception (
     exception_id uuid primary key,
-    vacant_run_id uuid not null references vacant_house_import_run(vacant_run_id),
+    vacant_run_id uuid not null,
     source_artifact_id uuid references vacant_house_source_artifact(artifact_id),
     source_row_id varchar,
     exception_code varchar not null,
@@ -100,7 +100,7 @@ create table vacant_house_exception (
 
 create table vacant_house_completion_manifest (
     manifest_id uuid primary key,
-    vacant_run_id uuid not null references vacant_house_import_run(vacant_run_id),
+    vacant_run_id uuid not null,
     table_name varchar not null,
     row_count bigint not null check (row_count >= 0),
     row_digest_sha256 varchar not null check (length(row_digest_sha256) = 64),
