@@ -1,10 +1,13 @@
 import hashlib
 import json
 from datetime import UTC, date, datetime
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
+from openpyxl import Workbook
 from typer.testing import CliRunner
 
 from westbusan.accommodation.load import load_license_snapshot
@@ -14,6 +17,71 @@ from westbusan.db import Database
 from westbusan.entity_resolution.match import build_facilities
 from westbusan.models import SourceStatus
 from westbusan.orchestrator import Pipeline, RunSummary
+from westbusan.vacant_house.stage import stage_archive
+
+VACANT_DISTRICT_CODES = (
+    "26110",
+    "26140",
+    "26170",
+    "26200",
+    "26230",
+    "26260",
+    "26290",
+    "26320",
+    "26350",
+    "26380",
+    "26410",
+    "26440",
+    "26470",
+    "26500",
+    "26530",
+    "26710",
+)
+VACANT_HEADERS = (
+    "시군구코드",
+    "읍면동코드",
+    "시군구",
+    "읍면동",
+    "토지구분",
+    "본번",
+    "부번",
+    "도로명주소",
+    "건축연도",
+    "무허가여부",
+    "철거필요여부",
+    "빈집등급",
+)
+
+
+def _vacant_archive(path: Path, districts: tuple[str, ...] = VACANT_DISTRICT_CODES) -> Path:
+    with ZipFile(path, "w", compression=ZIP_DEFLATED) as archive:
+        for index, district_code in enumerate(districts):
+            suffix = district_code[-3:]
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "비공개 원본"
+            sheet.append(list(VACANT_HEADERS))
+            sheet.append(
+                [
+                    district_code,
+                    "10100",
+                    f"구-{suffix}",
+                    "동-101",
+                    "1",
+                    suffix,
+                    0,
+                    f"비공개-도로-{suffix}",
+                    1999,
+                    0,
+                    0,
+                    "1등급",
+                ]
+            )
+            output = BytesIO()
+            workbook.save(output)
+            workbook.close()
+            archive.writestr(f"district-{index:02d}.xlsx", output.getvalue())
+    return path
 
 
 def _summary(*, published: bool, warnings: int, failed: int) -> RunSummary:
@@ -56,7 +124,156 @@ def test_cli_help_lists_all_operational_commands() -> None:
         "spatial-boundary-approve",
         "spatial-run",
         "spatial-export",
+        "vacant-house-profile",
+        "vacant-house-stage",
+        "vacant-house-import",
     } <= set(result.stdout.split())
+
+
+@pytest.mark.parametrize(
+    "command",
+    ("vacant-house-profile", "vacant-house-stage", "vacant-house-import"),
+)
+def test_vacant_house_cli_help_constructs_safe_operator_commands(command: str) -> None:
+    """Catches an unusable vacant-house command before private input is opened."""
+    result = CliRunner().invoke(app, [command, "--help"])
+
+    assert result.exit_code == 0
+
+
+def test_vacant_house_profile_outputs_aggregate_evidence_only(tmp_path: Path) -> None:
+    """Profile output cannot expose private workbook labels or row values."""
+    archive = _vacant_archive(tmp_path / "private-source.zip", ("26380",))
+
+    result = CliRunner().invoke(app, ["vacant-house-profile", str(archive)])
+
+    assert result.exit_code == 0
+    output = json.loads(result.stdout)
+    assert output["status"] == "PROFILED"
+    assert output["workbook_count"] == 1
+    assert output["modern_workbook_count"] == 1
+    assert output["legacy_workbook_count"] == 0
+    assert output["candidate_row_count"] == 1
+    assert len(output["archive_sha256"]) == 64
+    for private_value in (
+        str(archive),
+        "private-source.zip",
+        "district-00.xlsx",
+        "비공개 원본",
+        "비공개-도로-380",
+    ):
+        assert private_value not in result.stdout
+
+
+def test_vacant_house_profile_failure_is_redacted_json(tmp_path: Path) -> None:
+    """A deliberate source error cannot echo path, token, or a traceback."""
+    private_path = tmp_path / "PRIVATE-TOKEN-CREDENTIAL-LOT-7788.zip"
+
+    result = CliRunner().invoke(app, ["vacant-house-profile", str(private_path)])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "reason": "invalid_archive",
+        "status": "BLOCKED",
+    }
+    for private_value in (str(private_path), "PRIVATE-TOKEN-CREDENTIAL", "Traceback"):
+        assert private_value not in result.output
+
+
+def test_vacant_house_stage_outputs_counts_and_hashes_without_bundle_path(
+    tmp_path: Path,
+) -> None:
+    """Staging output is sufficient to reconcile rows without disclosing paths."""
+    archive = _vacant_archive(tmp_path / "private-stage-source.zip", ("26380",))
+    output_root = tmp_path / "PRIVATE-STAGING-ROOT-7788"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "vacant-house-stage",
+            str(archive),
+            "2025-02-28",
+            str(output_root),
+        ],
+    )
+
+    assert result.exit_code == 0
+    output = json.loads(result.stdout)
+    assert output["status"] == "STAGED"
+    assert output["source_row_count"] == 1
+    assert output["normalized_row_count"] == 1
+    assert output["exception_count"] == 0
+    assert len(output["archive_sha256"]) == 64
+    assert len(output["manifest_sha256"]) == 64
+    assert str(archive) not in result.stdout
+    assert str(output_root) not in result.stdout
+    assert "PRIVATE-STAGING-ROOT-7788" not in result.stdout
+
+
+def test_vacant_house_import_publishes_safe_aggregate_summary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The operator command must join import, manifest, and publication once."""
+    archive = _vacant_archive(tmp_path / "private-import-source.zip")
+    bundle = stage_archive(archive, tmp_path / "private-staged", date(2025, 2, 28))
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(pipeline.settings.data_dir))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(pipeline.settings.db_path))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(pipeline.settings.log_dir))
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "vacant-house-import",
+            str(bundle.path),
+            "internal-operator",
+            "approved snapshot",
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+
+    assert result.exit_code == 0
+    output = json.loads(result.stdout)
+    assert output["status"] == "COMPLETED"
+    assert output["source_row_count"] == 16
+    assert output["accepted_record_count"] == 16
+    assert output["exception_count"] == 0
+    assert len(output["vacant_run_id"]) == 36
+    assert str(bundle.path) not in result.stdout
+    assert "internal-operator" not in result.stdout
+    assert "approved snapshot" not in result.stdout
+    assert pipeline.db.scalar("select count(*) from vacant_house_publication_current") == 1
+
+
+def test_vacant_house_import_rejects_tamper_without_private_input_echo(
+    tmp_path: Path,
+) -> None:
+    """Bundle validation must happen before DB setup and return only a safe code."""
+    archive = _vacant_archive(tmp_path / "private-tamper-source.zip", ("26380",))
+    bundle = stage_archive(archive, tmp_path / "PRIVATE-STAGED-TOKEN-7788", date(2025, 2, 28))
+    with (bundle.path / "records.parquet").open("ab") as handle:
+        handle.write(b"tampered")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "vacant-house-import",
+            str(bundle.path),
+            "internal-operator",
+            "approved snapshot",
+            "--root",
+            str(Path.cwd()),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "reason": "invalid_staged_bundle",
+        "status": "BLOCKED",
+    }
+    for private_value in (str(bundle.path), "PRIVATE-STAGED-TOKEN-7788", "Traceback"):
+        assert private_value not in result.output
 
 
 @pytest.mark.parametrize(

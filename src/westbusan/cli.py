@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -19,6 +19,27 @@ from westbusan.spatial.export import export_spatial_current
 from westbusan.spatial.grid import build_grid
 from westbusan.spatial.models import BoundaryMetadata
 from westbusan.spatial.orchestrator import SpatialPipeline
+from westbusan.vacant_house.fencing import (
+    VacantHouseFenceError,
+    VacantHouseLeaseUnavailable,
+)
+from westbusan.vacant_house.importer import (
+    VacantHouseImportError,
+    import_staged_bundle,
+    prepare_import,
+    release_import,
+)
+from westbusan.vacant_house.models import (
+    StagedVacantBundleError,
+    VacantHouseSourceError,
+)
+from westbusan.vacant_house.publish import (
+    VacantPublicationError,
+    publish_vacant_run,
+    write_vacant_manifest,
+)
+from westbusan.vacant_house.source import profile_archive
+from westbusan.vacant_house.stage import stage_archive, validate_staged_bundle
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -271,6 +292,100 @@ def export(
     _print_json({"status": "exported", "paths": [str(path) for path in paths]})
 
 
+@app.command("vacant-house-profile")
+def vacant_house_profile(
+    archive: Annotated[Path, typer.Argument(help="Private source ZIP archive.")],
+) -> None:
+    """Print only aggregate workbook-format and candidate-row evidence."""
+    try:
+        profile = profile_archive(archive)
+    except Exception as error:  # noqa: BLE001 - safe redaction boundary
+        _vacant_blocked(error, "vacant_house_profile_failed")
+    _print_json(
+        {
+            "status": "PROFILED",
+            "archive_sha256": profile.archive_sha256,
+            "workbook_count": profile.workbook_count,
+            "modern_workbook_count": profile.modern_workbook_count,
+            "legacy_workbook_count": profile.legacy_workbook_count,
+            "candidate_row_count": profile.candidate_row_count,
+        }
+    )
+
+
+@app.command("vacant-house-stage")
+def vacant_house_stage(
+    archive: Annotated[Path, typer.Argument(help="Private source ZIP archive.")],
+    snapshot_date: Annotated[str, typer.Argument(help="Source snapshot date (YYYY-MM-DD).")],
+    output_root: Annotated[Path, typer.Argument(help="Protected private staging root.")],
+) -> None:
+    """Create one deterministic sealed bundle without opening DuckDB."""
+    try:
+        bundle = stage_archive(
+            archive,
+            output_root,
+            _parse_date(snapshot_date, "snapshot-date"),
+        )
+    except Exception as error:  # noqa: BLE001 - safe redaction boundary
+        _vacant_blocked(error, "vacant_house_stage_failed")
+    _print_json(
+        {
+            "status": "STAGED",
+            "archive_sha256": bundle.archive_sha256,
+            "manifest_sha256": bundle.manifest_sha256,
+            "source_row_count": bundle.source_row_count,
+            "normalized_row_count": bundle.normalized_row_count,
+            "exception_count": bundle.exception_count,
+        }
+    )
+
+
+@app.command("vacant-house-import")
+def vacant_house_import(
+    bundle: Annotated[Path, typer.Argument(help="Validated private staging bundle.")],
+    actor: Annotated[str, typer.Argument(help="Internal operator identity.")],
+    reason: Annotated[str, typer.Argument(help="Approved publication reason.")],
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Import, manifest, and atomically publish one complete private snapshot."""
+    token = None
+    try:
+        staged = validate_staged_bundle(bundle)
+        pipeline = _pipeline(root)
+        pipeline.db.migrate()
+        token = prepare_import(pipeline.db, staged, actor)
+        summary = import_staged_bundle(
+            pipeline.db,
+            pipeline.raw_store,
+            staged,
+            token,
+        )
+        write_vacant_manifest(pipeline.db, summary.vacant_run_id, token)
+        publication = publish_vacant_run(
+            pipeline.db,
+            summary.vacant_run_id,
+            token,
+            actor,
+            reason,
+        )
+    except Exception as error:  # noqa: BLE001 - safe redaction boundary
+        if token is not None:
+            try:
+                release_import(pipeline.db, token)
+            except Exception:  # noqa: BLE001, S110 - preserve safe primary failure
+                pass
+        _vacant_blocked(error, "vacant_house_import_failed")
+    _print_json(
+        {
+            "status": "COMPLETED",
+            "vacant_run_id": publication.vacant_run_id,
+            "source_row_count": summary.source_row_count,
+            "accepted_record_count": summary.current_count,
+            "exception_count": summary.exception_count,
+        }
+    )
+
+
 @app.command("spatial-boundary-inspect")
 def spatial_boundary_inspect(
     boundary_file: Annotated[
@@ -456,6 +571,31 @@ def _parse_date(value: str, option_name: str) -> date:
         raise typer.BadParameter(
             "expected YYYY-MM-DD", param_hint=f"--{option_name}"
         ) from error
+
+
+def _vacant_blocked(error: Exception, fallback: str) -> NoReturn:
+    if isinstance(
+        error,
+        (VacantHouseSourceError, StagedVacantBundleError, VacantHouseImportError),
+    ):
+        reason = error.code
+    elif isinstance(error, VacantHouseLeaseUnavailable):
+        reason = "global_writer_lease_active"
+    elif isinstance(error, VacantHouseFenceError):
+        reason = "vacant_house_writer_fence_lost"
+    elif isinstance(error, VacantPublicationError):
+        candidate = str(error)
+        reason = (
+            candidate
+            if candidate
+            and candidate.isascii()
+            and all(character.isalnum() or character == "_" for character in candidate)
+            else fallback
+        )
+    else:
+        reason = fallback
+    _print_json({"status": "BLOCKED", "reason": reason})
+    raise typer.Exit(1) from error
 
 
 def _print_json(value: object) -> None:
