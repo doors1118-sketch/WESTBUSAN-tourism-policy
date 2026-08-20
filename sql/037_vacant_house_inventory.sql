@@ -30,7 +30,8 @@ create table vacant_house_source_artifact (
     observed_header_version varchar,
     source_row_count bigint not null default 0,
     conversion_provenance_json varchar not null check (json_valid(conversion_provenance_json)),
-    created_at timestamp with time zone not null
+    created_at timestamp with time zone not null,
+    unique (vacant_run_id, artifact_id)
 );
 
 create table vacant_house_revision (
@@ -59,7 +60,7 @@ create table vacant_house_revision (
     vacant_grade integer,
     original_grade_text varchar,
     cleanup_status varchar,
-    source_artifact_id uuid not null references vacant_house_source_artifact(artifact_id),
+    source_artifact_id uuid not null,
     source_workbook_name varchar not null,
     source_sheet_name varchar not null,
     source_row_number bigint not null,
@@ -69,7 +70,9 @@ create table vacant_house_revision (
     evidence_quality varchar,
     source_flags_json varchar check (source_flags_json is null or json_valid(source_flags_json)),
     primary key (vacant_run_id, source_row_id),
-    unique (vacant_run_id, record_id, source_row_id)
+    unique (vacant_run_id, record_id, source_row_id),
+    foreign key (vacant_run_id, source_artifact_id)
+        references vacant_house_source_artifact(vacant_run_id, artifact_id)
 );
 
 create table vacant_house_current (
