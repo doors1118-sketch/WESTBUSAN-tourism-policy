@@ -5,6 +5,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
+import pytest
+
 from westbusan.db import Database
 from westbusan.vacant_house.assessment_models import AssessmentInputs
 from westbusan.vacant_house.building_match import match_building
@@ -26,6 +28,11 @@ def _core_inputs(db: Database) -> tuple[UUID, AssessmentInputs]:
     db.connection.execute(
         "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
         [core_run_id, core_run_id],
+    )
+    db.connection.execute(
+        """insert into publication_state (publication_key, published_run_id)
+           values ('current', ?)""",
+        [core_run_id],
     )
     return core_run_id, AssessmentInputs(
         inventory_run_id=uuid4(),
@@ -181,3 +188,81 @@ def test_future_producer_cannot_leak_through_pinned_input_lineage(
 
     assert result.building_id is None
     assert result.quality == "no_match"
+
+
+def test_exact_road_identity_disambiguates_multiple_parcel_buildings(
+    tmp_path: Path,
+) -> None:
+    """Catches discarding the uniquely coded road/building disambiguator."""
+    db = _db(tmp_path)
+    core_run_id, inputs = _core_inputs(db)
+    _add_revision(
+        db, core_run_id, building_id="parcel-a",
+        parcel=("26380", "10100", "0", "0012", "0003"),
+    )
+    _add_revision(
+        db, core_run_id, building_id="parcel-b",
+        parcel=("26380", "10100", "0", "0012", "0003"),
+        road=("263801020012", "7", "2"),
+    )
+
+    result = match_building(
+        db,
+        inputs,
+        {
+            "district_code": "26380", "legal_dong_code": "10100", "lot_type": "0",
+            "main_lot": "12", "sub_lot": "3", "road_code": "263801020012",
+            "building_main": "7", "building_sub": "2",
+        },
+    )
+
+    assert result.building_id == "parcel-b"
+    assert result.quality == "exact_road_building_single"
+
+
+def test_tied_pinned_revisions_fail_closed_instead_of_selecting_one(
+    tmp_path: Path,
+) -> None:
+    """Catches nondeterministic row-number selection across tied revisions."""
+    db = _db(tmp_path)
+    core_run_id, inputs = _core_inputs(db)
+    _add_revision(
+        db, core_run_id, building_id="tied-building",
+        parcel=("26380", "10100", "0", "0012", "0003"),
+    )
+    _add_revision(
+        db, core_run_id, building_id="tied-building",
+        parcel=("26380", "10100", "0", "0999", "0000"),
+    )
+
+    result = match_building(
+        db,
+        inputs,
+        {"district_code": "26380", "legal_dong_code": "10100", "lot_type": "0", "main_lot": "12", "sub_lot": "3"},
+    )
+
+    assert result.building_id is None
+    assert result.quality == "ambiguous_pinned_revisions"
+
+
+def test_unpublished_completed_core_run_is_rejected(tmp_path: Path) -> None:
+    """Catches treating any completed pipeline run as the pinned publication."""
+    db = _db(tmp_path)
+    _, current_inputs = _core_inputs(db)
+    later_run_id = uuid4()
+    db.connection.execute(
+        """insert into pipeline_run (run_id, mode, started_at, status, business_date)
+           values (?, 'test', ?, 'COMPLETED', ?)""",
+        [later_run_id, datetime(2026, 8, 21, 9, 0, tzinfo=UTC), date(2026, 8, 21)],
+    )
+    unpublished_inputs = AssessmentInputs(
+        inventory_run_id=current_inputs.inventory_run_id,
+        base_published_run_id=later_run_id,
+        spatial_run_id=current_inputs.spatial_run_id,
+        boundary_version_id=current_inputs.boundary_version_id,
+        policy_version=current_inputs.policy_version,
+        source_periods=current_inputs.source_periods,
+    )
+
+    with pytest.raises(ValueError, match="pinned_core_run_not_published"):
+        match_building(db, unpublished_inputs, {})

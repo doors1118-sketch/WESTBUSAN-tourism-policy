@@ -51,11 +51,38 @@ def match_building(
     Address labels are deliberately not loaded or compared.
     """
     core_period, rows = _pinned_building_rows(db, inputs)
-    candidates = tuple(_candidate_from_row(row) for row in rows)
+    pinned_candidates = tuple(_candidate_from_row(row) for row in rows)
+    candidates, tied_candidates = _separate_tied_revisions(pinned_candidates)
+    tied_matches = _unique_candidates(
+        _parcel_matches(tied_candidates, record), _road_matches(tied_candidates, record)
+    )
+    if tied_matches:
+        return _unresolved_match(
+            inputs,
+            record,
+            core_period,
+            "ambiguous_pinned_revisions",
+            tied_matches,
+            "pinned_revision",
+        )
     parcel_matches = _parcel_matches(candidates, record)
     road_matches = _road_matches(candidates, record)
 
     if len(parcel_matches) > 1:
+        if len(road_matches) == 1:
+            road = road_matches[0]
+            if road.building_id in {candidate.building_id for candidate in parcel_matches}:
+                return _resolved_match(
+                    inputs, record, road, "exact_road_building_single", "road"
+                )
+            return _unresolved_match(
+                inputs,
+                record,
+                core_period,
+                "conflicting_exact_identities",
+                _unique_candidates(parcel_matches, road_matches),
+                "parcel_and_road",
+            )
         return _unresolved_match(
             inputs, record, core_period, "ambiguous_multiple_buildings", parcel_matches,
             "parcel",
@@ -97,18 +124,21 @@ def match_building(
 def _pinned_building_rows(
     db: Database, inputs: AssessmentInputs
 ) -> tuple[date, list[tuple[object, ...]]]:
-    """Read the latest revision of each building from the pinned input lineage."""
+    """Read unambiguously latest revisions from the current core publication."""
     rows = db.query(
         """with core as (
-                 select run_id, business_date
-                 from pipeline_run
-                 where run_id = ?
+                 select run.run_id, run.business_date
+                 from pipeline_run as run
+                 join publication_state as publication
+                   on publication.publication_key = 'current'
+                  and publication.published_run_id = run.run_id
+                 where run.run_id = ?
              ), visible_revisions as (
                  select revision.building_id, revision.observed_on,
                         revision.sigungu_cd, revision.bjdong_cd,
                         revision.plat_gb_cd, revision.bun, revision.ji,
                         revision.source_payload_json,
-                        row_number() over (
+                        rank() over (
                             partition by revision.building_id
                             order by producer.business_date desc,
                                      producer.started_at desc,
@@ -134,11 +164,40 @@ def _pinned_building_rows(
         [inputs.base_published_run_id],
     )
     if not rows:
-        raise ValueError("pinned_core_run_not_found")
+        raise ValueError("pinned_core_run_not_published")
     core_period = rows[0][0]
     if not isinstance(core_period, date):
         raise TypeError("pinned_core_run_missing_business_date")
     return core_period, [row[1:] for row in rows if row[1] is not None]
+
+
+def _separate_tied_revisions(
+    candidates: tuple[_BuildingCandidate, ...],
+) -> tuple[tuple[_BuildingCandidate, ...], tuple[_BuildingCandidate, ...]]:
+    by_building: dict[str, list[_BuildingCandidate]] = {}
+    for candidate in candidates:
+        by_building.setdefault(candidate.building_id, []).append(candidate)
+    resolved = tuple(
+        revisions[0]
+        for _, revisions in sorted(by_building.items())
+        if len(revisions) == 1
+    )
+    tied = tuple(
+        candidate
+        for _, revisions in sorted(by_building.items())
+        if len(revisions) > 1
+        for candidate in revisions
+    )
+    return resolved, tied
+
+
+def _unique_candidates(
+    *groups: tuple[_BuildingCandidate, ...],
+) -> tuple[_BuildingCandidate, ...]:
+    by_building: dict[str, _BuildingCandidate] = {}
+    for candidate in (candidate for group in groups for candidate in group):
+        by_building.setdefault(candidate.building_id, candidate)
+    return tuple(by_building[building_id] for building_id in sorted(by_building))
 
 
 def _candidate_from_row(row: tuple[object, ...]) -> _BuildingCandidate:

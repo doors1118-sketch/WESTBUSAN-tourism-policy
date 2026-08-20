@@ -27,6 +27,12 @@ def _db(tmp_path: Path) -> Database:
            )"""
     )
     db.connection.execute(
+        """create table publication_state (
+               publication_key varchar primary key,
+               published_run_id uuid not null
+           )"""
+    )
+    db.connection.execute(
         """create table staging_building_revision (
                version_run_id uuid not null,
                building_id varchar not null,
@@ -59,6 +65,9 @@ def _pin_core_run(db: Database, business_date: date = date(2026, 8, 20)) -> obje
     db.connection.execute(
         "insert into pipeline_run values (?, ?, ?)",
         [core_run_id, business_date, datetime(2026, 8, 20, 9, 0, tzinfo=UTC)],
+    )
+    db.connection.execute(
+        "insert into publication_state values ('current', ?)", [core_run_id]
     )
     return core_run_id
 
