@@ -302,7 +302,7 @@ def test_imports_complete_bundle_with_explicit_exact_duplicate_and_exception(
         """select status, source_row_count, accepted_record_count, exception_count
            from vacant_house_import_run where vacant_run_id = ?""",
         [token.vacant_run_id],
-    ) == [("COMPLETED", 18, 16, 1)]
+    ) == [("RUNNING", 18, 16, 1)]
     assert (
         db.scalar(
             "select vacant_run_id from vacant_house_publication_current where singleton_key = 1"

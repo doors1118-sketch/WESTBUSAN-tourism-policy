@@ -20,7 +20,6 @@ from westbusan.vacant_house.fencing import (
     release_writer,
     rollback,
     touch_import,
-    touch_writer_epoch,
 )
 from westbusan.vacant_house.models import (
     StagedVacantBundle,
@@ -191,23 +190,21 @@ def import_staged_bundle(
         db.connection.execute("begin transaction")
         began = True
         touch_import(db, token)
-        completed = db.query(
+        prepared = db.query(
             """update vacant_house_import_run
-               set status = 'COMPLETED', accepted_record_count = ?,
-                   exception_count = ?, completed_at = ?, failure_evidence_json = null
+               set accepted_record_count = ?, exception_count = ?
                where vacant_run_id = ? and status = 'RUNNING'
                  and owner_token = ? and fence_epoch = ?
                returning vacant_run_id""",
             [
                 len(currents),
                 len(all_exceptions),
-                now,
                 token.vacant_run_id,
                 token.owner_token,
                 token.fence_epoch,
             ],
         )
-        if completed != [(token.vacant_run_id,)]:
+        if prepared != [(token.vacant_run_id,)]:
             raise VacantHouseFenceError("vacant_house_writer_fence_lost")
         db.record_artifact(raw_artifact)
         _insert_artifacts(db, token, validated, artifacts, now)
@@ -220,7 +217,7 @@ def import_staged_bundle(
             artifact_by_source,
             now,
         )
-        touch_writer_epoch(db, token)
+        touch_import(db, token)
         db.connection.execute("commit")
         began = False
     except Exception:
