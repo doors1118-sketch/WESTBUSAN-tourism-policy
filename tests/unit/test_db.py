@@ -1,3 +1,4 @@
+import hashlib
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from shutil import copy2
@@ -20,6 +21,263 @@ VACANT_TABLES = {
     "vacant_house_publication_current",
     "vacant_house_publication_audit",
 }
+
+VACANT_HOUSE_ASSESSMENT_TABLES = {
+    "vacant_house_assessment_run",
+    "vacant_house_enrichment",
+    "vacant_house_screening",
+    "vacant_house_assessment_exception",
+    "vacant_house_assessment_manifest",
+    "vacant_house_assessment_publication_current",
+    "vacant_house_assessment_publication_audit",
+    "vacant_house_detail_access_audit",
+}
+
+
+def test_vacant_house_assessment_migration_creates_isolated_schema(
+    tmp_path: Path,
+) -> None:
+    """Catches a fresh database without the separate assessment tables."""
+    db = Database(tmp_path / "vacant-house-assessment.duckdb", Path("sql"))
+    db.migrate()
+
+    assert VACANT_HOUSE_ASSESSMENT_TABLES <= {row[0] for row in db.query("show tables")}
+    assert db.query(
+        "select version from schema_migrations where version like '038_%'"
+    ) == [("038_vacant_house_assessment",)]
+
+
+def test_vacant_house_assessment_migration_upgrades_037_without_rewriting_checksums(
+    tmp_path: Path,
+) -> None:
+    """Catches a 038 upgrade that changes immutable Phase 1 migration bytes."""
+    migrations_037 = tmp_path / "migrations-037"
+    migrations_037.mkdir()
+    for migration in Path("sql").glob("*.sql"):
+        if migration.name <= "037_vacant_house_inventory.sql":
+            copy2(migration, migrations_037 / migration.name)
+
+    path = tmp_path / "applied-037.duckdb"
+    original = Database(path, migrations_037)
+    original.migrate()
+    original_checksums = dict(original.query("select version, checksum from schema_migrations"))
+    original.connection.close()
+
+    upgraded = Database(path, Path("sql"))
+    upgraded.migrate()
+    upgraded_checksums = dict(upgraded.query("select version, checksum from schema_migrations"))
+
+    assert {
+        version: upgraded_checksums[version] for version in original_checksums
+    } == original_checksums
+    assert {
+        path.stem: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in Path("sql").glob("*.sql")
+        if path.name <= "037_vacant_house_inventory.sql"
+    } == original_checksums
+    assert [
+        version for version in upgraded_checksums if version.startswith("038_")
+    ] == ["038_vacant_house_assessment"]
+
+
+def test_vacant_house_assessment_schema_rejects_cross_run_lineage_links(
+    tmp_path: Path,
+) -> None:
+    """Catches evidence or publication rows attached to another assessment run."""
+    db = Database(tmp_path / "vacant-house-assessment-links.duckdb", Path("sql"))
+    db.migrate()
+    now = datetime(2026, 8, 20, tzinfo=UTC)
+    inventory_run_id, other_inventory_run_id = uuid4(), uuid4()
+    record_id = uuid4()
+    _insert_assessment_inventory(db, inventory_run_id, record_id, now)
+    _insert_assessment_inventory(db, other_inventory_run_id, uuid4(), now)
+    base_published_run_id, spatial_run_id, boundary_version_id = _insert_assessment_inputs(
+        db, now
+    )
+    assessment_run_id, other_assessment_run_id = uuid4(), uuid4()
+    run_sql = """insert into vacant_house_assessment_run (
+        assessment_run_id, inventory_run_id, base_published_run_id, spatial_run_id,
+        boundary_version_id, policy_version, status, fence_epoch, started_at
+    ) values (?, ?, ?, ?, ?, 'vh-screen-v1', 'RUNNING', 0, ?)"""
+    db.connection.execute(
+        run_sql,
+        [
+            assessment_run_id,
+            inventory_run_id,
+            base_published_run_id,
+            spatial_run_id,
+            boundary_version_id,
+            now,
+        ],
+    )
+    db.connection.execute(
+        run_sql,
+        [
+            other_assessment_run_id,
+            other_inventory_run_id,
+            base_published_run_id,
+            spatial_run_id,
+            boundary_version_id,
+            now,
+        ],
+    )
+
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
+            """insert into vacant_house_enrichment
+               (assessment_run_id, inventory_run_id, record_id, evidence_json)
+               values (?, ?, ?, '{}')""",
+            [other_assessment_run_id, other_inventory_run_id, record_id],
+        )
+
+    db.connection.execute(
+        """insert into vacant_house_enrichment
+           (assessment_run_id, inventory_run_id, record_id, evidence_json)
+           values (?, ?, ?, '{}')""",
+        [assessment_run_id, inventory_run_id, record_id],
+    )
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
+            """insert into vacant_house_screening
+               (assessment_run_id, record_id, policy_version,
+                feasibility_class, opportunity_band, evidence_json)
+               values (?, ?, 'vh-screen-v1', 'priority_review', 'high', '{}')""",
+            [other_assessment_run_id, record_id],
+        )
+
+    manifest_id, other_manifest_id = uuid4(), uuid4()
+    manifest_sql = """insert into vacant_house_assessment_manifest (
+        manifest_id, assessment_run_id, table_name, row_count, row_digest_sha256,
+        schema_version, manifest_json, created_at
+    ) values (?, ?, 'vacant_house_enrichment', 0, repeat('a', 64), 'v1', '{}', ?)"""
+    db.connection.execute(manifest_sql, [manifest_id, assessment_run_id, now])
+    db.connection.execute(manifest_sql, [other_manifest_id, other_assessment_run_id, now])
+
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
+            """insert into vacant_house_assessment_publication_audit (
+                event_id, assessment_run_id, new_assessment_run_id, action, actor,
+                reason, manifest_id, evidence_json, event_at
+            ) values (?, ?, ?, 'publish', 'tester', 'test', ?, '{}', ?)""",
+            [uuid4(), other_assessment_run_id, other_assessment_run_id, manifest_id, now],
+        )
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
+            """insert into vacant_house_assessment_publication_current (
+                pointer_id, assessment_run_id, published_at, publisher,
+                publication_event_id, manifest_id
+            ) values (?, ?, ?, 'tester', ?, ?)""",
+            [uuid4(), other_assessment_run_id, now, uuid4(), manifest_id],
+        )
+
+
+def test_vacant_house_assessment_exact_locations_are_enrichment_only(
+    tmp_path: Path,
+) -> None:
+    """Catches exact coordinates leaking into screening or general audit tables."""
+    db = Database(tmp_path / "vacant-house-assessment-privacy.duckdb", Path("sql"))
+    db.migrate()
+    location_columns = {
+        row[0]
+        for row in db.query(
+            """select column_name from information_schema.columns
+               where table_schema = 'main' and table_name = 'vacant_house_enrichment'
+                 and column_name in (
+                     'wgs84_longitude', 'wgs84_latitude', 'projected_x', 'projected_y'
+                 )"""
+        )
+    }
+    assert location_columns == {
+        "wgs84_longitude",
+        "wgs84_latitude",
+        "projected_x",
+        "projected_y",
+    }
+    assert db.query(
+        """select table_name, column_name from information_schema.columns
+           where table_schema = 'main'
+             and table_name in (
+                 'vacant_house_screening', 'vacant_house_assessment_manifest',
+                 'vacant_house_assessment_publication_audit',
+                 'vacant_house_detail_access_audit'
+             )
+             and column_name in (
+                 'wgs84_longitude', 'wgs84_latitude', 'projected_x', 'projected_y'
+             )"""
+    ) == []
+
+
+def _insert_assessment_inventory(
+    db: Database, inventory_run_id: object, record_id: object, now: datetime
+) -> None:
+    db.connection.execute(
+        """insert into vacant_house_import_run (
+            vacant_run_id, source_snapshot_date, archive_sha256,
+            bundle_manifest_sha256, schema_version, status, fence_epoch, started_at
+        ) values (?, '2026-08-20', repeat('a', 64), repeat('b', 64), 'v1',
+                  'COMPLETED', 0, ?)""",
+        [inventory_run_id, now],
+    )
+    artifact_id = uuid4()
+    db.connection.execute(
+        """insert into vacant_house_source_artifact (
+            artifact_id, vacant_run_id, artifact_kind, archive_sha256,
+            workbook_sha256, workbook_name, sheet_name, conversion_provenance_json,
+            created_at
+        ) values (?, ?, 'workbook', repeat('a', 64), repeat('c', 64), 'book.xlsx',
+                  'Sheet1', '{}', ?)""",
+        [artifact_id, inventory_run_id, now],
+    )
+    db.connection.execute(
+        """insert into vacant_house_revision (
+            vacant_run_id, source_row_id, record_id, source_artifact_id,
+            source_workbook_name, source_sheet_name, source_row_number, record_hash
+        ) values (?, 'source-row', ?, ?, 'book.xlsx', 'Sheet1', 1, repeat('d', 64))""",
+        [inventory_run_id, record_id, artifact_id],
+    )
+    db.connection.execute(
+        """insert into vacant_house_current (
+            vacant_run_id, record_id, selected_source_row_id, selected_at
+        ) values (?, ?, 'source-row', ?)""",
+        [inventory_run_id, record_id, now],
+    )
+
+
+def _insert_assessment_inputs(db: Database, now: datetime) -> tuple[object, object, object]:
+    base_published_run_id, spatial_run_id, boundary_version_id = uuid4(), uuid4(), uuid4()
+    db.connection.execute(
+        """insert into pipeline_run (run_id, mode, started_at, status)
+           values (?, 'assessment-test', ?, 'PUBLISHED')""",
+        [base_published_run_id, now],
+    )
+    db.connection.execute(
+        """insert into spatial_boundary_version (
+            boundary_version_id, raw_artifact_id, content_hash, source_organization,
+            source_url, source_date, source_version, crs, district_count, dong_count,
+            approved_by, approval_rationale, approved_at
+        ) values (?, ?, repeat('e', 64), 'test', 'https://example.invalid',
+                  '2026-08-20', 'v1', 'EPSG:4326', 0, 0, 'tester', 'test', ?)""",
+        [boundary_version_id, uuid4(), now],
+    )
+    db.connection.execute(
+        """insert into spatial_run_summary (
+            spatial_run_id, base_published_run_id, boundary_version_id,
+            policy_version, business_date, table_counts_json, table_digests_json,
+            started_at, completed_at, published_at, publication_event_id, publisher,
+            publication_action, publication_reason
+        ) values (?, ?, ?, 'spatial-v1', '2026-08-20', '{}', '{}', ?, ?, ?, ?,
+                  'tester', 'publish', 'test')""",
+        [
+            spatial_run_id,
+            base_published_run_id,
+            boundary_version_id,
+            now,
+            now,
+            now,
+            uuid4(),
+        ],
+    )
+    return base_published_run_id, spatial_run_id, boundary_version_id
 
 
 def test_empty_database_migration_creates_vacant_house_schema(tmp_path: Path) -> None:
