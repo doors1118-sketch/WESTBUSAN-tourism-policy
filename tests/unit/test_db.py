@@ -54,6 +54,116 @@ def test_vacant_house_migration_upgrades_applied_036_without_rewriting_checksums
     assert VACANT_TABLES <= {row[0] for row in upgraded.query("show tables")}
 
 
+def test_vacant_house_schema_rejects_cross_record_and_cross_run_publication_links(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "vacant-house-constraints.duckdb", Path("sql"))
+    db.migrate()
+    run_id, other_run_id = uuid4(), uuid4()
+    artifact_id = uuid4()
+    manifest_id, other_manifest_id = uuid4(), uuid4()
+    now = datetime(2026, 8, 20, tzinfo=UTC)
+    run_sql = """insert into vacant_house_import_run (
+        vacant_run_id, source_snapshot_date, archive_sha256,
+        bundle_manifest_sha256, schema_version, status, fence_epoch, started_at
+    ) values (?, '2026-08-20', repeat('a', 64), repeat('b', 64), 'v1', 'RUNNING', 0, ?)"""
+    db.connection.execute(run_sql, [run_id, now])
+    db.connection.execute(run_sql, [other_run_id, now])
+    db.connection.execute(
+        """insert into vacant_house_source_artifact (
+            artifact_id, vacant_run_id, artifact_kind, archive_sha256,
+            workbook_sha256, workbook_name, sheet_name, conversion_provenance_json,
+            created_at
+        ) values (?, ?, 'workbook', repeat('a', 64), repeat('c', 64), 'book.xlsx',
+                  'Sheet1', '{}', ?)""",
+        [artifact_id, run_id, now],
+    )
+    source_row_id = "source-row-1"
+    record_id = uuid4()
+    db.connection.execute(
+        """insert into vacant_house_revision (
+            vacant_run_id, source_row_id, record_id, source_artifact_id,
+            source_workbook_name, source_sheet_name, source_row_number,
+            record_hash
+        ) values (?, ?, ?, ?, 'book.xlsx', 'Sheet1', 1, repeat('d', 64))""",
+        [run_id, source_row_id, record_id, artifact_id],
+    )
+
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
+            """insert into vacant_house_revision (
+                vacant_run_id, source_row_id, record_id, record_hash
+            ) values (?, 'missing-evidence', ?, repeat('d', 64))""",
+            [run_id, uuid4()],
+        )
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
+            """insert into vacant_house_current (
+                vacant_run_id, record_id, selected_source_row_id, selected_at
+            ) values (?, ?, ?, ?)""",
+            [run_id, uuid4(), source_row_id, now],
+        )
+
+    db.connection.execute(
+        """insert into vacant_house_completion_manifest (
+            manifest_id, vacant_run_id, table_name, row_count,
+            row_digest_sha256, schema_version, manifest_json, created_at
+        ) values (?, ?, 'vacant_house_revision', 1, repeat('e', 64), 'v1', '{}', ?)""",
+        [manifest_id, run_id, now],
+    )
+    db.connection.execute(
+        """insert into vacant_house_completion_manifest (
+            manifest_id, vacant_run_id, table_name, row_count,
+            row_digest_sha256, schema_version, manifest_json, created_at
+        ) values (?, ?, 'vacant_house_revision', 1, repeat('e', 64), 'v1', '{}', ?)""",
+        [other_manifest_id, other_run_id, now],
+    )
+    db.connection.execute(
+        """insert into vacant_house_current (
+            vacant_run_id, record_id, selected_source_row_id, selected_at
+        ) values (?, ?, ?, ?)""",
+        [run_id, record_id, source_row_id, now],
+    )
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
+            """insert into vacant_house_publication_current (
+                pointer_id, vacant_run_id, published_at, publisher,
+                publication_event_id, manifest_id
+            ) values (?, ?, ?, 'tester', ?, ?)""",
+            [uuid4(), run_id, now, uuid4(), other_manifest_id],
+        )
+    db.connection.execute(
+        """insert into vacant_house_publication_current (
+            pointer_id, vacant_run_id, published_at, publisher,
+            publication_event_id, manifest_id
+        ) values (?, ?, ?, 'tester', ?, ?)""",
+        [uuid4(), run_id, now, uuid4(), manifest_id],
+    )
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
+            """insert into vacant_house_publication_current (
+                pointer_id, vacant_run_id, published_at, publisher,
+                publication_event_id, manifest_id
+            ) values (?, ?, ?, 'tester', ?, ?)""",
+            [uuid4(), run_id, now, uuid4(), manifest_id],
+        )
+    with pytest.raises(duckdb.ConstraintException):
+        db.connection.execute(
+            """insert into vacant_house_publication_audit (
+                event_id, vacant_run_id, new_vacant_run_id, action, actor,
+                reason, manifest_id, evidence_json, event_at
+            ) values (?, ?, ?, 'publish', 'tester', 'test', ?, '{}', ?)""",
+            [uuid4(), run_id, run_id, other_manifest_id, now],
+        )
+    db.connection.execute(
+        """insert into vacant_house_publication_audit (
+            event_id, vacant_run_id, new_vacant_run_id, action, actor,
+            reason, manifest_id, evidence_json, event_at
+        ) values (?, ?, ?, 'publish', 'tester', 'test', ?, '{}', ?)""",
+        [uuid4(), run_id, run_id, manifest_id, now],
+    )
+
+
 def test_empty_database_migration_creates_spatial_schema_tables(tmp_path: Path) -> None:
     """Catches a fresh spatial database missing a table required by later stages."""
     db = Database(tmp_path / "spatial.duckdb", Path("sql"))

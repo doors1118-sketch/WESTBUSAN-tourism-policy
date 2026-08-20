@@ -59,16 +59,17 @@ create table vacant_house_revision (
     vacant_grade integer,
     original_grade_text varchar,
     cleanup_status varchar,
-    source_artifact_id uuid references vacant_house_source_artifact(artifact_id),
-    source_workbook_name varchar,
-    source_sheet_name varchar,
-    source_row_number bigint,
+    source_artifact_id uuid not null references vacant_house_source_artifact(artifact_id),
+    source_workbook_name varchar not null,
+    source_sheet_name varchar not null,
+    source_row_number bigint not null,
     record_hash varchar not null check (length(record_hash) = 64),
     duplicate_group_id varchar,
     review_status varchar,
     evidence_quality varchar,
     source_flags_json varchar check (source_flags_json is null or json_valid(source_flags_json)),
-    primary key (vacant_run_id, source_row_id)
+    primary key (vacant_run_id, source_row_id),
+    unique (vacant_run_id, record_id, source_row_id)
 );
 
 create table vacant_house_current (
@@ -77,8 +78,8 @@ create table vacant_house_current (
     selected_source_row_id varchar not null,
     selected_at timestamp with time zone not null,
     primary key (vacant_run_id, record_id),
-    foreign key (vacant_run_id, selected_source_row_id)
-        references vacant_house_revision(vacant_run_id, source_row_id)
+    foreign key (vacant_run_id, record_id, selected_source_row_id)
+        references vacant_house_revision(vacant_run_id, record_id, source_row_id)
 );
 
 create table vacant_house_exception (
@@ -103,16 +104,20 @@ create table vacant_house_completion_manifest (
     schema_version varchar not null,
     manifest_json varchar not null check (json_valid(manifest_json)),
     created_at timestamp with time zone not null,
-    unique (vacant_run_id, table_name)
+    unique (vacant_run_id, table_name),
+    unique (vacant_run_id, manifest_id)
 );
 
 create table vacant_house_publication_current (
-    pointer_id uuid primary key,
+    singleton_key integer primary key default 1 check (singleton_key = 1),
+    pointer_id uuid not null unique,
     vacant_run_id uuid not null unique references vacant_house_import_run(vacant_run_id),
     published_at timestamp with time zone not null,
     publisher varchar not null,
     publication_event_id uuid not null,
-    manifest_id uuid not null references vacant_house_completion_manifest(manifest_id)
+    manifest_id uuid not null,
+    foreign key (vacant_run_id, manifest_id)
+        references vacant_house_completion_manifest(vacant_run_id, manifest_id)
 );
 
 create table vacant_house_publication_audit (
@@ -123,8 +128,10 @@ create table vacant_house_publication_audit (
     action varchar not null,
     actor varchar not null,
     reason varchar not null,
-    manifest_id uuid not null references vacant_house_completion_manifest(manifest_id),
+    manifest_id uuid not null,
     evidence_json varchar not null check (json_valid(evidence_json)),
     event_at timestamp with time zone not null,
+    foreign key (new_vacant_run_id, manifest_id)
+        references vacant_house_completion_manifest(vacant_run_id, manifest_id),
     unique (vacant_run_id, new_vacant_run_id, event_at)
 );
