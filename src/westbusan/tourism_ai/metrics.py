@@ -173,6 +173,39 @@ def load_metric_catalogue(
                     quality_note="서부산 구별 정책검토 집계지표",
                 )
 
+    if request.selection is not None:
+        selection = request.selection
+        area_name = f"{selection.district} {selection.dong} 500m"
+        for suffix, label, value, unit in (
+            ("facilities", "주소 확인 숙박시설 수", selection.facility_count, "개"),
+            (
+                "aged_facilities",
+                "20년 이상 숙박시설 수",
+                selection.aged_facility_count,
+                "개",
+            ),
+            ("age_known", "건물연수 확인 시설 수", selection.age_known_count, "개"),
+            ("rooms", "확인 객실 수", selection.room_count, "실"),
+            ("supply_gap", "관광수요 대비 공급부족도", selection.supply_gap_score, "점"),
+            ("demand_score", "방문수요 점수", selection.demand_score, "점"),
+            ("supply_score", "객실공급 점수", selection.supply_score, "점"),
+        ):
+            if value is None:
+                continue
+            metric_id = f"selection.{suffix}"
+            catalogue[metric_id] = EvidenceMetric(
+                metric_id=metric_id,
+                label=f"{area_name} {label}",
+                value=value,
+                unit=unit,
+                region=area_name,
+                period=document.as_of,
+                quality_note=(
+                    "현재 공간지도 발행본의 500m 정책검토 지표; "
+                    "인허가·사업성 확정값 아님"
+                ),
+            )
+
     if not catalogue:
         raise MetricCatalogueError("empty_metric_catalogue")
     return catalogue

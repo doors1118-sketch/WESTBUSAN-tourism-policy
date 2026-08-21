@@ -11,6 +11,7 @@ from westbusan.tourism_ai.models import (
     EvidenceMetric,
     InsightRequest,
     InsightResponse,
+    MapSelection,
     ModelFinding,
     ModelInsight,
     ModelPolicyOption,
@@ -25,6 +26,7 @@ class InsightGenerator(Protocol):
         catalogue: dict[str, EvidenceMetric],
         *,
         focus_region: str,
+        focus_selection: MapSelection | None,
     ) -> ModelInsight: ...
 
 
@@ -52,12 +54,14 @@ class InsightService:
         catalogue = load_metric_catalogue(self.data_path, request)
         try:
             insight = self.generator.generate(
-                catalogue, focus_region=request.region
+                catalogue,
+                focus_region=request.region,
+                focus_selection=request.selection,
             )
             evidence = _resolve_evidence(insight, catalogue)
             source = "openai"
         except (RuntimeError, ValueError):
-            insight = _fallback_insight(catalogue)
+            insight = _fallback_insight(catalogue, request.selection)
             evidence = _resolve_evidence(insight, catalogue)
             source = "rule_fallback"
 
@@ -73,7 +77,7 @@ class InsightService:
         """Return a deterministic interpretation without calling OpenAI."""
 
         catalogue = load_metric_catalogue(self.data_path, request)
-        insight = _fallback_insight(catalogue)
+        insight = _fallback_insight(catalogue, request.selection)
         return self._response(
             request=request,
             catalogue=catalogue,
@@ -123,7 +127,10 @@ def _resolve_evidence(
     return [catalogue[metric_id] for metric_id in ordered]
 
 
-def _fallback_insight(catalogue: dict[str, EvidenceMetric]) -> ModelInsight:
+def _fallback_insight(
+    catalogue: dict[str, EvidenceMetric],
+    selection: MapSelection | None = None,
+) -> ModelInsight:
     prefix = "west" if "west.rooms" in catalogue else next(iter(catalogue)).split(".")[0]
 
     def choose(*suffixes: str) -> list[str]:
@@ -161,23 +168,36 @@ def _fallback_insight(catalogue: dict[str, EvidenceMetric]) -> ModelInsight:
             limitations="법적 적합성, 안전성, 사업성과 수익성은 개별 검토가 필요합니다.",
         ),
     ]
+    target_area = (
+        f"{selection.district} {selection.dong} 500m 후보지역"
+        if selection is not None
+        else "수요압력 상위지역"
+    )
     options = [
         ModelPolicyOption(
             priority_rank=1,
             investment_type="new_supply",
             action="수요 대비 공급이 부족한 지역의 신규 숙박공급 검토",
-            target_area="수요압력 상위지역",
+            target_area=target_area,
             rationale="방문수요와 객실 공급을 같은 기준으로 비교합니다.",
-            metric_ids=choose("demand_per_100_rooms", "rooms"),
+            metric_ids=(
+                ["selection.supply_gap", "selection.rooms"]
+                if "selection.supply_gap" in catalogue
+                else choose("demand_per_100_rooms", "rooms")
+            ),
             caveat="인허가, 입지, 수익성과 민간 수요조사는 별도로 확인해야 합니다.",
         ),
         ModelPolicyOption(
             priority_rank=2,
             investment_type="remodel",
             action="노후 숙박시설 리모델링과 관광상품화 연계",
-            target_area="노후시설 비중이 높은 지역",
+            target_area=target_area if selection is not None else "노후시설 비중이 높은 지역",
             rationale="기존 공급의 품질개선 가능성을 우선 검토합니다.",
-            metric_ids=choose("old20_share", "recent_license_share"),
+            metric_ids=(
+                ["selection.aged_facilities", "selection.age_known"]
+                if "selection.aged_facilities" in catalogue
+                else choose("old20_share", "recent_license_share")
+            ),
             caveat="개별 건물 안전진단과 사업자 참여 의사를 확인해야 합니다.",
         ),
     ]

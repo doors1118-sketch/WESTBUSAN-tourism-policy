@@ -6,7 +6,34 @@ from datetime import date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    FiniteFloat,
+    StrictInt,
+    model_validator,
+)
+
+
+class MapSelection(BaseModel):
+    """One published 500 m map cell selected by the browser."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    grid_id: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_-]+$")
+    district: str = Field(min_length=2, max_length=20, pattern=r"^[가-힣0-9· -]+$")
+    dong: str = Field(min_length=1, max_length=30, pattern=r"^[가-힣0-9· -]+$")
+    facility_count: StrictInt = Field(ge=0, le=10000)
+    aged_facility_count: StrictInt = Field(ge=0, le=10000)
+    age_known_count: StrictInt = Field(ge=0, le=10000)
+    room_count: FiniteFloat = Field(ge=0, le=1000000)
+    supply_gap_score: FiniteFloat | None = Field(default=None, ge=-1000, le=1000)
+    demand_score: FiniteFloat | None = Field(default=None, ge=-1000, le=1000)
+    supply_score: FiniteFloat | None = Field(default=None, ge=-1000, le=1000)
+    recommendation_kind: Literal[
+        "new_supply", "remodel", "investment_caution"
+    ]
 
 
 class InsightRequest(BaseModel):
@@ -17,6 +44,7 @@ class InsightRequest(BaseModel):
     region: Literal["west", "east", "other", "all"]
     period: Literal["latest"]
     published_run: UUID
+    selection: MapSelection | None = None
 
 
 class EvidenceMetric(BaseModel):

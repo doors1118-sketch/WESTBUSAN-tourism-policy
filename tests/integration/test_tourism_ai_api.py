@@ -29,8 +29,9 @@ class _CountingGenerator:
         catalogue: dict[str, EvidenceMetric],
         *,
         focus_region: str,
+        focus_selection: object | None,
     ) -> ModelInsight:
-        del catalogue, focus_region
+        del catalogue, focus_region, focus_selection
         with self._lock:
             self.calls += 1
         if isinstance(self.document, Exception):
@@ -207,19 +208,17 @@ def test_corrupt_cache_is_replaced_with_valid_response(tmp_path: Path) -> None:
     assert list(settings.tourism_ai_cache_dir.glob("*.invalid"))
 
 
-def test_vworld_basemap_is_server_proxied_without_disclosing_key(
+def test_vworld_tile_is_server_proxied_without_disclosing_key(
     tmp_path: Path, caplog: Any
 ) -> None:
-    """Catches a browser-visible key or an unrestricted upstream map request."""
+    """Catches a browser-visible key or a fixed static map returning as a tile."""
     secret = "sentinel-vworld-key"
 
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.url.host == "api.vworld.kr"
-        assert request.url.path == "/req/image"
-        assert request.url.params["key"] == secret
-        assert request.url.params["center"] == "129.075,35.18"
-        assert request.url.params["zoom"] == "10"
-        assert request.url.params["size"] == "1000,700"
+        assert request.url.path == (
+            f"/req/wmts/1.0.0/{secret}/Base/14/6449/13969.png"
+        )
         return httpx.Response(
             200,
             content=b"\x89PNG\r\n\x1a\nreviewed-map",
@@ -236,7 +235,7 @@ def test_vworld_basemap_is_server_proxied_without_disclosing_key(
         )
     )
 
-    response = client.get("/vworld/base.png")
+    response = client.get("/vworld/tiles/14/13969/6449.png")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("image/png")
@@ -245,7 +244,23 @@ def test_vworld_basemap_is_server_proxied_without_disclosing_key(
     assert secret not in caplog.text
 
 
-def test_vworld_basemap_is_unavailable_without_server_key(tmp_path: Path) -> None:
+def test_vworld_tile_rejects_invalid_coordinates_before_upstream(
+    tmp_path: Path,
+) -> None:
+    """Catches arbitrary URL expansion through the credentialed tile proxy."""
+    client = TestClient(
+        create_app(
+            _settings(tmp_path),
+            generator=_CountingGenerator(_model_document()),
+        )
+    )
+
+    assert client.get("/vworld/tiles/20/1/1.png").status_code == 422
+    assert client.get("/vworld/tiles/14/20000/1.png").status_code == 422
+    assert client.get("/vworld/tiles/14/1/20000.png").status_code == 422
+
+
+def test_vworld_tile_is_unavailable_without_server_key(tmp_path: Path) -> None:
     """Catches an accidental client-side fallback that would expose credentials."""
     settings = _settings(tmp_path).model_copy(update={"vworld_api_key": None})
     client = TestClient(
@@ -255,7 +270,7 @@ def test_vworld_basemap_is_unavailable_without_server_key(tmp_path: Path) -> Non
         )
     )
 
-    response = client.get("/vworld/base.png")
+    response = client.get("/vworld/tiles/14/13969/6449.png")
 
     assert response.status_code == 503
     assert response.json() == {"detail": "vworld_unavailable"}

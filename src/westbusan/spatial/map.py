@@ -106,6 +106,7 @@ def _render_svg(
         geometry = feature.get("geometry", {})
         path_data = _geometry_path(geometry, project)
         min_x, min_y, max_x, max_y = _projected_geometry_bounds(geometry, project)
+        min_lon, min_lat, max_lon, max_lat = _geographic_geometry_bounds(geometry)
         paths.append(
             '<path class="grid-feature" d="{path}" tabindex="0" '
             'role="button" aria-label="{label}" data-kind="grid" '
@@ -118,6 +119,7 @@ def _render_svg(
             'data-room-count="{room_count}" data-room-coverage="{room_coverage}" '
             'data-demand-score="{demand_score}" data-supply-score="{supply_score}" '
             'data-map-bounds="{min_x:.3f},{min_y:.3f},{max_x:.3f},{max_y:.3f}" '
+            'data-geo-bounds="{min_lon:.7f},{min_lat:.7f},{max_lon:.7f},{max_lat:.7f}" '
             'data-recommendation="{recommendation}" data-policy-kind="{policy_kind}">'
             '<title>{title}</title></path>'.format(
                 grade=_attribute(grade),
@@ -145,6 +147,10 @@ def _render_svg(
                 min_y=min_y,
                 max_x=max_x,
                 max_y=max_y,
+                min_lon=min_lon,
+                min_lat=min_lat,
+                max_lon=max_lon,
+                max_lat=max_lat,
                 recommendation=_attribute(properties.get("recommendation_kind")),
                 policy_kind=_attribute(policy_kind),
                 title=html.escape(
@@ -255,10 +261,8 @@ def _render_svg(
     return (
         '<svg id="spatial-map" viewBox="0 0 1000 700" '
         'data-map-center="129.075,35.18" data-map-zoom="10" '
-        'aria-label="부산 관광 숙박 투자기회 지도" role="img">'
+        'aria-label="부산 관광 숙박 투자기회 지도" role="application">'
         '<g id="map-viewport">'
-        '<image id="vworld-basemap" href="/tourism/api/vworld/base.png" '
-        'x="0" y="0" width="1000" height="700" preserveAspectRatio="none"/>'
         + "".join(paths)
         + '<g id="candidate-markers"></g>'
         + "".join(clusters)
@@ -328,6 +332,22 @@ def _projected_geometry_bounds(
     xs = [point[0] for point in points]
     ys = [point[1] for point in points]
     return min(xs), min(ys), max(xs), max(ys)
+
+
+def _geographic_geometry_bounds(
+    geometry: Mapping[str, Any],
+) -> tuple[float, float, float, float]:
+    points = [
+        point
+        for polygon in _polygons(geometry)
+        for ring in polygon
+        for point in ring
+    ]
+    if not points:
+        return 0.0, 0.0, 0.0, 0.0
+    longitudes = [float(point[0]) for point in points]
+    latitudes = [float(point[1]) for point in points]
+    return min(longitudes), min(latitudes), max(longitudes), max(latitudes)
 
 
 def _metric_label(value: object, *, percent: bool = False) -> str:

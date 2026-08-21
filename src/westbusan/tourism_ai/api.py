@@ -14,12 +14,18 @@ from westbusan.tourism_ai.cache import (
     InsightCache,
 )
 from westbusan.tourism_ai.config import TourismAISettings
-from westbusan.tourism_ai.models import EvidenceMetric, InsightRequest, ModelInsight
+from westbusan.tourism_ai.models import (
+    EvidenceMetric,
+    InsightRequest,
+    MapSelection,
+    ModelInsight,
+)
 from westbusan.tourism_ai.openai_client import OpenAIResponsesClient
 from westbusan.tourism_ai.service import InsightGenerator, InsightService
 from westbusan.tourism_ai.vworld_proxy import (
     VWorldBasemapError,
     VWorldBasemapProxy,
+    VWorldTileProxy,
 )
 
 
@@ -29,6 +35,7 @@ class _Generator(InsightGenerator):
         catalogue: dict[str, EvidenceMetric],
         *,
         focus_region: str,
+        focus_selection: MapSelection | None,
     ) -> ModelInsight:
         raise NotImplementedError
 
@@ -68,10 +75,16 @@ def create_app(
         openapi_url=None,
     )
     vworld: VWorldBasemapProxy | None = None
+    vworld_tiles: VWorldTileProxy | None = None
     if settings.vworld_api_key is not None:
+        upstream = vworld_client or httpx.Client(timeout=15.0)
         vworld = VWorldBasemapProxy(
             api_key=settings.vworld_api_key.get_secret_value(),
-            client=vworld_client or httpx.Client(timeout=15.0),
+            client=upstream,
+        )
+        vworld_tiles = VWorldTileProxy(
+            api_key=settings.vworld_api_key.get_secret_value(),
+            client=upstream,
         )
 
     @app.middleware("http")
@@ -103,6 +116,25 @@ def create_app(
             content=payload,
             media_type="image/png",
             headers={"Cache-Control": "public, max-age=86400"},
+        )
+
+    @app.get(
+        "/vworld/tiles/{zoom}/{column}/{row}.png",
+        response_class=Response,
+    )
+    def vworld_tile(zoom: int, column: int, row: int) -> Response:
+        if vworld_tiles is None:
+            raise HTTPException(status_code=503, detail="vworld_unavailable")
+        try:
+            payload = vworld_tiles.fetch(zoom=zoom, column=column, row=row)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        except VWorldBasemapError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        return Response(
+            content=payload,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=604800, immutable"},
         )
 
     @app.post("/insights")

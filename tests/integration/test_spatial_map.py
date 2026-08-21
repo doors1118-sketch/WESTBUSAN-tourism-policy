@@ -115,10 +115,14 @@ def test_map_uses_vworld_basemap_and_policy_opportunity_layers() -> None:
     assert 'class="two-panel"' in rendered
     assert 'id="evidence-panel"' not in rendered
     assert 'id="selected-evidence"' not in rendered
+    assert 'id="slippy-map"' in rendered
     assert 'id="spatial-map"' in rendered
     assert "부산 관광 숙박 투자기회 지도" in rendered
-    assert 'id="vworld-basemap"' in rendered
-    assert 'href="/tourism/api/vworld/base.png"' in rendered
+    assert 'id="vworld-tile-layer"' in rendered
+    assert 'data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png"' in rendered
+    assert 'data-max-zoom="19"' in rendered
+    assert 'id="vworld-basemap"' not in rendered
+    assert '/tourism/api/vworld/base.png' not in rendered
     assert "VWORLD_API_KEY" not in rendered
     assert 'data-layer="tourism_supply_gap"' in rendered
     assert 'data-layer="facility_density"' in rendered
@@ -130,12 +134,17 @@ def test_map_uses_vworld_basemap_and_policy_opportunity_layers() -> None:
     assert "<circle" in rendered
 
 
-def test_policy_overlays_share_the_fixed_vworld_viewport() -> None:
-    """Catches bounds-stretching that makes facilities miss the VWorld basemap."""
+def test_policy_overlays_share_the_geographic_vworld_tile_viewport() -> None:
+    """Catches tile panning or zooming without moving the policy overlays."""
     rendered = render_map(_map_data())
 
     assert 'data-map-center="129.075,35.18"' in rendered
     assert 'data-map-zoom="10"' in rendered
+    assert 'data-min-zoom="7"' in rendered
+    assert 'data-max-zoom="19"' in rendered
+    assert "function renderTiles" in rendered
+    assert "function renderMap" in rendered
+    assert "function fitGeographicBounds" in rendered
     assert 'd="M0.000,700.000' not in rendered
 
 
@@ -249,8 +258,8 @@ def test_clicking_a_region_populates_a_policy_readout_and_filters_are_dependent(
     assert "filters.district.addEventListener" in rendered
     assert "function focusSelection" in rendered
     assert "data-map-bounds" in rendered
-    assert "function svgPoint" in rendered
-    assert "Math.min(4" in rendered
+    assert "data-geo-bounds" in rendered
+    assert "MAX_ZOOM = 19" in rendered
 
 
 def test_selected_region_offers_safe_regional_ai_interpretation() -> None:
@@ -263,6 +272,10 @@ def test_selected_region_offers_safe_regional_ai_interpretation() -> None:
     assert 'fetch("/tourism/data.json"' in rendered
     assert 'fetch("/tourism/api/insights"' in rendered
     assert 'period: "latest"' in rendered
+    assert "selection: selectionContext" in rendered
+    assert "function requestRegionInsight" in rendered
+    assert "policy_options" in rendered
+    assert "정책 아이디어" in rendered
 
 
 def test_metric_layers_use_counts_and_explain_the_supply_gap_formula() -> None:
@@ -285,6 +298,10 @@ def test_policy_layer_ranks_dong_and_500m_candidates_not_whole_districts() -> No
     assert "policyColour(node.dataset.recommendation)" in rendered
     assert "buildCandidateRanking" in rendered
     assert "후보지역 선별 신호" in rendered
+    assert "gridKey: node.dataset.key" in rendered
+    assert "selectCandidate(item)" in rendered
+    assert "renderGridSummary(item.node)" in rendered
+    assert "requestRegionInsight(item.node)" in rendered
 
 
 def test_facility_location_click_exposes_public_address_rooms_and_age() -> None:

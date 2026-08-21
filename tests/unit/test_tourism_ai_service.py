@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from westbusan.tourism_ai.models import (
     EvidenceMetric,
     InsightRequest,
+    MapSelection,
     ModelInsight,
 )
 from westbusan.tourism_ai.openai_client import OpenAIResponsesClient
@@ -148,7 +149,22 @@ def test_openai_payload_uses_strict_schema_and_no_tools() -> None:
         transport=_responses_transport(_model_document(), recorded),
     )
 
-    result = client.generate(_catalogue(), focus_region="west")
+    selection = MapSelection(
+        grid_id="g5174_500_721_340",
+        district="북구",
+        dong="구포동",
+        facility_count=11,
+        aged_facility_count=7,
+        age_known_count=9,
+        room_count=84,
+        supply_gap_score=72.5,
+        demand_score=88.0,
+        supply_score=15.5,
+        recommendation_kind="new_supply",
+    )
+    result = client.generate(
+        _catalogue(), focus_region="west", focus_selection=selection
+    )
 
     assert result.headline.startswith("서부산")
     assert len(recorded) == 1
@@ -159,6 +175,12 @@ def test_openai_payload_uses_strict_schema_and_no_tools() -> None:
     serialized = json.dumps(payload).lower()
     assert "exactvacanthouseaddress" not in serialized
     assert "credentials" not in serialized
+    selection_payload = payload["input"][1]["content"][0]["text"]
+    instructions = payload["input"][0]["content"][0]["text"]
+    assert "g5174_500_721_340" in selection_payload
+    assert "구포동" in selection_payload
+    assert "정책 아이디어" in instructions
+    assert "데이터로 확인된 사실" in instructions
 
 
 class _StubGenerator:
@@ -170,8 +192,9 @@ class _StubGenerator:
         catalogue: dict[str, EvidenceMetric],
         *,
         focus_region: str,
+        focus_selection: MapSelection | None,
     ) -> ModelInsight:
-        del catalogue, focus_region
+        del catalogue, focus_region, focus_selection
         if isinstance(self.document, Exception):
             raise self.document
         return ModelInsight.model_validate(self.document)

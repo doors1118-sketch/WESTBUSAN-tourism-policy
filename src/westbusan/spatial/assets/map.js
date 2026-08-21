@@ -1,5 +1,13 @@
 (() => {
   "use strict";
+
+  const TILE_SIZE = 256;
+  const BASE_ZOOM = 10;
+  const MIN_ZOOM = 7;
+  const MAX_ZOOM = 19;
+  const slippyMap = document.getElementById("slippy-map");
+  const tileLayer = document.getElementById("vworld-tile-layer");
+  const svg = document.getElementById("spatial-map");
   const grids = [...document.querySelectorAll(".grid-feature")];
   const facilities = [...document.querySelectorAll(".facility-feature")];
   const clusters = [...document.querySelectorAll(".facility-cluster")];
@@ -15,8 +23,132 @@
   const layerButtons = [...document.querySelectorAll(".layer-button")];
   const legend = document.getElementById("dynamic-legend");
   const candidateLayer = document.getElementById("candidate-markers");
+  const tileTemplate = slippyMap.dataset.tileTemplate;
+  const tileNodes = new Map();
   let candidateMarkers = [];
   let activeLayer = "policy_priority";
+  let selectedGridNode = null;
+  let dragOrigin = null;
+
+  function worldPixel(lon, lat, zoom) {
+    const size = TILE_SIZE * (2 ** zoom);
+    const clippedLat = Math.max(-85.05112878, Math.min(85.05112878, lat));
+    const sin = Math.sin(clippedLat * Math.PI / 180);
+    return [
+      (lon + 180) / 360 * size,
+      (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * size,
+    ];
+  }
+
+  function lonLatFromWorld(x, y, zoom) {
+    const size = TILE_SIZE * (2 ** zoom);
+    const lon = x / size * 360 - 180;
+    const n = Math.PI - 2 * Math.PI * y / size;
+    return [lon, 180 / Math.PI * Math.atan(Math.sinh(n))];
+  }
+
+  const initialCenter = slippyMap.dataset.mapCenter.split(",").map(Number);
+  const initialWorld = worldPixel(initialCenter[0], initialCenter[1], BASE_ZOOM);
+  const mapState = { zoom: BASE_ZOOM, centerX: initialWorld[0], centerY: initialWorld[1] };
+
+  function tileUrl(z, x, y) {
+    return tileTemplate.replace("{z}", z).replace("{x}", x).replace("{y}", y);
+  }
+
+  function renderTiles(width, height) {
+    const left = mapState.centerX - width / 2;
+    const top = mapState.centerY - height / 2;
+    const limit = 2 ** mapState.zoom;
+    const minX = Math.floor(left / TILE_SIZE);
+    const maxX = Math.floor((left + width) / TILE_SIZE);
+    const minY = Math.max(0, Math.floor(top / TILE_SIZE));
+    const maxY = Math.min(limit - 1, Math.floor((top + height) / TILE_SIZE));
+    const visibleKeys = new Set();
+    for (let tileY = minY; tileY <= maxY; tileY += 1) {
+      for (let tileX = minX; tileX <= maxX; tileX += 1) {
+        const wrappedX = ((tileX % limit) + limit) % limit;
+        const key = `${mapState.zoom}/${wrappedX}/${tileY}`;
+        visibleKeys.add(key);
+        let image = tileNodes.get(key);
+        if (!image) {
+          image = new Image();
+          image.alt = "";
+          image.decoding = "async";
+          image.draggable = false;
+          image.src = tileUrl(mapState.zoom, wrappedX, tileY);
+          tileNodes.set(key, image);
+          tileLayer.append(image);
+        }
+        image.style.left = `${tileX * TILE_SIZE - left}px`;
+        image.style.top = `${tileY * TILE_SIZE - top}px`;
+      }
+    }
+    tileNodes.forEach((image, key) => {
+      if (!visibleKeys.has(key)) {
+        image.remove();
+        tileNodes.delete(key);
+      }
+    });
+  }
+
+  function mapCoordinate(lon, lat) {
+    const point = worldPixel(lon, lat, BASE_ZOOM);
+    return [point[0] - initialWorld[0] + 500, point[1] - initialWorld[1] + 350];
+  }
+
+  function updateOverlayScale() {
+    const scale = 2 ** (mapState.zoom - BASE_ZOOM);
+    const inverse = 1 / scale;
+    [...clusters, ...policyLabels, ...candidateMarkers].forEach((node) => {
+      node.setAttribute("transform", `translate(${node.dataset.x} ${node.dataset.y}) scale(${inverse})`);
+    });
+    facilities.forEach((node) => node.setAttribute("r", String(Number(node.dataset.baseRadius || 3) * inverse)));
+    document.body.classList.toggle("detail-mode", mapState.zoom >= 15);
+  }
+
+  function renderMap() {
+    const width = Math.max(320, slippyMap.clientWidth);
+    const height = Math.max(320, slippyMap.clientHeight);
+    renderTiles(width, height);
+    const center = lonLatFromWorld(mapState.centerX, mapState.centerY, mapState.zoom);
+    const mapCenter = mapCoordinate(center[0], center[1]);
+    const scale = 2 ** (mapState.zoom - BASE_ZOOM);
+    svg.setAttribute("viewBox", `${mapCenter[0] - width / (2 * scale)} ${mapCenter[1] - height / (2 * scale)} ${width / scale} ${height / scale}`);
+    svg.setAttribute("preserveAspectRatio", "none");
+    slippyMap.dataset.currentZoom = String(mapState.zoom);
+    updateOverlayScale();
+  }
+
+  function setCenter(lon, lat, zoom = mapState.zoom) {
+    mapState.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(zoom)));
+    [mapState.centerX, mapState.centerY] = worldPixel(lon, lat, mapState.zoom);
+    renderMap();
+  }
+
+  function fitGeographicBounds(bounds, maximumZoom = MAX_ZOOM) {
+    if (!bounds || bounds.length !== 4 || !bounds.every(Number.isFinite)) return;
+    const [minLon, minLat, maxLon, maxLat] = bounds;
+    const width = Math.max(320, slippyMap.clientWidth) * 0.72;
+    const height = Math.max(320, slippyMap.clientHeight) * 0.72;
+    let zoom = Math.min(MAX_ZOOM, maximumZoom);
+    while (zoom > MIN_ZOOM) {
+      const northWest = worldPixel(minLon, maxLat, zoom);
+      const southEast = worldPixel(maxLon, minLat, zoom);
+      if (Math.abs(southEast[0] - northWest[0]) <= width && Math.abs(southEast[1] - northWest[1]) <= height) break;
+      zoom -= 1;
+    }
+    setCenter((minLon + maxLon) / 2, (minLat + maxLat) / 2, zoom);
+  }
+
+  function geographicBounds(nodes) {
+    const values = nodes.map((node) => (node.dataset.geoBounds || "").split(",").map(Number))
+      .filter((item) => item.length === 4 && item.every(Number.isFinite));
+    if (!values.length) return null;
+    return [
+      Math.min(...values.map((v) => v[0])), Math.min(...values.map((v) => v[1])),
+      Math.max(...values.map((v) => v[2])), Math.max(...values.map((v) => v[3])),
+    ];
+  }
 
   function addOptions(select, values) {
     [...new Set(values.filter(Boolean))].sort().forEach((value) => {
@@ -32,8 +164,7 @@
   function refreshDongOptions() {
     const selected = filters.dong.value;
     filters.dong.replaceChildren(new Option("전체", ""));
-    addOptions(filters.dong, grids
-      .filter((node) => !filters.district.value || node.dataset.district === filters.district.value)
+    addOptions(filters.dong, grids.filter((node) => !filters.district.value || node.dataset.district === filters.district.value)
       .map((node) => node.dataset.dong));
     if ([...filters.dong.options].some((option) => option.value === selected)) filters.dong.value = selected;
   }
@@ -44,6 +175,15 @@
     if (filters.dong.value && node.dataset.dong !== filters.dong.value) return false;
     if (filters.period.value && node.dataset.period && node.dataset.period !== filters.period.value) return false;
     return true;
+  }
+
+  function numeric(node, key) {
+    const value = Number(node.dataset[key]);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function formatNumber(value, digits = 0) {
+    return Number.isFinite(value) ? value.toLocaleString("ko-KR", { maximumFractionDigits: digits }) : "자료 없음";
   }
 
   function policyColour(kind) {
@@ -57,30 +197,14 @@
       if (Number(node.dataset.ageKnown || 0) <= 0) return Number.NaN;
       raw = node.dataset.agedCount;
     }
-    if (raw === undefined || raw === "") return Number.NaN;
-    return Number(raw);
+    return raw === undefined || raw === "" ? Number.NaN : Number(raw);
   }
 
   function metricColour(value) {
     if (!Number.isFinite(value)) return "#8b959d";
-    if (activeLayer === "facility_density") {
-      if (value >= 20) return "#762a83";
-      if (value >= 8) return "#9970ab";
-      if (value >= 3) return "#c2a5cf";
-      if (value >= 1) return "#e7d4e8";
-      return "#eef1f3";
-    }
-    if (activeLayer === "aged_facilities") {
-      if (value >= 10) return "#8c2d04";
-      if (value >= 5) return "#d94801";
-      if (value >= 2) return "#f16913";
-      if (value >= 1) return "#fdae6b";
-      return "#eef1f3";
-    }
-    if (value >= 75) return "#b2182b";
-    if (value >= 50) return "#ef8a62";
-    if (value >= 25) return "#fddbc7";
-    return "#67a9cf";
+    if (activeLayer === "facility_density") return value >= 20 ? "#762a83" : value >= 8 ? "#9970ab" : value >= 3 ? "#c2a5cf" : value >= 1 ? "#e7d4e8" : "#eef1f3";
+    if (activeLayer === "aged_facilities") return value >= 10 ? "#8c2d04" : value >= 5 ? "#d94801" : value >= 2 ? "#f16913" : value >= 1 ? "#fdae6b" : "#eef1f3";
+    return value >= 75 ? "#b2182b" : value >= 50 ? "#ef8a62" : value >= 25 ? "#fddbc7" : "#67a9cf";
   }
 
   function setLegend(items) {
@@ -113,102 +237,27 @@
       }
     });
     const explanations = {
-      policy_priority: "서부산의 읍면동·500m 단위 수요·공급·노후 신호로 후보지역을 좁힙니다. 번호를 누르면 해당 생활권으로 이동합니다.",
+      policy_priority: "서부산 500m 단위 수요·공급·노후 신호로 후보지역을 좁힙니다. 번호를 누르면 해당 생활권의 근거와 AI 정책 아이디어가 열립니다.",
       tourism_supply_gap: "공급부족도 = 구별 방문수요 점수 − 해당 500m 객실공급 점수입니다. 값이 클수록 수요에 비해 확인 객실이 적습니다.",
-      facility_density: "500m 안의 주소 확인 숙박시설 수입니다. 면적이 작은 해안 경계 때문에 값이 과장되지 않도록 시설 개수를 사용합니다.",
-      aged_facilities: "500m 안의 20년 이상 숙박시설 수입니다. 클릭하면 건물연수가 확인된 전체 표본도 함께 표시됩니다.",
-      facility_locations: "숙박시설 위치 레이어입니다. 평소에는 읍면동 단위로 묶고 확대하면 개별 주소 좌표를 표시합니다.",
+      facility_density: "500m 안의 주소 확인 숙박시설 수입니다. 진한 지역을 클릭하면 정확한 개수와 객실·노후 표본을 확인합니다.",
+      aged_facilities: "500m 안의 20년 이상 숙박시설 수입니다. 색상 영역을 클릭하면 건물연수 확인 표본을 함께 표시합니다.",
+      facility_locations: "숙박시설 위치입니다. 15레벨 이상 확대하면 묶음 대신 개별 시설점을 표시합니다.",
     };
     document.getElementById("layer-explainer").textContent = explanations[activeLayer];
     const legends = {
-      policy_priority: [["#c53b2d", "500m 신규공급 후보"], ["#e98528", "500m 노후시설 개선·전환 후보"], ["#667784", "추가 근거 확인 필요"], ["#ffffff", "근거 부족·후보 아님"]],
-      tourism_supply_gap: [["#b2182b", "75 이상 · 공급부족 매우 높음"], ["#ef8a62", "50–74 · 공급부족 높음"], ["#fddbc7", "25–49 · 추가 검토"], ["#67a9cf", "0–24 · 상대적 부족 낮음"]],
+      policy_priority: [["#c53b2d", "신규공급 후보"], ["#e98528", "노후시설 개선·전환 후보"], ["#667784", "추가 근거 확인 필요"]],
+      tourism_supply_gap: [["#b2182b", "75 이상 · 매우 높음"], ["#ef8a62", "50–74 · 높음"], ["#fddbc7", "25–49 · 검토"], ["#67a9cf", "0–24 · 낮음"]],
       facility_density: [["#762a83", "20개 이상"], ["#9970ab", "8–19개"], ["#c2a5cf", "3–7개"], ["#e7d4e8", "1–2개"]],
-      aged_facilities: [["#8c2d04", "20년 이상 10개 이상"], ["#d94801", "5–9개"], ["#f16913", "2–4개"], ["#fdae6b", "1개"]],
-      facility_locations: [["#0d3b59", "숫자 원 · 읍면동 시설 수"], ["#496173", "확대 점 · 개별 숙박시설"]],
+      aged_facilities: [["#8c2d04", "20년 이상 10개+"], ["#d94801", "5–9개"], ["#f16913", "2–4개"], ["#fdae6b", "1개"]],
+      facility_locations: [["#0d3b59", "저배율 · 읍면동 묶음"], ["#496173", "15레벨+ · 개별 시설"]],
     };
     setLegend(legends[activeLayer]);
-  }
-
-  function buildCandidateRanking() {
-    const groups = new Map();
-    grids.filter((node) => westDistricts.has(node.dataset.district)
-      && (!filters.district.value || node.dataset.district === filters.district.value)
-      && (!filters.period.value || node.dataset.period === filters.period.value))
-      .forEach((node) => {
-        const kind = node.dataset.recommendation;
-        if (!kind) return;
-        const key = `${node.dataset.district}|${node.dataset.dong}`;
-        const item = groups.get(key) || {
-          district: node.dataset.district, dong: node.dataset.dong, newSupply: 0,
-          remodel: 0, caution: 0, gap: 0, aged: 0, facilities: 0, bounds: [],
-        };
-        if (kind === "new_supply") item.newSupply += 1;
-        else if (kind === "remodel") item.remodel += 1;
-        else item.caution += 1;
-        item.gap = Math.max(item.gap, Number(node.dataset.tourismSupplyGap || 0));
-        item.aged += Number(node.dataset.agedCount || 0);
-        item.facilities += Number(node.dataset.mappedFacilityCount || 0);
-        item.bounds.push(node.dataset.mapBounds.split(",").map(Number));
-        groups.set(key, item);
-      });
-    const ranked = [...groups.values()].map((item) => {
-      const signal = item.newSupply > 0 ? 3 : item.remodel > 0 ? 2 : 1;
-      const action = item.newSupply >= item.remodel && item.newSupply > 0
-        ? "신규 관광숙박 공급 검토" : item.remodel > 0
-          ? "노후시설 개선·전환 검토" : "추가 근거 확인";
-      return { ...item, action, score: signal * 1000 + item.gap * 10 + item.aged + item.facilities * .1 };
-    }).sort((a, b) => b.score - a.score || a.dong.localeCompare(b.dong, "ko")).slice(0, 5);
-    const list = document.getElementById("candidate-rank-list");
-    list.replaceChildren();
-    candidateLayer.replaceChildren();
-    candidateMarkers = [];
-    ranked.forEach((item, index) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      const rank = document.createElement("b"); rank.textContent = String(index + 1);
-      const label = document.createElement("span");
-      label.textContent = `${item.district} ${item.dong}`;
-      const detail = document.createElement("small");
-      detail.textContent = `${item.action} · 시설 ${formatNumber(item.facilities)}개 · 20년+ ${formatNumber(item.aged)}개`;
-      label.append(detail); button.append(rank, label);
-      button.addEventListener("click", () => selectRegion(item.district, item.dong));
-      list.append(button);
-
-      const validBounds = item.bounds.filter((value) => value.length === 4 && value.every(Number.isFinite));
-      if (!validBounds.length) return;
-      const x = (Math.min(...validBounds.map((value) => value[0])) + Math.max(...validBounds.map((value) => value[2]))) / 2;
-      const y = (Math.min(...validBounds.map((value) => value[1])) + Math.max(...validBounds.map((value) => value[3]))) / 2;
-      const marker = document.createElementNS("http://www.w3.org/2000/svg", "g");
-      marker.setAttribute("class", "candidate-marker");
-      marker.setAttribute("tabindex", "0");
-      marker.setAttribute("role", "button");
-      marker.dataset.x = String(x); marker.dataset.y = String(y);
-      marker.setAttribute("transform", `translate(${x} ${y})`);
-      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle"); circle.setAttribute("r", "14");
-      const text = document.createElementNS("http://www.w3.org/2000/svg", "text"); text.setAttribute("y", "4"); text.textContent = String(index + 1);
-      const title = document.createElementNS("http://www.w3.org/2000/svg", "title"); title.textContent = `${item.district} ${item.dong} · ${item.action}`;
-      marker.append(circle, text, title);
-      marker.addEventListener("click", () => selectRegion(item.district, item.dong));
-      marker.addEventListener("keydown", (event) => { if (event.key === "Enter") selectRegion(item.district, item.dong); });
-      candidateLayer.append(marker); candidateMarkers.push(marker);
-    });
-    if (!ranked.length) {
-      const empty = document.createElement("li"); empty.textContent = "현재 필터에서 확인 가능한 후보가 없습니다."; list.append(empty);
-    }
   }
 
   function matchingGrids(district, dong) {
     return grids.filter((node) => (!district || node.dataset.district === district)
       && (!dong || node.dataset.dong === dong)
       && (!filters.period.value || node.dataset.period === filters.period.value));
-  }
-  function numeric(node, key) {
-    const value = Number(node.dataset[key]);
-    return Number.isFinite(value) ? value : null;
-  }
-  function formatNumber(value, digits = 0) {
-    return Number.isFinite(value) ? value.toLocaleString("ko-KR", { maximumFractionDigits: digits }) : "자료 없음";
   }
 
   function renderRegionSummary(district = filters.district.value, dong = filters.dong.value) {
@@ -222,34 +271,112 @@
     const roomCount = sum("roomCount");
     const gapValues = known("tourismSupplyGap");
     const gap = gapValues.length ? gapValues.reduce((a, b) => a + b, 0) / gapValues.length : null;
-    const occupied = nodes.filter((node) => (numeric(node, "mappedFacilityCount") || 0) > 0).length;
     document.getElementById("region-summary-title").textContent = `${name} · 선택 지역 상세`;
     document.getElementById("region-facility-count").textContent = `${formatNumber(facilityCount)}개`;
     document.getElementById("region-aged-count").textContent = `${formatNumber(agedCount)}개 / ${formatNumber(ageKnown)}개 확인`;
     document.getElementById("region-room-count").textContent = `${formatNumber(roomCount)}실`;
     document.getElementById("region-gap-score").textContent = gap === null ? "자료 없음" : `${formatNumber(gap, 1)}점`;
-    const summaries = {
-      policy_priority: `${name}의 500m 후보지역은 공급부족·노후시설·신규공급 또는 개선 권고가 함께 나타난 곳입니다. 구 전체 판정이 아니라 읍면동과 세부 생활권을 좁히는 선별 근거입니다.`,
-      tourism_supply_gap: `${name}의 공급부족도는 방문수요 점수에서 객실공급 점수를 뺀 값입니다. 색이 진한 500m 지역일수록 수요 신호에 비해 확인 객실이 상대적으로 적습니다.`,
-      facility_density: `${name}에는 주소가 확인된 숙박시설 ${formatNumber(facilityCount)}개가 ${formatNumber(occupied)}개 500m 지역에 분포합니다. 진한 영역을 클릭해 시설 수와 노후시설 수를 함께 비교하세요.`,
-      aged_facilities: `${name}에서 건물연수가 확인된 ${formatNumber(ageKnown)}개 중 20년 이상 시설은 ${formatNumber(agedCount)}개입니다. 표본 수와 함께 리모델링 후보 집중지역을 검토해야 합니다.`,
-      facility_locations: `${name}의 위치 확인 시설은 ${formatNumber(facilityCount)}개입니다. 확대하면 읍면동 숫자 원이 개별 시설점으로 바뀝니다.`,
-    };
-    document.getElementById("region-summary-text").textContent = summaries[activeLayer];
+    document.getElementById("region-summary-text").textContent = `${name} 집계입니다. 색상 영역이나 후보 번호를 선택하면 500m 단위로 좁혀 정확한 공급·노후·수요 신호를 확인할 수 있습니다.`;
     document.getElementById("region-ai-result").hidden = true;
   }
 
+  function renderGridSummary(node) {
+    const name = `${node.dataset.district} ${node.dataset.dong}`;
+    const facilityCount = numeric(node, "mappedFacilityCount") || 0;
+    const aged = numeric(node, "agedCount") || 0;
+    const known = numeric(node, "ageKnown") || 0;
+    const rooms = numeric(node, "roomCount") || 0;
+    const gap = numeric(node, "tourismSupplyGap");
+    document.getElementById("region-summary-title").textContent = `${name} · 500m 후보지역 상세`;
+    document.getElementById("region-facility-count").textContent = `${formatNumber(facilityCount)}개`;
+    document.getElementById("region-aged-count").textContent = `${formatNumber(aged)}개 / ${formatNumber(known)}개 확인`;
+    document.getElementById("region-room-count").textContent = `${formatNumber(rooms)}실`;
+    document.getElementById("region-gap-score").textContent = gap === null ? "자료 없음" : `${formatNumber(gap, 1)}점`;
+    const action = { new_supply: "신규 관광숙박 공급", remodel: "노후시설 개선·전환", investment_caution: "추가 근거 확인" }[node.dataset.recommendation] || "정책 검토";
+    document.getElementById("region-summary-text").textContent = `${name}의 500m 분석지역입니다. 현재 권고는 ${action}이며, 수요·공급·노후 지표를 함께 사용한 1차 검토 결과입니다.`;
+  }
+
   function renderFacilitySummary(node) {
-    const name = node.dataset.publicName || "숙박시설";
-    const rooms = Number(node.dataset.roomCount);
-    const age = Number(node.dataset.buildingAge);
-    document.getElementById("region-summary-title").textContent = `${name} · 개별 시설 상세`;
+    const rooms = numeric(node, "roomCount");
+    const age = numeric(node, "buildingAge");
+    document.getElementById("region-summary-title").textContent = `${node.dataset.publicName || "숙박시설"} · 개별 시설 상세`;
     document.getElementById("region-facility-count").textContent = "1개 시설";
-    document.getElementById("region-aged-count").textContent = Number.isFinite(age) ? `${formatNumber(age, 1)}년` : "자료 없음";
-    document.getElementById("region-room-count").textContent = Number.isFinite(rooms) ? `${formatNumber(rooms)}실` : "자료 없음";
+    document.getElementById("region-aged-count").textContent = age === null ? "자료 없음" : `${formatNumber(age, 1)}년`;
+    document.getElementById("region-room-count").textContent = rooms === null ? "자료 없음" : `${formatNumber(rooms)}실`;
     document.getElementById("region-gap-score").textContent = "지역 카드 참조";
-    document.getElementById("region-summary-text").textContent = `${node.dataset.publicAddress || "주소 자료 없음"} · ${node.dataset.district || ""} ${node.dataset.dong || ""}. 개별 시설의 적합성·권리관계·사업성은 별도 확인이 필요합니다.`;
+    document.getElementById("region-summary-text").textContent = `${node.dataset.publicAddress || "주소 자료 없음"} · 개별 시설의 적합성·권리관계·사업성은 별도 확인이 필요합니다.`;
     document.getElementById("region-ai-result").hidden = true;
+  }
+
+  function buildCandidateRanking() {
+    const ranked = grids.filter((node) => westDistricts.has(node.dataset.district) && visible(node) && node.dataset.recommendation)
+      .map((node) => {
+        const kind = node.dataset.recommendation;
+        const signal = kind === "new_supply" ? 3 : kind === "remodel" ? 2 : 1;
+        const gap = numeric(node, "tourismSupplyGap") || 0;
+        const aged = numeric(node, "agedCount") || 0;
+        const facilityCount = numeric(node, "mappedFacilityCount") || 0;
+        const action = kind === "new_supply" ? "신규 관광숙박 공급 검토" : kind === "remodel" ? "노후시설 개선·전환 검토" : "추가 근거 확인";
+        return {
+          node,
+          gridKey: node.dataset.key,
+          district: node.dataset.district,
+          dong: node.dataset.dong,
+          kind,
+          gap,
+          aged,
+          facilities: facilityCount,
+          action,
+          score: signal * 1000 + gap * 10 + aged + facilityCount * .1,
+        };
+      }).sort((a, b) => b.score - a.score || a.gridKey.localeCompare(b.gridKey)).slice(0, 5);
+    const list = document.getElementById("candidate-rank-list");
+    list.replaceChildren();
+    candidateLayer.replaceChildren();
+    candidateMarkers = [];
+    ranked.forEach((item, index) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      const rank = document.createElement("b");
+      rank.textContent = String(index + 1);
+      const label = document.createElement("span");
+      label.textContent = `${item.district} ${item.dong}`;
+      const detail = document.createElement("small");
+      detail.textContent = `${item.action} · 시설 ${formatNumber(item.facilities)}개 · 20년+ ${formatNumber(item.aged)}개`;
+      label.append(detail);
+      button.append(rank, label);
+      button.addEventListener("click", () => selectCandidate(item));
+      list.append(button);
+      const bounds = (item.node.dataset.mapBounds || "").split(",").map(Number);
+      if (bounds.length !== 4 || !bounds.every(Number.isFinite)) return;
+      const x = (bounds[0] + bounds[2]) / 2;
+      const y = (bounds[1] + bounds[3]) / 2;
+      const marker = document.createElementNS("http://www.w3.org/2000/svg", "g");
+      marker.setAttribute("class", "candidate-marker");
+      marker.setAttribute("tabindex", "0");
+      marker.setAttribute("role", "button");
+      marker.dataset.x = String(x);
+      marker.dataset.y = String(y);
+      const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+      circle.setAttribute("r", "14");
+      const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+      text.setAttribute("y", "4");
+      text.textContent = String(index + 1);
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = `${item.district} ${item.dong} · ${item.action}`;
+      marker.append(circle, text, title);
+      marker.addEventListener("click", () => selectCandidate(item));
+      marker.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") selectCandidate(item);
+      });
+      candidateLayer.append(marker);
+      candidateMarkers.push(marker);
+    });
+    if (!ranked.length) {
+      const empty = document.createElement("li");
+      empty.textContent = "현재 필터에서 확인 가능한 후보가 없습니다.";
+      list.append(empty);
+    }
   }
 
   function apply() {
@@ -259,112 +386,183 @@
     setLayerEncoding();
     buildCandidateRanking();
     renderRegionSummary();
-    updateOverlayScale();
+    renderMap();
   }
 
-  const viewport = document.getElementById("map-viewport");
-  const svg = document.getElementById("spatial-map");
-  let scale = 1;
-  let tx = 0;
-  let ty = 0;
-
-  function updateOverlayScale() {
-    const inverse = 1 / scale;
-    [...clusters, ...policyLabels, ...candidateMarkers].forEach((node) => node.setAttribute("transform", `translate(${node.dataset.x} ${node.dataset.y}) scale(${inverse})`));
-    facilities.forEach((node) => node.setAttribute("r", String(Number(node.dataset.baseRadius || 3) * inverse)));
-  }
-  function transform() {
-    viewport.setAttribute("transform", `translate(${tx} ${ty}) scale(${scale})`);
-    document.body.classList.toggle("detail-mode", scale >= 2.25);
-    updateOverlayScale();
-  }
   function focusSelection(district, dong) {
-    const bounds = matchingGrids(district, dong).map((node) => node.dataset.mapBounds.split(",").map(Number)).filter((item) => item.length === 4 && item.every(Number.isFinite));
-    if (!bounds.length || (!district && !dong)) { scale = 1; tx = 0; ty = 0; transform(); return; }
-    const minX = Math.min(...bounds.map((item) => item[0]));
-    const minY = Math.min(...bounds.map((item) => item[1]));
-    const maxX = Math.max(...bounds.map((item) => item[2]));
-    const maxY = Math.max(...bounds.map((item) => item[3]));
-    scale = Math.max(1, Math.min(4, Math.min(820 / Math.max(40, maxX - minX), 560 / Math.max(40, maxY - minY))));
-    tx = 500 - ((minX + maxX) / 2) * scale;
-    ty = 350 - ((minY + maxY) / 2) * scale;
-    transform();
+    const nodes = matchingGrids(district, dong);
+    if (!district && !dong) {
+      setCenter(initialCenter[0], initialCenter[1], BASE_ZOOM);
+      return;
+    }
+    fitGeographicBounds(geographicBounds(nodes), dong ? 15 : 13);
   }
+
   function selectRegion(district, dong) {
+    selectedGridNode = null;
     filters.district.value = district || "";
     refreshDongOptions();
     filters.dong.value = dong || "";
     apply();
     focusSelection(district, dong);
   }
+
+  function buildSelectionContext(node) {
+    const safe = (key) => numeric(node, key);
+    return {
+      grid_id: node.dataset.key,
+      district: node.dataset.district,
+      dong: node.dataset.dong,
+      facility_count: Math.max(0, Math.round(safe("mappedFacilityCount") || 0)),
+      aged_facility_count: Math.max(0, Math.round(safe("agedCount") || 0)),
+      age_known_count: Math.max(0, Math.round(safe("ageKnown") || 0)),
+      room_count: Math.max(0, safe("roomCount") || 0),
+      supply_gap_score: safe("tourismSupplyGap"),
+      demand_score: safe("demandScore"),
+      supply_score: safe("supplyScore"),
+      recommendation_kind: node.dataset.recommendation || "investment_caution",
+    };
+  }
+
+  async function requestRegionInsight(node = selectedGridNode) {
+    const result = document.getElementById("region-ai-result");
+    const district = node ? node.dataset.district : filters.district.value;
+    const region = !district ? "all" : westDistricts.has(district) ? "west" : eastDistricts.has(district) ? "east" : "other";
+    const selectionContext = node ? buildSelectionContext(node) : null;
+    result.hidden = false;
+    result.textContent = selectionContext ? "선택한 500m 지역의 발행지표로 정책 아이디어를 생성하고 있습니다." : "검증된 발행지표로 권역 해석을 생성하고 있습니다.";
+    try {
+      const dashboard = await fetch("/tourism/data.json", { cache: "no-store" }).then((response) => response.json());
+      const response = await fetch("/tourism/api/insights", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          region,
+          period: "latest",
+          published_run: dashboard.publishedRun,
+          selection: selectionContext,
+        }),
+      });
+      if (!response.ok) throw new Error("insight unavailable");
+      const insight = await response.json();
+      result.replaceChildren();
+      const title = document.createElement("strong");
+      title.textContent = insight.headline;
+      const summary = document.createElement("p");
+      summary.textContent = insight.executive_summary;
+      const heading = document.createElement("h3");
+      heading.textContent = "정책 아이디어";
+      const options = document.createElement("ol");
+      [...insight.policy_options].sort((a, b) => a.priority_rank - b.priority_rank).forEach((option) => {
+        const item = document.createElement("li");
+        const action = document.createElement("b");
+        action.textContent = `${option.priority_rank}. ${option.action}`;
+        const rationale = document.createElement("p");
+        rationale.textContent = `${option.target_area} · ${option.rationale}`;
+        const caveat = document.createElement("small");
+        caveat.textContent = `확인 필요: ${option.caveat}`;
+        item.append(action, rationale, caveat);
+        options.append(item);
+      });
+      const note = document.createElement("small");
+      note.textContent = "데이터로 확인된 사실과 정책 아이디어를 구분한 AI 보조 해석이며 사업성·인허가의 최종 판단이 아닙니다.";
+      result.append(title, summary, heading, options, note);
+    } catch (_) {
+      result.textContent = "AI 정책 해석을 불러오지 못했습니다. 위 500m 상세 지표는 계속 사용할 수 있습니다.";
+    }
+  }
+
+  function selectCandidate(item) {
+    selectedGridNode = item.node;
+    filters.district.value = item.district;
+    refreshDongOptions();
+    filters.dong.value = item.dong;
+    filterable.forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
+    grids.forEach((node) => node.classList.toggle("is-selected", node === item.node));
+    setLayerEncoding();
+    renderGridSummary(item.node);
+    fitGeographicBounds((item.node.dataset.geoBounds || "").split(",").map(Number), 17);
+    requestRegionInsight(item.node);
+  }
+
   grids.forEach((node) => {
-    node.addEventListener("click", () => selectRegion(node.dataset.district, node.dataset.dong));
+    node.addEventListener("click", () => {
+      selectedGridNode = node;
+      renderGridSummary(node);
+      fitGeographicBounds((node.dataset.geoBounds || "").split(",").map(Number), 17);
+      requestRegionInsight(node);
+    });
     node.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") selectRegion(node.dataset.district, node.dataset.dong);
+      if (event.key === "Enter" || event.key === " ") {
+        selectedGridNode = node;
+        renderGridSummary(node);
+        requestRegionInsight(node);
+      }
     });
   });
   clusters.forEach((node) => node.addEventListener("click", () => selectRegion(node.dataset.district, node.dataset.dong)));
-  facilities.forEach((node) => node.addEventListener("click", (event) => { event.stopPropagation(); renderFacilitySummary(node); }));
-  filters.district.addEventListener("change", () => { refreshDongOptions(); apply(); focusSelection(filters.district.value, ""); });
-  filters.dong.addEventListener("change", () => { apply(); focusSelection(filters.district.value, filters.dong.value); });
-  filters.period.addEventListener("change", () => { apply(); focusSelection(filters.district.value, filters.dong.value); });
+  facilities.forEach((node) => node.addEventListener("click", (event) => {
+    event.stopPropagation();
+    renderFacilitySummary(node);
+  }));
+  filters.district.addEventListener("change", () => {
+    refreshDongOptions();
+    apply();
+    focusSelection(filters.district.value, "");
+  });
+  filters.dong.addEventListener("change", () => {
+    apply();
+    focusSelection(filters.district.value, filters.dong.value);
+  });
+  filters.period.addEventListener("change", () => {
+    apply();
+    focusSelection(filters.district.value, filters.dong.value);
+  });
   layerButtons.forEach((button) => button.addEventListener("click", () => {
     activeLayer = button.dataset.layer;
     layerButtons.forEach((node) => node.classList.toggle("is-active", node === button));
     apply();
   }));
+  document.getElementById("region-ai-button").addEventListener("click", () => requestRegionInsight());
 
-  function zoomAt(delta, anchorX = 500, anchorY = 350) {
-    const previous = scale;
-    scale = Math.max(.75, Math.min(4, scale * delta));
-    const ratio = scale / previous;
-    tx = anchorX - (anchorX - tx) * ratio;
-    ty = anchorY - (anchorY - ty) * ratio;
-    transform();
+  function zoomAt(nextZoom, clientX, clientY) {
+    const zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(nextZoom)));
+    if (zoom === mapState.zoom) return;
+    const rect = slippyMap.getBoundingClientRect();
+    const px = clientX === undefined ? rect.width / 2 : clientX - rect.left;
+    const py = clientY === undefined ? rect.height / 2 : clientY - rect.top;
+    const anchor = lonLatFromWorld(
+      mapState.centerX + px - rect.width / 2,
+      mapState.centerY + py - rect.height / 2,
+      mapState.zoom,
+    );
+    const anchorAtZoom = worldPixel(anchor[0], anchor[1], zoom);
+    mapState.zoom = zoom;
+    mapState.centerX = anchorAtZoom[0] - px + rect.width / 2;
+    mapState.centerY = anchorAtZoom[1] - py + rect.height / 2;
+    renderMap();
   }
-  document.getElementById("zoom-in").addEventListener("click", () => zoomAt(1.25));
-  document.getElementById("zoom-out").addEventListener("click", () => zoomAt(.8));
-  document.getElementById("zoom-reset").addEventListener("click", () => { scale = 1; tx = 0; ty = 0; transform(); });
-  svg.addEventListener("wheel", (event) => {
+
+  document.getElementById("zoom-in").addEventListener("click", () => zoomAt(mapState.zoom + 1));
+  document.getElementById("zoom-out").addEventListener("click", () => zoomAt(mapState.zoom - 1));
+  document.getElementById("zoom-reset").addEventListener("click", () => setCenter(initialCenter[0], initialCenter[1], BASE_ZOOM));
+  slippyMap.addEventListener("wheel", (event) => {
     event.preventDefault();
-    const box = svg.getBoundingClientRect();
-    const anchorX = (event.clientX - box.left) * 1000 / box.width;
-    const anchorY = (event.clientY - box.top) * 700 / box.height;
-    zoomAt(event.deltaY < 0 ? 1.1 : .9, anchorX, anchorY);
+    zoomAt(mapState.zoom + (event.deltaY < 0 ? 1 : -1), event.clientX, event.clientY);
   }, { passive: false });
-  function svgPoint(event) {
-    const box = svg.getBoundingClientRect();
-    return [(event.clientX - box.left) * 1000 / box.width, (event.clientY - box.top) * 700 / box.height];
-  }
-  let origin = null;
-  svg.addEventListener("pointerdown", (event) => { const point = svgPoint(event); origin = [point[0] - tx, point[1] - ty]; svg.setPointerCapture(event.pointerId); });
-  svg.addEventListener("pointermove", (event) => { if (origin) { const point = svgPoint(event); tx = point[0] - origin[0]; ty = point[1] - origin[1]; transform(); } });
-  svg.addEventListener("pointerup", () => { origin = null; });
-
-  document.getElementById("region-ai-button").addEventListener("click", async () => {
-    const result = document.getElementById("region-ai-result");
-    const district = filters.district.value;
-    const region = !district ? "all" : westDistricts.has(district) ? "west" : eastDistricts.has(district) ? "east" : "other";
-    result.hidden = false;
-    result.textContent = "검증된 발행지표로 권역 해석을 생성하고 있습니다.";
-    try {
-      const dashboard = await fetch("/tourism/data.json", { cache: "no-store" }).then((response) => response.json());
-      const response = await fetch("/tourism/api/insights", {
-        method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ region, period: "latest", published_run: dashboard.publishedRun }),
-      });
-      if (!response.ok) throw new Error("insight unavailable");
-      const insight = await response.json();
-      result.replaceChildren();
-      const title = document.createElement("strong"); title.textContent = insight.headline;
-      const summary = document.createElement("p"); summary.textContent = insight.executive_summary;
-      const note = document.createElement("small"); note.textContent = "선택 구의 개별 판정이 아닌 해당 권역의 발행지표 기반 AI 해석입니다.";
-      result.append(title, summary, note);
-    } catch (_) {
-      result.textContent = "AI 권역 해석을 불러오지 못했습니다. 위 지역별 산식 해석은 계속 사용할 수 있습니다.";
-    }
+  slippyMap.addEventListener("pointerdown", (event) => {
+    dragOrigin = { x: event.clientX, y: event.clientY, centerX: mapState.centerX, centerY: mapState.centerY };
+    slippyMap.setPointerCapture(event.pointerId);
   });
+  slippyMap.addEventListener("pointermove", (event) => {
+    if (!dragOrigin) return;
+    mapState.centerX = dragOrigin.centerX - (event.clientX - dragOrigin.x);
+    mapState.centerY = dragOrigin.centerY - (event.clientY - dragOrigin.y);
+    renderMap();
+  });
+  slippyMap.addEventListener("pointerup", () => { dragOrigin = null; });
+  slippyMap.addEventListener("pointercancel", () => { dragOrigin = null; });
+  window.addEventListener("resize", renderMap);
 
   apply();
-  transform();
 })();

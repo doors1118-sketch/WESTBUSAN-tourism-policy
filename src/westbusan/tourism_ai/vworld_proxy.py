@@ -7,6 +7,7 @@ import logging
 import httpx
 
 _VWORLD_STATIC_MAP = "https://api.vworld.kr/req/image"
+_VWORLD_WMTS_ROOT = "https://api.vworld.kr/req/wmts/1.0.0"
 
 
 class VWorldBasemapError(RuntimeError):
@@ -45,4 +46,31 @@ class VWorldBasemapProxy:
             raise VWorldBasemapError("vworld_basemap_invalid_content")
         if not response.content.startswith(b"\x89PNG"):
             raise VWorldBasemapError("vworld_basemap_invalid_image")
+        return response.content
+
+
+class VWorldTileProxy:
+    """Fetch one allowlisted VWorld Base WMTS tile without exposing its key."""
+
+    def __init__(self, *, api_key: str, client: httpx.Client) -> None:
+        self._api_key = api_key
+        self._client = client
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    def fetch(self, *, zoom: int, column: int, row: int) -> bytes:
+        if not 7 <= zoom <= 19:
+            raise ValueError("vworld_tile_out_of_range")
+        tile_count = 2**zoom
+        if not 0 <= column < tile_count or not 0 <= row < tile_count:
+            raise ValueError("vworld_tile_out_of_range")
+        response = self._client.get(
+            f"{_VWORLD_WMTS_ROOT}/{self._api_key}/Base/"
+            f"{zoom}/{row}/{column}.png"
+        )
+        if response.status_code != 200:
+            raise VWorldBasemapError("vworld_tile_upstream_failed")
+        if not response.headers.get("content-type", "").lower().startswith("image/"):
+            raise VWorldBasemapError("vworld_tile_invalid_content")
+        if not response.content.startswith(b"\x89PNG"):
+            raise VWorldBasemapError("vworld_tile_invalid_image")
         return response.content

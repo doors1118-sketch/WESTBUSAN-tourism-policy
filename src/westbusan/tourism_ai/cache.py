@@ -131,6 +131,11 @@ def _cache_key(request: InsightRequest, *, model: str, prompt_version: str) -> s
         "prompt_version": prompt_version,
         "published_run": str(request.published_run),
         "region": request.region,
+        "selection": (
+            request.selection.model_dump(mode="json")
+            if request.selection is not None
+            else None
+        ),
     }
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

@@ -12,7 +12,7 @@ from westbusan.tourism_ai.metrics import (
     MetricCatalogueError,
     load_metric_catalogue,
 )
-from westbusan.tourism_ai.models import InsightRequest
+from westbusan.tourism_ai.models import InsightRequest, MapSelection
 
 RUN_ID = UUID("6ca4fa4f-e413-53d8-a5bf-b5f28a776fae")
 
@@ -164,3 +164,53 @@ def test_all_catalogue_includes_three_regions_without_district_details(
 
     assert {"west.rooms", "east.rooms", "other.rooms"} <= set(catalogue)
     assert not any(".district." in key for key in catalogue)
+
+
+def test_selected_500m_context_becomes_explicit_evidence_metrics(
+    tmp_path: Path,
+) -> None:
+    """Catches a candidate click producing only generic west-region evidence."""
+    request = InsightRequest(
+        region="west",
+        period="latest",
+        published_run=RUN_ID,
+        selection=MapSelection(
+            grid_id="g5174_500_721_340",
+            district="북구",
+            dong="구포동",
+            facility_count=11,
+            aged_facility_count=7,
+            age_known_count=9,
+            room_count=84,
+            supply_gap_score=72.5,
+            demand_score=88.0,
+            supply_score=15.5,
+            recommendation_kind="new_supply",
+        ),
+    )
+
+    catalogue = load_metric_catalogue(_write_dashboard(tmp_path), request)
+
+    assert catalogue["selection.facilities"].value == 11
+    assert catalogue["selection.aged_facilities"].value == 7
+    assert catalogue["selection.rooms"].value == 84
+    assert catalogue["selection.supply_gap"].value == 72.5
+    assert all(metric.region == "북구 구포동 500m" for key, metric in catalogue.items() if key.startswith("selection."))
+
+
+def test_selected_500m_context_rejects_unbounded_or_nonfinite_values() -> None:
+    """Catches unsafe prompt context bypassing the strict browser contract."""
+    with pytest.raises(ValidationError):
+        MapSelection(
+            grid_id="../../secret",
+            district="북구",
+            dong="구포동",
+            facility_count=1,
+            aged_facility_count=0,
+            age_known_count=1,
+            room_count=float("inf"),
+            supply_gap_score=10,
+            demand_score=20,
+            supply_score=10,
+            recommendation_kind="new_supply",
+        )

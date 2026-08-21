@@ -48,10 +48,14 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 #map-panel { position: relative; overflow: hidden; padding: 10px; }
 .map-toolbar { position: absolute; z-index: 3; top: 20px; left: 20px; display: flex; gap: 5px; }
 .map-toolbar button { font-weight: 800; box-shadow: 0 2px 8px #163d4a22; }
-#spatial-map { width: 100%; height: min(70vh, 720px); min-height: 570px; background: #e9eef0; border: 1px solid #d7dddf; touch-action: none; }
-#vworld-basemap { opacity: .92; }
+#slippy-map { position: relative; width: 100%; height: min(70vh, 720px); min-height: 570px; overflow: hidden; background: #e9eef0; border: 1px solid #d7dddf; touch-action: none; }
+#vworld-tile-layer, #spatial-map { position: absolute; inset: 0; width: 100%; height: 100%; }
+#vworld-tile-layer { overflow: hidden; background: #e9eef0; }
+#vworld-tile-layer img { position: absolute; width: 256px; height: 256px; max-width: none; user-select: none; pointer-events: none; }
+#spatial-map { z-index: 1; background: transparent; touch-action: none; }
 .grid-feature { stroke: none; fill: #8b959d; fill-opacity: .035; cursor: pointer; vector-effect: non-scaling-stroke; }
 .grid-feature:hover, .grid-feature:focus { stroke: #102a43; stroke-width: 2; outline: none; }
+.grid-feature.is-selected { stroke: #0057d9; stroke-width: 3; fill-opacity: .88 !important; }
 .facility-feature, .facility-cluster { display: none; }
 .facility-feature { stroke: #fff; stroke-width: .9; fill: #102a43; fill-opacity: .78; vector-effect: non-scaling-stroke; }
 .facility-layer.detail-mode .facility-feature:not(.is-filtered) { display: block; }
@@ -66,7 +70,7 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .grade-small_sample, .grade-insufficient_evidence { fill: #8b959d; }
 .facility-feature:focus { outline: none; stroke: #111; stroke-width: 2; }
 .district-policy-label { display: none; pointer-events: none; }
-.policy-layer .district-policy-label { display: block; }
+.policy-layer .district-policy-label { display: none; }
 .district-policy-label text { font-size: 14px; font-weight: 900; text-anchor: middle; fill: #102a43; paint-order: stroke; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; }
 .district-policy-label .policy-action { font-size: 9px; font-weight: 800; stroke-width: 3px; }
 .candidate-marker { display: none; cursor: pointer; }
@@ -90,6 +94,10 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .region-ai-result strong, .region-ai-result p, .region-ai-result small { display: block; }
 .region-ai-result p { margin: 7px 0; }
 .region-ai-result small { color: #68777f; }
+.region-ai-result h3 { margin: 14px 0 8px; color: #0f5d79; }
+.region-ai-result ol { display: grid; gap: 10px; margin: 0; padding-left: 22px; }
+.region-ai-result li { padding: 9px 11px; border-radius: 8px; background: #f3f8f8; }
+.region-ai-result li p { margin: 4px 0; }
 .is-hidden, .is-filtered { display: none !important; }
 @media (max-width: 900px) {
   :root { font-size: 16px; }
@@ -99,7 +107,7 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
   .two-panel > * { min-width: 0; }
   #filters-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   #filters-panel h2, #filters-panel h3, #filters-panel .legend, #filters-panel .kpis { grid-column: 1 / -1; }
-  #spatial-map { height: 72vh; min-height: 540px; }
+  #slippy-map { height: 72vh; min-height: 540px; }
   aside { max-height: none; }
   .region-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

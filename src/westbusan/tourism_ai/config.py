@@ -19,7 +19,7 @@ class TourismAISettings(BaseSettings):
     tourism_ai_cache_dir: Path
     tourism_ai_model: str = Field(default="gpt-5.4-mini", min_length=1, max_length=80)
     tourism_ai_prompt_version: str = Field(
-        default="tourism-policy-v1", min_length=1, max_length=80
+        default="tourism-policy-v2-selection-ideas", min_length=1, max_length=80
     )
     tourism_ai_daily_limit: int = Field(default=10, ge=1, le=100)
     tourism_ai_max_output_tokens: int = Field(default=1800, ge=500, le=4000)
