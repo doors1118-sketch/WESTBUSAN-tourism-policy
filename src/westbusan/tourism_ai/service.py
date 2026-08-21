@@ -61,6 +61,36 @@ class InsightService:
             evidence = _resolve_evidence(insight, catalogue)
             source = "rule_fallback"
 
+        return self._response(
+            request=request,
+            catalogue=catalogue,
+            insight=insight,
+            evidence=evidence,
+            source=source,
+        )
+
+    def fallback(self, request: InsightRequest) -> InsightResponse:
+        """Return a deterministic interpretation without calling OpenAI."""
+
+        catalogue = load_metric_catalogue(self.data_path, request)
+        insight = _fallback_insight(catalogue)
+        return self._response(
+            request=request,
+            catalogue=catalogue,
+            insight=insight,
+            evidence=_resolve_evidence(insight, catalogue),
+            source="rule_fallback",
+        )
+
+    def _response(
+        self,
+        *,
+        request: InsightRequest,
+        catalogue: dict[str, EvidenceMetric],
+        insight: ModelInsight,
+        evidence: list[EvidenceMetric],
+        source: str,
+    ) -> InsightResponse:
         data_as_of = min(item.period for item in catalogue.values())
         return InsightResponse(
             headline=insight.headline,
@@ -75,7 +105,7 @@ class InsightService:
             generated_at=datetime.now(UTC),
             model=self.model,
             prompt_version=self.prompt_version,
-            source=source,
+            source=source,  # type: ignore[arg-type]
             cached=False,
         )
 
