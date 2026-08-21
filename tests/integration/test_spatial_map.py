@@ -205,13 +205,28 @@ def test_default_map_uses_policy_areas_and_clusters_instead_of_a_grid_mesh() -> 
     """Catches unreadable grid lines and thousands of points obscuring the decision."""
     rendered = render_map(_map_data())
 
-    assert "색상은 우선 정책방향, 숫자는 숙박시설 군집" in rendered
+    assert "색상은 우선 정책방향, 숫자는 읍면동 숙박시설 군집" in rendered
     assert 'data-layer="policy_priority"' in rendered
     assert 'class="facility-cluster"' in rendered
     assert "확대하면 개별 숙박시설" in rendered
     assert "activeLayer = \"policy_priority\"" in rendered
     assert "detail-mode" in rendered
     assert ".grid-feature { stroke: none;" in rendered
+
+
+def test_overview_clusters_facilities_by_dong_before_showing_exact_points() -> None:
+    """Catches 500m bubbles recreating the same clutter as individual facilities."""
+    data = _map_data()
+    second = json.loads(json.dumps(data.facility_geojson["features"][0]))
+    second["properties"]["facility_key"] = "facility-000002"
+    second["properties"]["grid_id"] = "g-2"
+    second["geometry"]["coordinates"] = [128.96, 35.06]
+    data.facility_geojson["features"].append(second)
+
+    rendered = render_map(data)
+
+    assert rendered.count('class="facility-cluster"') == 1
+    assert ">2</text>" in rendered
 
 
 def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None:

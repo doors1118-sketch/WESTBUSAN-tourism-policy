@@ -3,6 +3,7 @@
   const features = [...document.querySelectorAll(".grid-feature,.facility-feature")];
   const clusters = [...document.querySelectorAll(".facility-cluster")];
   const filterable = [...features, ...clusters];
+  const westDistricts = new Set(["강서구", "사하구", "북구", "사상구"]);
   const filters = {
     district: document.getElementById("district-filter"),
     dong: document.getElementById("dong-filter"),
@@ -24,6 +25,11 @@
   addOptions(filters.period, features.map((node) => node.dataset.period));
 
   function visible(node) {
+    if (
+      activeLayer === "policy_priority"
+      && node.dataset.kind === "cluster"
+      && !westDistricts.has(node.dataset.district)
+    ) return false;
     if (filters.district.value && node.dataset.district !== filters.district.value) return false;
     if (filters.dong.value && node.dataset.dong !== filters.dong.value) return false;
     if (filters.period.value && node.dataset.period !== filters.period.value) return false;

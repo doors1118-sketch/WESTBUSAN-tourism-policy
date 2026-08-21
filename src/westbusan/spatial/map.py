@@ -152,7 +152,7 @@ def _render_svg(
             )
         )
     cluster_members: dict[
-        tuple[str, str, str, str], list[tuple[float, float, Mapping[str, Any]]]
+        tuple[str, str, str], list[tuple[float, float, Mapping[str, Any]]]
     ] = {}
     circles: list[str] = []
     for feature in facility_features:
@@ -160,7 +160,6 @@ def _render_svg(
         coordinates = feature.get("geometry", {}).get("coordinates", [0, 0])
         x, y = project(coordinates)
         cluster_key = (
-            str(properties.get("grid_id", "")),
             str(properties.get("district_name", "")),
             str(properties.get("primary_dong_name", "")),
             str(properties.get("period", "")),
@@ -200,7 +199,7 @@ def _render_svg(
             )
         )
     clusters: list[str] = []
-    for (_, district, dong, period), members in sorted(cluster_members.items()):
+    for (district, dong, period), members in sorted(cluster_members.items()):
         count = len(members)
         x = sum(item[0] for item in members) / count
         y = sum(item[1] for item in members) / count
