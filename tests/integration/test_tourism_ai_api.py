@@ -172,6 +172,20 @@ def test_health_and_error_response_never_return_api_key(tmp_path: Path) -> None:
     assert response.json()["source"] == "rule_fallback"
 
 
+def test_missing_openai_key_keeps_rule_fallback_available(tmp_path: Path) -> None:
+    settings = TourismAISettings(
+        tourism_ai_data_path=_write_dashboard(tmp_path),
+        tourism_ai_cache_dir=tmp_path / "cache",
+        tourism_ai_client_cooldown_seconds=0,
+    )
+    client = TestClient(create_app(settings))
+
+    response = client.post("/insights", json=_request())
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "rule_fallback"
+
+
 def test_corrupt_cache_is_replaced_with_valid_response(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     generator = _CountingGenerator(_model_document())

@@ -36,11 +36,14 @@ def create_app(
     """Create the isolated application with explicit dependencies."""
 
     if generator is None:
-        generator = OpenAIResponsesClient(
-            api_key=settings.openai_api_key.get_secret_value(),
-            model=settings.tourism_ai_model,
-            max_output_tokens=settings.tourism_ai_max_output_tokens,
-        )
+        if settings.openai_api_key is None:
+            generator = _Generator()
+        else:
+            generator = OpenAIResponsesClient(
+                api_key=settings.openai_api_key.get_secret_value(),
+                model=settings.tourism_ai_model,
+                max_output_tokens=settings.tourism_ai_max_output_tokens,
+            )
     service = InsightService(
         data_path=settings.tourism_ai_data_path,
         generator=generator,
