@@ -40,14 +40,14 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 #spatial-map { width: 100%; height: calc(100vh - 130px); min-height: 700px; background: #e9eef0; border: 1px solid #d7dddf; }
 #vworld-basemap { opacity: .92; }
 .grid-feature { stroke: #fff; stroke-width: 1.1; fill: #8b959d; fill-opacity: .58; }
-.facility-feature { stroke: #fff; stroke-width: 1.7; fill: #102a43; }
+.facility-feature { stroke: #fff; stroke-width: .75; fill: #102a43; fill-opacity: .72; }
 .grade-priority_1 { fill: #c53b2d; }
 .grade-priority_2 { fill: #e98528; }
 .grade-monitor { fill: #e0bb32; }
 .grade-general { fill: #3779b6; }
 .grade-small_sample, .grade-insufficient_evidence { fill: #8b959d; }
 .grid-feature:focus, .facility-feature:focus { outline: none; stroke: #111; stroke-width: 4; }
-.district-label { pointer-events: none; font-size: 23px; font-weight: 900; text-anchor: middle; fill: #102a43; paint-order: stroke; stroke: #fff; stroke-width: 7px; stroke-linejoin: round; }
+.district-label { pointer-events: none; font-size: 16px; font-weight: 900; text-anchor: middle; fill: #102a43; paint-order: stroke; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; }
 .map-note { margin: 6px 2px 0; color: #52616a; font-size: .82rem; }
 .is-hidden { display: none; }
 @media (max-width: 900px) {

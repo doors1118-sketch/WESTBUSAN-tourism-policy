@@ -27,6 +27,7 @@ def _map_data() -> PublicSpatialData:
                     "coordinate_coverage": 0.8,
                     "facility_density": 12.0,
                     "room_density": 80.0,
+                    "aged_facility_share": 0.3,
                     "tourism_supply_gap": 85.0,
                     "recommendation_kind": "remodel",
                     "small_scale_rating": "high",
@@ -179,6 +180,12 @@ def test_supply_gap_is_applied_without_selecting_a_filter() -> None:
     assert 'data-recommendation="remodel"' in rendered
     assert 'class="layer-button is-active" data-layer="tourism_supply_gap"' in rendered
     assert 'class="district-label"' in rendered
+    assert "수요 대비 공급부족 85.0" in rendered
+    assert "시설밀집도 12.0" in rendered
+    assert "노후시설 30.0%" in rendered
+    assert "객실 10.0" in rendered
+    assert 'r="3"' in rendered
+    assert "숙박투자 v1" in rendered
 
 
 def test_layer_controls_change_grid_encoding() -> None:
@@ -189,6 +196,7 @@ def test_layer_controls_change_grid_encoding() -> None:
     assert "activeLayer" in rendered
     assert "node.dataset.tourismSupplyGap" in rendered
     assert "node.dataset.facilityDensity" in rendered
+    assert 'raw === undefined || raw === ""' in rendered
 
 
 def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None:

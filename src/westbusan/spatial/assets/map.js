@@ -37,9 +37,12 @@
   }
 
   function layerValue(node) {
-    if (activeLayer === "facility_density") return Number(node.dataset.facilityDensity);
-    if (activeLayer === "aged_facilities") return Number(node.dataset.agedShare) * 100;
-    return Number(node.dataset.tourismSupplyGap);
+    let raw = node.dataset.tourismSupplyGap;
+    if (activeLayer === "facility_density") raw = node.dataset.facilityDensity;
+    if (activeLayer === "aged_facilities") raw = node.dataset.agedShare;
+    if (raw === undefined || raw === "") return Number.NaN;
+    const value = Number(raw);
+    return activeLayer === "aged_facilities" ? value * 100 : value;
   }
 
   function setLayerEncoding() {

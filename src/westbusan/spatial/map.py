@@ -53,9 +53,7 @@ def render_map(bundle_data: PublicSpatialData) -> str:
         "{{BOUNDARY_SOURCE}}": html.escape(
             str(bundle_data.metadata.get("boundary_source_organization", "공식 원천기관"))
         ),
-        "{{POLICY_VERSION}}": html.escape(
-            str(bundle_data.metadata.get("policy_version", "-"))
-        ),
+        "{{POLICY_VERSION}}": "숙박투자 v1",
         "{{GRID_COUNT}}": str(len(bundle_data.grid_geojson.get("features", []))),
         "{{FACILITY_COUNT}}": str(
             len(bundle_data.facility_geojson.get("features", []))
@@ -98,7 +96,8 @@ def _render_svg(
             'data-small-scale="{small}" data-aged="{aged}" '
             'data-context="{context}" data-tourism-supply-gap="{gap}" '
             'data-facility-density="{density}" data-aged-share="{aged_share}" '
-            'data-recommendation="{recommendation}"/>'.format(
+            'data-recommendation="{recommendation}">'
+            '<title>{title}</title></path>'.format(
                 grade=_attribute(grade),
                 path=_attribute(path_data),
                 label=_attribute(
@@ -116,6 +115,22 @@ def _render_svg(
                 density=_attribute(properties.get("facility_density")),
                 aged_share=_attribute(properties.get("aged_facility_share")),
                 recommendation=_attribute(properties.get("recommendation_kind")),
+                title=html.escape(
+                    " · ".join(
+                        (
+                            str(properties.get("district_name", "")),
+                            str(properties.get("primary_dong_name", "")),
+                            "수요 대비 공급부족 "
+                            + _metric_label(properties.get("tourism_supply_gap")),
+                            "시설밀집도 "
+                            + _metric_label(properties.get("facility_density")),
+                            "노후시설 "
+                            + _metric_label(
+                                properties.get("aged_facility_share"), percent=True
+                            ),
+                        )
+                    )
+                ),
             )
         )
     circles: list[str] = []
@@ -126,11 +141,11 @@ def _render_svg(
         grade = str(properties.get("composite_grade", "insufficient_evidence"))
         circles.append(
             '<circle class="facility-feature" cx="{x:.3f}" '
-            'cy="{y:.3f}" r="6" tabindex="0" role="button" '
+            'cy="{y:.3f}" r="3" tabindex="0" role="button" '
             'aria-label="{label}" data-kind="facility" data-key="{key}" '
             'data-grade="{grade}" data-district="{district}" data-dong="{dong}" '
             'data-period="{period}" data-small-scale="{small}" data-aged="{aged}" '
-            'data-context="{context}"/>'.format(
+            'data-context="{context}"><title>{title}</title></circle>'.format(
                 grade=_attribute(grade),
                 x=x,
                 y=y,
@@ -144,6 +159,16 @@ def _render_svg(
                 small=_attribute(properties.get("small_scale_rating")),
                 aged=_attribute(properties.get("aged_building_rating")),
                 context=_attribute(properties.get("district_context_rating")),
+                title=html.escape(
+                    " · ".join(
+                        (
+                            str(properties.get("public_name", "숙박시설")),
+                            "객실 " + _metric_label(properties.get("room_count")),
+                            "건물연수 "
+                            + _metric_label(properties.get("use_approval_age_years")),
+                        )
+                    )
+                ),
             )
         )
     district_points: dict[str, list[Sequence[float]]] = {}
@@ -224,6 +249,21 @@ def _geometry_path(geometry: Mapping[str, Any], project: Any) -> str:
                 parts.append(f"{'M' if index == 0 else 'L'}{x:.3f},{y:.3f}")
             parts.append("Z")
     return "".join(parts)
+
+
+def _metric_label(value: object, *, percent: bool = False) -> str:
+    if value is None or value == "":
+        return "자료 없음"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "자료 없음"
+    if not math.isfinite(number):
+        return "자료 없음"
+    if percent:
+        number *= 100
+        return f"{number:.1f}%"
+    return f"{number:.1f}"
 
 
 def _district_policy_priorities(
