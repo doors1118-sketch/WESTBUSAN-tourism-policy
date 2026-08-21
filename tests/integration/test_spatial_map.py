@@ -171,15 +171,17 @@ def test_dong_and_period_filters_have_matching_facility_attributes() -> None:
 
 
 def test_supply_gap_is_applied_without_selecting_a_filter() -> None:
-    """Catches the decision layer being hidden behind filter interaction."""
+    """Catches policy direction being hidden behind filter interaction."""
     rendered = render_map(_map_data())
 
     assert 'data-district="사하구"' in rendered
     assert 'data-tourism-supply-gap="85.0"' in rendered
     assert 'data-facility-density="12.0"' in rendered
     assert 'data-recommendation="remodel"' in rendered
-    assert 'class="layer-button is-active" data-layer="tourism_supply_gap"' in rendered
-    assert 'class="district-label"' in rendered
+    assert 'class="layer-button is-active" data-layer="policy_priority"' in rendered
+    assert 'data-policy-kind="remodel"' in rendered
+    assert 'class="district-policy-label"' in rendered
+    assert "2순위 사하구" in rendered
     assert "수요 대비 공급부족 85.0" in rendered
     assert "시설밀집도 12.0" in rendered
     assert "노후시설 30.0%" in rendered
@@ -197,6 +199,19 @@ def test_layer_controls_change_grid_encoding() -> None:
     assert "node.dataset.tourismSupplyGap" in rendered
     assert "node.dataset.facilityDensity" in rendered
     assert 'raw === undefined || raw === ""' in rendered
+
+
+def test_default_map_uses_policy_areas_and_clusters_instead_of_a_grid_mesh() -> None:
+    """Catches unreadable grid lines and thousands of points obscuring the decision."""
+    rendered = render_map(_map_data())
+
+    assert "색상은 우선 정책방향, 숫자는 숙박시설 군집" in rendered
+    assert 'data-layer="policy_priority"' in rendered
+    assert 'class="facility-cluster"' in rendered
+    assert "확대하면 개별 숙박시설" in rendered
+    assert "activeLayer = \"policy_priority\"" in rendered
+    assert "detail-mode" in rendered
+    assert ".grid-feature { stroke: none;" in rendered
 
 
 def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None:

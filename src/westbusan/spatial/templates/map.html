@@ -19,24 +19,26 @@
 <main class="two-panel">
   <aside id="filters-panel" aria-label="지도 필터">
     <h2>지도 필터</h2>
-    <p class="filter-help">필터를 선택하지 않아도 부산 전역의 수요·공급 격차가 표시됩니다.</p>
+    <p class="filter-help">색상은 우선 정책방향, 숫자는 숙박시설 군집을 뜻합니다. 확대하면 개별 숙박시설을 확인할 수 있습니다.</p>
     <h3>분석 레이어</h3>
     <div id="layer-controls" class="layer-controls" role="group" aria-label="분석 레이어">
-      <button class="layer-button is-active" data-layer="tourism_supply_gap" type="button">관광수요 대비 숙박공급 부족</button>
+      <button class="layer-button is-active" data-layer="policy_priority" type="button">서부산 정책 우선방향</button>
+      <button class="layer-button" data-layer="tourism_supply_gap" type="button">관광수요 대비 숙박공급 부족</button>
       <button class="layer-button" data-layer="facility_density" type="button">숙박시설 밀집도</button>
       <button class="layer-button" data-layer="aged_facilities" type="button">노후 숙박시설 밀집도</button>
     </div>
+    <p id="layer-explainer" class="layer-explainer">서부산 4개 구의 수요·공급 구조에 따라 우선 검토할 정책방향입니다.</p>
     <label>자치구<select id="district-filter"><option value="">전체</option></select></label>
     <label>읍면동<select id="dong-filter"><option value="">전체</option></select></label>
     <label>기간<select id="period-filter"><option value="">전체</option></select></label>
     <div class="kpis"><div><strong id="visible-grid-count">{{GRID_COUNT}}</strong><span>표시 격자</span></div>
       <div><strong id="visible-facility-count">{{FACILITY_COUNT}}</strong><span>표시 시설</span></div></div>
-    <h3 class="evidence-grade-title">정책 검토 방향</h3>
+    <h3 class="evidence-grade-title">지도 색상 의미</h3>
     <ul class="legend">
-      <li><i class="priority-1"></i><span>신규 관광숙박 공급 검토</span></li>
-      <li><i class="priority-2"></i><span>리모델링·관광숙박 전환 검토</span></li>
-      <li><i class="monitor"></i><span>콘텐츠·접근성 우선 보완</span></li>
-      <li><i class="insufficient"></i><span>근거자료 보완 필요</span></li>
+      <li><i class="priority-1"></i><span>강서구 · 신규 관광숙박 공급</span></li>
+      <li><i class="priority-2"></i><span>사하구 · 리모델링·관광숙박 전환 검토</span></li>
+      <li><i class="transport-quality"></i><span>북구 · 교통연계·품질개선</span></li>
+      <li><i class="tourism-product"></i><span>사상구 · 리모델링·관광상품화</span></li>
     </ul>
   </aside>
   <section id="map-panel" aria-label="관광 숙박 투자기회 지도">

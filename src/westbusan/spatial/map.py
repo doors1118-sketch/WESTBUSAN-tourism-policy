@@ -34,7 +34,12 @@ def render_map(bundle_data: PublicSpatialData) -> str:
         "grids": bundle_data.grid_geojson,
         "metadata": bundle_data.metadata,
     }
-    svg = _render_svg(bundle_data.grid_geojson, bundle_data.facility_geojson)
+    priorities = _district_policy_priorities(bundle_data.metadata)
+    svg = _render_svg(
+        bundle_data.grid_geojson,
+        bundle_data.facility_geojson,
+        priorities,
+    )
     package = files("westbusan.spatial")
     template = (
         package.joinpath("templates/map.html").read_text(encoding="utf-8")
@@ -67,9 +72,19 @@ def render_map(bundle_data: PublicSpatialData) -> str:
 def _render_svg(
     grids: Mapping[str, Any],
     facilities: Mapping[str, Any],
+    priorities: Sequence[Mapping[str, Any]],
 ) -> str:
     grid_features = list(grids.get("features", []))
     facility_features = list(facilities.get("features", []))
+    policy_by_district = {
+        str(item["name"]): (
+            _policy_kind(int(item["rank"])),
+            int(item["rank"]),
+            _policy_short_label(int(item["rank"])),
+        )
+        for item in priorities
+    }
+
     def project(point: Sequence[float]) -> tuple[float, float]:
         point_x, point_y = _web_mercator_pixel(
             float(point[0]), float(point[1]), _MAP_ZOOM
@@ -86,6 +101,8 @@ def _render_svg(
     for feature in grid_features:
         properties = feature.get("properties", {})
         grade = str(properties.get("composite_grade", "insufficient_evidence"))
+        district = str(properties.get("district_name", ""))
+        policy_kind = policy_by_district.get(district, ("", 0, ""))[0]
         geometry = feature.get("geometry", {})
         path_data = _geometry_path(geometry, project)
         paths.append(
@@ -96,7 +113,7 @@ def _render_svg(
             'data-small-scale="{small}" data-aged="{aged}" '
             'data-context="{context}" data-tourism-supply-gap="{gap}" '
             'data-facility-density="{density}" data-aged-share="{aged_share}" '
-            'data-recommendation="{recommendation}">'
+            'data-recommendation="{recommendation}" data-policy-kind="{policy_kind}">'
             '<title>{title}</title></path>'.format(
                 grade=_attribute(grade),
                 path=_attribute(path_data),
@@ -115,6 +132,7 @@ def _render_svg(
                 density=_attribute(properties.get("facility_density")),
                 aged_share=_attribute(properties.get("aged_facility_share")),
                 recommendation=_attribute(properties.get("recommendation_kind")),
+                policy_kind=_attribute(policy_kind),
                 title=html.escape(
                     " · ".join(
                         (
@@ -133,11 +151,21 @@ def _render_svg(
                 ),
             )
         )
+    cluster_members: dict[
+        tuple[str, str, str, str], list[tuple[float, float, Mapping[str, Any]]]
+    ] = {}
     circles: list[str] = []
     for feature in facility_features:
         properties = feature.get("properties", {})
         coordinates = feature.get("geometry", {}).get("coordinates", [0, 0])
         x, y = project(coordinates)
+        cluster_key = (
+            str(properties.get("grid_id", "")),
+            str(properties.get("district_name", "")),
+            str(properties.get("primary_dong_name", "")),
+            str(properties.get("period", "")),
+        )
+        cluster_members.setdefault(cluster_key, []).append((x, y, properties))
         grade = str(properties.get("composite_grade", "insufficient_evidence"))
         circles.append(
             '<circle class="facility-feature" cx="{x:.3f}" '
@@ -171,6 +199,37 @@ def _render_svg(
                 ),
             )
         )
+    clusters: list[str] = []
+    for (_, district, dong, period), members in sorted(cluster_members.items()):
+        count = len(members)
+        x = sum(item[0] for item in members) / count
+        y = sum(item[1] for item in members) / count
+        known_rooms = [
+            float(item[2]["room_count"])
+            for item in members
+            if item[2].get("room_count") is not None
+        ]
+        rooms = sum(known_rooms) if known_rooms else None
+        radius = min(18.0, 5.5 + math.sqrt(count) * 1.7)
+        clusters.append(
+            '<g class="facility-cluster" transform="translate({x:.3f} {y:.3f})" '
+            'tabindex="0" role="button" data-kind="cluster" '
+            'data-district="{district}" data-dong="{dong}" data-period="{period}">'
+            '<circle r="{radius:.2f}"><title>{title}</title></circle>'
+            '<text y="3.5">{count}</text></g>'.format(
+                x=x,
+                y=y,
+                radius=radius,
+                count=count,
+                district=_attribute(district),
+                dong=_attribute(dong),
+                period=_attribute(period),
+                title=html.escape(
+                    f"{district} {dong} · 숙박시설 {count}개 · "
+                    f"확인 객실 {_metric_label(rooms)}실"
+                ),
+            )
+        )
     district_points: dict[str, list[Sequence[float]]] = {}
     for feature in grid_features:
         district = str(feature.get("properties", {}).get("district_name", ""))
@@ -180,15 +239,18 @@ def _render_svg(
             for ring in polygon:
                 district_points.setdefault(district, []).extend(ring)
     labels: list[str] = []
-    for district, raw_points in district_points.items():
+    for district, (_, rank, policy_label) in policy_by_district.items():
+        raw_points = district_points.get(district, [])
         if not raw_points:
             continue
         lon = sum(float(point[0]) for point in raw_points) / len(raw_points)
         lat = sum(float(point[1]) for point in raw_points) / len(raw_points)
         x, y = project((lon, lat))
         labels.append(
-            f'<text class="district-label" x="{x:.3f}" '
-            f'y="{y:.3f}">{html.escape(district)}</text>'
+            f'<g class="district-policy-label" transform="translate({x:.3f} {y:.3f})">'
+            f'<text><tspan x="0" y="0">{rank}순위 {html.escape(district)}</tspan>'
+            f'<tspan class="policy-action" x="0" y="15">'
+            f'{html.escape(policy_label)}</tspan></text></g>'
         )
     return (
         '<svg id="spatial-map" viewBox="0 0 1000 700" '
@@ -198,6 +260,7 @@ def _render_svg(
         '<image id="vworld-basemap" href="/tourism/api/vworld/base.png" '
         'x="0" y="0" width="1000" height="700" preserveAspectRatio="none"/>'
         + "".join(paths)
+        + "".join(clusters)
         + "".join(labels)
         + "".join(circles)
         + "</g></svg>"
@@ -264,6 +327,24 @@ def _metric_label(value: object, *, percent: bool = False) -> str:
         number *= 100
         return f"{number:.1f}%"
     return f"{number:.1f}"
+
+
+def _policy_kind(rank: int) -> str:
+    return {
+        1: "new_supply",
+        2: "remodel",
+        3: "transport_quality",
+        4: "tourism_product",
+    }.get(rank, "")
+
+
+def _policy_short_label(rank: int) -> str:
+    return {
+        1: "신규 관광숙박 공급",
+        2: "노후시설 개선·전환",
+        3: "교통연계·품질개선",
+        4: "리모델링·관광상품화",
+    }.get(rank, "정책 검토")
 
 
 def _district_policy_priorities(

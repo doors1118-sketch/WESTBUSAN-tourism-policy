@@ -21,6 +21,7 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .layer-controls { display: grid; gap: 7px; margin: 0 0 18px; }
 .layer-button { text-align: left; font-weight: 750; border-color: #cbd5dc; }
 .layer-button.is-active { color: #fff; background: #0f5d79; border-color: #0f5d79; box-shadow: 0 5px 14px #0f5d7930; }
+.layer-explainer { min-height: 45px; margin: -7px 0 14px; padding: 10px 11px; border-radius: 7px; background: #eef7f5; color: #36525d; font-size: .8rem; line-height: 1.45; }
 .kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 18px 0; }
 .kpis div { background: #eef7f5; padding: 12px; border-radius: 6px; }
 .kpis strong, .kpis span { display: block; }
@@ -31,25 +32,32 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .legend i { width: 15px; height: 15px; border-radius: 3px; background: #8b959d; flex: 0 0 auto; }
 .legend .priority-1 { background: #c53b2d; }
 .legend .priority-2 { background: #e98528; }
-.legend .monitor { background: #e0bb32; }
-.legend .general { background: #3779b6; }
+.legend .transport-quality { background: #168b89; }
+.legend .tourism-product { background: #6b5ac6; }
 .evidence-grade-title { margin-top: 20px; border-top: 1px solid #dce3e6; padding-top: 16px; }
 #map-panel { position: relative; overflow: hidden; padding: 10px; }
 .map-toolbar { position: absolute; z-index: 3; top: 20px; left: 20px; display: flex; gap: 5px; }
 .map-toolbar button { font-weight: 800; box-shadow: 0 2px 8px #163d4a22; }
 #spatial-map { width: 100%; height: calc(100vh - 130px); min-height: 700px; background: #e9eef0; border: 1px solid #d7dddf; }
 #vworld-basemap { opacity: .92; }
-.grid-feature { stroke: #fff; stroke-width: 1.1; fill: #8b959d; fill-opacity: .58; }
-.facility-feature { stroke: #fff; stroke-width: .75; fill: #102a43; fill-opacity: .72; }
+.grid-feature { stroke: none; fill: #8b959d; fill-opacity: .035; }
+.facility-feature { display: none; stroke: #fff; stroke-width: .75; fill: #102a43; fill-opacity: .72; }
+.detail-mode .facility-feature:not(.is-filtered) { display: block; }
+.facility-cluster circle { fill: #0d3b59; fill-opacity: .88; stroke: #fff; stroke-width: 1.5; }
+.facility-cluster text { pointer-events: none; fill: #fff; font-size: 9px; font-weight: 900; text-anchor: middle; }
+.detail-mode .facility-cluster { display: none; }
 .grade-priority_1 { fill: #c53b2d; }
 .grade-priority_2 { fill: #e98528; }
 .grade-monitor { fill: #e0bb32; }
 .grade-general { fill: #3779b6; }
 .grade-small_sample, .grade-insufficient_evidence { fill: #8b959d; }
 .grid-feature:focus, .facility-feature:focus { outline: none; stroke: #111; stroke-width: 4; }
-.district-label { pointer-events: none; font-size: 16px; font-weight: 900; text-anchor: middle; fill: #102a43; paint-order: stroke; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; }
+.district-policy-label { display: none; pointer-events: none; }
+.policy-layer .district-policy-label { display: block; }
+.district-policy-label text { font-size: 14px; font-weight: 900; text-anchor: middle; fill: #102a43; paint-order: stroke; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; }
+.district-policy-label .policy-action { font-size: 9px; font-weight: 800; stroke-width: 3px; }
 .map-note { margin: 6px 2px 0; color: #52616a; font-size: .82rem; }
-.is-hidden { display: none; }
+.is-hidden, .is-filtered { display: none !important; }
 @media (max-width: 900px) {
   :root { font-size: 16px; }
   header { align-items: start; flex-direction: column; }

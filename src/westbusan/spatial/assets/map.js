@@ -1,13 +1,15 @@
 (() => {
   "use strict";
   const features = [...document.querySelectorAll(".grid-feature,.facility-feature")];
+  const clusters = [...document.querySelectorAll(".facility-cluster")];
+  const filterable = [...features, ...clusters];
   const filters = {
     district: document.getElementById("district-filter"),
     dong: document.getElementById("dong-filter"),
     period: document.getElementById("period-filter"),
   };
   const layerButtons = [...document.querySelectorAll(".layer-button")];
-  let activeLayer = "tourism_supply_gap";
+  let activeLayer = "policy_priority";
 
   function addOptions(select, values) {
     [...new Set(values.filter(Boolean))].sort().forEach((value) => {
@@ -36,6 +38,15 @@
     return "#3779b6";
   }
 
+  function policyColour(kind) {
+    return {
+      new_supply: "#c53b2d",
+      remodel: "#e98528",
+      transport_quality: "#168b89",
+      tourism_product: "#6b5ac6",
+    }[kind] || "#8b959d";
+  }
+
   function layerValue(node) {
     let raw = node.dataset.tourismSupplyGap;
     if (activeLayer === "facility_density") raw = node.dataset.facilityDensity;
@@ -46,13 +57,28 @@
   }
 
   function setLayerEncoding() {
+    document.body.classList.toggle("policy-layer", activeLayer === "policy_priority");
     features.filter((node) => node.dataset.kind === "grid").forEach((node) => {
-      node.style.fill = colour(layerValue(node));
+      if (activeLayer === "policy_priority") {
+        node.style.fill = policyColour(node.dataset.policyKind);
+        node.style.fillOpacity = node.dataset.policyKind ? ".48" : ".025";
+        return;
+      }
+      const value = layerValue(node);
+      node.style.fill = colour(value);
+      node.style.fillOpacity = Number.isFinite(value) ? ".58" : ".035";
     });
+    const explanations = {
+      policy_priority: "서부산 4개 구의 수요·공급 구조에 따라 우선 검토할 정책방향입니다.",
+      tourism_supply_gap: "구별 방문수요/객실 지표와 500m 숙박공급을 결합한 공급부족도입니다.",
+      facility_density: "주소 좌표가 확인된 숙박시설이 공간적으로 모여 있는 정도입니다.",
+      aged_facilities: "건물연수가 확인된 숙박시설 중 노후시설 비율입니다.",
+    };
+    document.getElementById("layer-explainer").textContent = explanations[activeLayer];
   }
 
   function apply() {
-    features.forEach((node) => node.classList.toggle("is-hidden", !visible(node)));
+    filterable.forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
     document.getElementById("visible-grid-count").textContent = features.filter(
       (node) => node.dataset.kind === "grid" && visible(node),
     ).length;
@@ -75,6 +101,7 @@
   let ty = 0;
   function transform() {
     viewport.setAttribute("transform", `translate(${tx} ${ty}) scale(${scale})`);
+    document.body.classList.toggle("detail-mode", scale >= 2.25);
   }
   function zoom(delta) {
     scale = Math.max(.75, Math.min(8, scale * delta));
