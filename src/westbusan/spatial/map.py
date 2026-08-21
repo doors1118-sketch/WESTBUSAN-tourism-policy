@@ -21,15 +21,19 @@ class PublicSpatialData:
 
 
 def render_map(bundle_data: PublicSpatialData) -> str:
-    """Render one deterministic three-panel map with no external dependency."""
+    """Render one deterministic map with visible district policy priorities."""
+    priorities = _district_policy_priorities(bundle_data.metadata)
+    metadata = dict(bundle_data.metadata)
+    metadata["district_policy_priorities"] = priorities
     payload = {
         "evidence": list(bundle_data.evidence),
         "facilities": bundle_data.facility_geojson,
         "grids": bundle_data.grid_geojson,
-        "metadata": bundle_data.metadata,
+        "metadata": metadata,
     }
-    svg = _render_svg(bundle_data.grid_geojson, bundle_data.facility_geojson)
-    default_evidence = _default_evidence(bundle_data)
+    svg = _render_svg(
+        bundle_data.grid_geojson, bundle_data.facility_geojson, priorities
+    )
     package = files("westbusan.spatial")
     template = (
         package.joinpath("templates/map.html").read_text(encoding="utf-8")
@@ -41,7 +45,7 @@ def render_map(bundle_data: PublicSpatialData) -> str:
         "{{SCRIPT}}": script,
         "{{SVG}}": svg,
         "{{BUNDLE_DATA}}": _script_json(payload),
-        "{{DEFAULT_EVIDENCE}}": default_evidence,
+        "{{DISTRICT_PRIORITY}}": _render_priority_overlay(priorities),
         "{{BUSINESS_DATE}}": html.escape(str(bundle_data.metadata.get("business_date", "-"))),
         "{{BOUNDARY_VERSION}}": html.escape(
             str(bundle_data.metadata.get("boundary_version", "-"))
@@ -63,7 +67,9 @@ def render_map(bundle_data: PublicSpatialData) -> str:
 
 
 def _render_svg(
-    grids: Mapping[str, Any], facilities: Mapping[str, Any]
+    grids: Mapping[str, Any],
+    facilities: Mapping[str, Any],
+    priorities: Sequence[Mapping[str, Any]],
 ) -> str:
     grid_features = list(grids.get("features", []))
     facility_features = list(facilities.get("features", []))
@@ -76,19 +82,25 @@ def _render_svg(
         return x, y
 
     paths: list[str] = []
+    ranks = {str(item["name"]): int(item["rank"]) for item in priorities}
     for feature in grid_features:
         properties = feature.get("properties", {})
         grade = str(properties.get("composite_grade", "insufficient_evidence"))
+        rank = ranks.get(str(properties.get("district_name", "")))
+        priority_class = f" district-priority-{rank}" if rank is not None else ""
         geometry = feature.get("geometry", {})
         path_data = _geometry_path(geometry, project)
         paths.append(
-            '<path class="grid-feature grade-{grade}" d="{path}" tabindex="0" '
+            '<path class="grid-feature grade-{grade}{priority_class}" d="{path}" tabindex="0" '
             'role="button" aria-label="{label}" data-kind="grid" '
             'data-key="{key}" data-grade="{grade}" data-district="{district}" '
+            'data-policy-rank="{rank}" '
             'data-dong="{dong}" data-period="{period}" '
             'data-small-scale="{small}" data-aged="{aged}" '
             'data-context="{context}"/>'.format(
                 grade=_attribute(grade),
+                priority_class=priority_class,
+                rank="" if rank is None else rank,
                 path=_attribute(path_data),
                 label=_attribute(
                     f"{properties.get('grid_id', '')} {grade} 정책지원 우선도"
@@ -108,14 +120,19 @@ def _render_svg(
         coordinates = feature.get("geometry", {}).get("coordinates", [0, 0])
         x, y = project(coordinates)
         grade = str(properties.get("composite_grade", "insufficient_evidence"))
+        rank = ranks.get(str(properties.get("district_name", "")))
+        priority_class = f" district-priority-{rank}" if rank is not None else ""
         circles.append(
-            '<circle class="facility-feature grade-{grade}" cx="{x:.3f}" '
+            '<circle class="facility-feature grade-{grade}{priority_class}" cx="{x:.3f}" '
             'cy="{y:.3f}" r="6" tabindex="0" role="button" '
             'aria-label="{label}" data-kind="facility" data-key="{key}" '
             'data-grade="{grade}" data-district="{district}" data-dong="{dong}" '
+            'data-policy-rank="{rank}" '
             'data-period="{period}" data-small-scale="{small}" data-aged="{aged}" '
             'data-context="{context}"/>'.format(
                 grade=_attribute(grade),
+                priority_class=priority_class,
+                rank="" if rank is None else rank,
                 x=x,
                 y=y,
                 label=_attribute(
@@ -187,23 +204,41 @@ def _geometry_path(geometry: Mapping[str, Any], project: Any) -> str:
     return "".join(parts)
 
 
-def _default_evidence(data: PublicSpatialData) -> str:
-    facilities = data.facility_geojson.get("features", [])
-    grids = data.grid_geojson.get("features", [])
-    properties = (facilities or grids or [{"properties": {}}])[0].get(
-        "properties", {}
-    )
-    rows = [
-        ("대상", properties.get("public_name") or properties.get("grid_id") or "-"),
-        ("등급", properties.get("composite_grade", "insufficient_evidence")),
-        ("소규모", properties.get("small_scale_rating", "unavailable")),
-        ("노후도", properties.get("aged_building_rating", "unavailable")),
-        ("district context", properties.get("district_context_rating", "unavailable")),
-        ("numerator / denominator / coverage", "선택한 근거 지표에서 확인"),
-    ]
+def _district_policy_priorities(
+    metadata: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    raw = metadata.get("district_policy_priorities")
+    if raw is None:
+        dashboard_data = json.loads(
+            files("westbusan.tourism_dashboard")
+            .joinpath("assets/data.json")
+            .read_text(encoding="utf-8")
+        )
+        raw = dashboard_data.get("westDistricts", [])
+    priorities: list[dict[str, Any]] = []
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, Mapping):
+            continue
+        rank = item.get("rank")
+        name = item.get("name")
+        priority = item.get("priority")
+        if rank not in {1, 2, 3, 4} or not isinstance(name, str):
+            continue
+        if not isinstance(priority, str) or not priority.strip():
+            continue
+        priorities.append({"rank": rank, "name": name, "priority": priority})
+    return sorted(priorities, key=lambda item: int(item["rank"]))
+
+
+def _render_priority_overlay(priorities: Sequence[Mapping[str, Any]]) -> str:
     return "".join(
-        f"<dt>{html.escape(str(label))}</dt><dd>{html.escape(str(value))}</dd>"
-        for label, value in rows
+        '<li class="priority-rank-{rank}"><b>{rank}순위</b>'
+        '<span>{name}</span><small>{priority}</small></li>'.format(
+            rank=int(item["rank"]),
+            name=html.escape(str(item["name"])),
+            priority=html.escape(str(item["priority"])),
+        )
+        for item in priorities
     )
 
 

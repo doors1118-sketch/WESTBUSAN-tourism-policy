@@ -84,17 +84,25 @@ def _map_data() -> PublicSpatialData:
             "boundary_source_organization": "국토교통부",
             "boundary_version": "2026-08-official",
             "policy_version": "policy-v1",
+            "district_policy_priorities": [
+                {"rank": 1, "name": "강서구", "priority": "신규 공급·외국인 수용"},
+                {"rank": 2, "name": "사하구", "priority": "노후시설 개선·체류상품"},
+                {"rank": 3, "name": "북구", "priority": "교통수요 연계·품질개선"},
+                {"rank": 4, "name": "사상구", "priority": "리모델링·관광상품화"},
+            ],
         },
     )
 
 
-def test_map_is_standalone_three_panel_and_network_free() -> None:
+def test_map_is_standalone_two_panel_and_network_free() -> None:
     """Catches a sidecar/network dependency or loss of the required map layout."""
     rendered = render_map(_map_data())
 
     assert 'id="filters-panel"' in rendered
     assert 'id="map-panel"' in rendered
-    assert 'id="evidence-panel"' in rendered
+    assert 'class="two-panel"' in rendered
+    assert 'id="evidence-panel"' not in rendered
+    assert 'id="selected-evidence"' not in rendered
     assert 'id="spatial-map"' in rendered
     assert "Priority 1" in rendered
     assert "district context" in rendered
@@ -108,8 +116,8 @@ def test_map_is_standalone_three_panel_and_network_free() -> None:
     assert "<circle" in rendered
 
 
-def test_map_has_filters_interactions_keyboard_labels_and_caveats() -> None:
-    """Catches an inaccessible colour-only static map without evidence context."""
+def test_map_has_filters_interactions_keyboard_labels_and_priority_overlay() -> None:
+    """Catches an inaccessible colour-only map without visible policy priorities."""
     rendered = render_map(_map_data())
 
     for marker in (
@@ -123,17 +131,16 @@ def test_map_has_filters_interactions_keyboard_labels_and_caveats() -> None:
         'aria-label="지도 확대"',
         'aria-label="지도 축소"',
         'tabindex="0"',
-        "keydown",
         "wheel",
         "small_sample",
         "insufficient_evidence",
-        "numerator",
-        "denominator",
-        "coverage",
-        "district context",
-        "점유율이 아닙니다",
+        'id="district-priority-overlay"',
+        "정책지원 우선순위",
+        "강서구",
+        "사하구",
+        "노후시설 개선·체류상품",
+        "district-priority-2",
         "안전·위생·법적 적합성 평가가 아닙니다",
-        "원천기관에 정정 요청",
         "읍면동",
         "경계 출처 국토교통부",
     ):
@@ -148,6 +155,15 @@ def test_dong_and_period_filters_have_matching_facility_attributes() -> None:
     assert 'data-dong="하단동"' in circle
     assert 'data-period="2026-08"' in circle
     assert 'id="period-filter"' in rendered
+
+
+def test_policy_priority_is_applied_without_selecting_a_filter() -> None:
+    """Catches district priority colouring being hidden behind filter interaction."""
+    rendered = render_map(_map_data())
+
+    assert 'data-district="사하구"' in rendered
+    assert 'class="grid-feature grade-priority_1 district-priority-2"' in rendered
+    assert 'data-policy-rank="2"' in rendered
 
 
 def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None:

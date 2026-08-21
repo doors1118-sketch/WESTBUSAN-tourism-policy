@@ -125,12 +125,13 @@ bundle을 복원합니다. 파일 하나만 직접 고치거나 `manifest.json`�
 | `grid_priority.csv` | dashboard/검토용 grid 속성 표 |
 | `facility_priority.csv` | dashboard/검토용 시설 속성 표 |
 | `spatial_evidence.parquet` | 공개 projection으로 제한된 분자·분모·coverage·출처 증거 |
-| `index.html` | tile server, CDN, API key가 필요 없는 3패널 로컬 지도 |
+| `index.html` | tile server, CDN, API key가 필요 없는 2패널 로컬 지도 |
 | `manifest.json` | base/spatial run, boundary/policy version, 날짜, row count, schema와 파일 SHA-256 |
 
-`index.html`의 왼쪽은 기간·구/군·동·component·grade filter, 가운데는 grid와 시설
-점, 오른쪽은 선택 대상의 세 component와 근거입니다. manifest와 모든 파일 hash,
-row count가 DB의 현재 공간 게시와 일치할 때만 bundle을 전달합니다.
+`index.html`의 왼쪽은 기간·구/군·동·component·grade filter이고, 넓어진 지도에는
+현재 지표로 산출한 서부산 구별 정책지원 순위가 필터 조작 없이 표시됩니다.
+manifest와 모든 파일 hash, row count가 DB의 현재 공간 게시와 일치할 때만 bundle을
+전달합니다.
 
 ## 등급과 증거 해석
 

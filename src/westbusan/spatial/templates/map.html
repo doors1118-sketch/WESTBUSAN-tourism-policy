@@ -16,7 +16,7 @@
     <span>정책 <strong>{{POLICY_VERSION}}</strong></span>
   </div>
 </header>
-<main class="three-panel">
+<main class="two-panel">
   <aside id="filters-panel" aria-label="지도 필터">
     <h2>필터와 현황</h2>
     <label>자치구<select id="district-filter"><option value="">전체</option></select></label>
@@ -47,19 +47,13 @@
     <div class="map-toolbar"><button id="zoom-in" aria-label="지도 확대">+</button>
       <button id="zoom-out" aria-label="지도 축소">−</button>
       <button id="zoom-reset" aria-label="지도 원래 크기">초기화</button></div>
+    <aside id="district-priority-overlay" aria-label="정책지원 우선순위">
+      <h2>정책지원 우선순위</h2>
+      <ol>{{DISTRICT_PRIORITY}}</ol>
+    </aside>
     {{SVG}}
-    <p class="map-note">색상과 텍스트 등급을 함께 제공합니다. 기본 화면은 Priority 1 위치를 먼저 보여줍니다.</p>
-    <p class="map-note">경계 출처 {{BOUNDARY_SOURCE}}</p>
+    <p class="map-note">정책지원 검토용 우선순위이며 안전·위생·법적 적합성 평가가 아닙니다. · 경계 출처 {{BOUNDARY_SOURCE}}</p>
   </section>
-  <aside id="evidence-panel" aria-live="polite" aria-label="선택 대상 근거">
-    <h2>선택 대상 근거</h2><dl id="selected-evidence">{{DEFAULT_EVIDENCE}}</dl>
-    <section><h3>해석 범위</h3>
-      <p><strong>district context</strong>는 구 단위 수요·공급 맥락이며 격자 점유율이 아닙니다.</p>
-      <p>이 결과는 정책지원 검토용이며 안전·위생·법적 적합성 평가가 아닙니다.</p>
-      <p>numerator, denominator, coverage와 source period를 함께 확인하세요.</p>
-    </section>
-    <section><h3>자료 정정</h3><p>명칭·주소·객실·사용승인 정보는 해당 원천기관에 정정 요청 후 다음 공식 갱신에 반영됩니다.</p></section>
-  </aside>
 </main>
 <script id="bundle-data" type="application/json">{{BUNDLE_DATA}}</script>
 <script>{{SCRIPT}}</script>
