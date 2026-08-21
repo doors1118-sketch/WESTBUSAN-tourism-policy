@@ -17,6 +17,7 @@ def test_systemd_unit_is_dedicated_loopback_and_hardened() -> None:
     assert "EnvironmentFile=/etc/westbusan-tourism-ai/openai.env" in unit
     assert "--host 127.0.0.1" in unit
     assert "--port 18081" in unit
+    assert "--app-dir /opt/westbusan-tourism-ai/current/src" in unit
     assert "NoNewPrivileges=true" in unit
     assert "ProtectSystem=strict" in unit
     assert "ReadWritePaths=/var/cache/westbusan-tourism-ai" in unit
