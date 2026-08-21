@@ -219,6 +219,13 @@ sources:
     raw_cache_reuse: daily
     credential_env: VWORLD_API_KEY
 
+  - source_id: vworld_address_geocode
+    url: https://api.vworld.kr/req/address
+    group: tourism_spatial_enrichment
+    cadence: daily
+    raw_cache_reuse: daily
+    credential_env: VWORLD_API_KEY
+
   # This remains a manually approved immutable artifact until a live source is activated.
   - source_id: urban_regeneration_snapshot
     url: file://manual-provisioning/urban-regeneration-snapshot

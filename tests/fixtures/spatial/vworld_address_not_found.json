@@ -1,0 +1,7 @@
+{
+  "response": {
+    "service": {"name": "address", "version": "2.0", "operation": "get"},
+    "status": "NOT_FOUND",
+    "input": {"type": "ROAD", "address": "부산광역시 없는구 없는로 0"}
+  }
+}

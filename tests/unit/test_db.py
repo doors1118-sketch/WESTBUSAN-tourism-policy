@@ -8,6 +8,36 @@ import duckdb
 import pytest
 
 from westbusan.db import Database
+
+
+def test_tourism_spatial_enrichment_migration_creates_geocode_cache(
+    tmp_path: Path,
+) -> None:
+    """Catches deployments accepting code without its durable geocode evidence."""
+    db = Database(tmp_path / "tourism-geocode.duckdb", Path("sql"))
+
+    db.migrate()
+
+    assert db.query(
+        "select version from schema_migrations where version like '039_%'"
+    ) == [("039_tourism_spatial_enrichment",)]
+    columns = {
+        row[0]
+        for row in db.query(
+            """select column_name from information_schema.columns
+               where table_schema='main' and table_name='spatial_geocode_cache'"""
+        )
+    }
+    assert columns == {
+        "address_hash",
+        "normalized_address",
+        "longitude",
+        "latitude",
+        "provider_status",
+        "response_hash",
+        "source_artifact_id",
+        "observed_at",
+    }
 from westbusan.models import RunContext
 from westbusan.storage import RawStore
 

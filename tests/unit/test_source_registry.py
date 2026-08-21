@@ -106,6 +106,18 @@ def test_registry_pins_vworld_and_regeneration_assessment_contracts() -> None:
     assert regeneration.endpoint_url is None
 
 
+def test_registry_pins_server_only_vworld_address_geocode_contract() -> None:
+    """Catches accommodation geocoding bypassing the reviewed credential boundary."""
+    source = SourceRegistry.load(Path("config/sources.yaml")).get(
+        "vworld_address_geocode"
+    )
+
+    assert source.url == "https://api.vworld.kr/req/address"
+    assert source.cadence == "daily"
+    assert source.raw_cache_reuse == "daily"
+    assert source.credential_env == "VWORLD_API_KEY"
+
+
 def test_registry_loads_source_metadata_from_fixture() -> None:
     registry = SourceRegistry.load(Path("tests/fixtures/sources.yaml"))
     source = registry.get("ready_source")
