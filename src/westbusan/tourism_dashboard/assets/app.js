@@ -118,6 +118,12 @@ function renderDashboard(data) {
 document.querySelectorAll("[data-tab-target]").forEach((button) => {
   button.addEventListener("click", () => {
     const target = button.dataset.tabTarget;
+    if (target === "map") {
+      const mapFrame = document.querySelector("[data-map-src]");
+      if (mapFrame && !mapFrame.getAttribute("src")) {
+        mapFrame.setAttribute("src", mapFrame.dataset.mapSrc);
+      }
+    }
     document.querySelectorAll("[data-tab-target]").forEach((item) => {
       const selected = item === button;
       item.classList.toggle("active", selected);
