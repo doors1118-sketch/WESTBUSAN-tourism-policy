@@ -604,24 +604,54 @@ def _build_facility_row(
 
     accepted: dict[tuple[float, float], tuple[ResolvedPoint, _Registration]] = {}
     rejected_codes: set[str] = set()
-    for registration in registrations:
+    location_rows = db.query(
+        """select longitude, latitude
+           from spatial_facility_location
+           where base_published_run_id=? and facility_id=?
+             and provider_status='matched'""",
+        [run.base_run_id, facility_id],
+    )
+    if len(location_rows) > 1:
+        raise FacilityBuildError("facility has multiple reviewed location rows")
+    if location_rows:
+        longitude, latitude = location_rows[0]
         resolution = resolve_facility_point(
             {
-                "longitude": registration.longitude,
-                "latitude": registration.latitude,
-                "projected_x": registration.projected_x,
-                "projected_y": registration.projected_y,
-                "coordinate_crs": registration.coordinate_crs,
+                "longitude": longitude,
+                "latitude": latitude,
+                "coordinate_crs": "EPSG:4326",
             },
             boundary,
         )
         if isinstance(resolution, SpatialException):
             rejected_codes.add(resolution.code)
-            continue
-        key = (resolution.projected_x, resolution.projected_y)
-        prior = accepted.get(key)
-        if prior is None or registration.source_identity < prior[1].source_identity:
-            accepted[key] = (resolution, registration)
+        else:
+            chosen_registration = min(
+                registrations, key=lambda item: item.source_identity
+            )
+            accepted[(resolution.projected_x, resolution.projected_y)] = (
+                resolution,
+                chosen_registration,
+            )
+    else:
+        for registration in registrations:
+            resolution = resolve_facility_point(
+                {
+                    "longitude": registration.longitude,
+                    "latitude": registration.latitude,
+                    "projected_x": registration.projected_x,
+                    "projected_y": registration.projected_y,
+                    "coordinate_crs": registration.coordinate_crs,
+                },
+                boundary,
+            )
+            if isinstance(resolution, SpatialException):
+                rejected_codes.add(resolution.code)
+                continue
+            key = (resolution.projected_x, resolution.projected_y)
+            prior = accepted.get(key)
+            if prior is None or registration.source_identity < prior[1].source_identity:
+                accepted[key] = (resolution, registration)
     source_identities = sorted(item.source_identity for item in registrations)
     if len(accepted) > 1:
         return None, _exception_row(

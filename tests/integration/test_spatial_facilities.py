@@ -236,6 +236,55 @@ def _add_registration(
     return version_run_id
 
 
+def test_reviewed_geocode_maps_an_address_only_current_facility(tmp_path: Path) -> None:
+    """Catches address-enriched facilities being ignored by the spatial publication."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    facility = _add_facility(db, base)
+    db.connection.execute(
+        """insert into dim_facility (
+               facility_id, canonical_name, district, region_group
+           ) values (?, '주소 좌표화 숙소', ?, 'other')""",
+        [facility, DISTRICT],
+    )
+    version = _add_registration(
+        db,
+        base,
+        facility,
+        source_id="official-address-only",
+        source_record_id="A-1",
+        source_name="주소 좌표화 숙소",
+    )
+    db.connection.execute(
+        """update staging_license_revision
+           set projected_x=null, projected_y=null, coordinate_crs=null
+           where version_run_id=?""",
+        [version],
+    )
+    cache_key = "b" * 64
+    db.connection.execute(
+        """insert into spatial_geocode_cache (
+               address_hash, normalized_address, longitude, latitude,
+               provider_status, response_hash, observed_at, provider_district
+           ) values (?, '부산광역시 부산진구 정책로 1', ?, ?, 'matched', ?, now(), ?)""",
+        [cache_key, LONGITUDE, LATITUDE, "c" * 64, DISTRICT],
+    )
+    db.connection.execute(
+        """insert into spatial_facility_location (
+               base_published_run_id, facility_id, address_hash, address_kind,
+               provider_status, provider_district, longitude, latitude,
+               evidence_json, observed_at
+           ) values (?, ?, ?, 'road', 'matched', ?, ?, ?, '{}', now())""",
+        [base, facility, cache_key, DISTRICT, LONGITUDE, LATITUDE],
+    )
+
+    assert build_facility_priority(db, spatial, lambda: None) == 1
+    assert db.query(
+        """select facility_id, public_longitude, public_latitude, grid_id
+           from mart_facility_priority_current where spatial_run_id=?""",
+        [spatial],
+    ) == [(facility, LONGITUDE, LATITUDE, "g5174_500_765_337")]
+
+
 @pytest.mark.parametrize("facility_district", [None, "해운대구"])
 def test_grid_district_mismatch_emits_one_redacted_exception(
     tmp_path: Path,
