@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from westbusan.db import Database
 from westbusan.spatial.enrich import enrich_current_facilities
-from westbusan.spatial.geocode import GeocodeResult
+from westbusan.spatial.geocode import GeocodeResult, address_hash
 
 
 class FixedGeocoder:
@@ -31,6 +31,18 @@ class FixedGeocoder:
 class NeverCallGeocoder:
     def resolve(self, address: str, *, address_type: str = "ROAD") -> GeocodeResult:
         raise AssertionError("cached enrichment must not call the provider")
+
+
+class RecoveringGeocoder:
+    def resolve(self, address: str, *, address_type: str = "ROAD") -> GeocodeResult:
+        return GeocodeResult(
+            status="matched",
+            longitude=129.01025,
+            latitude=35.20610,
+            crs="EPSG:4326",
+            district="북구",
+            response_hash="b" * 64,
+        )
 
 
 def _database(tmp_path: Path) -> tuple[Database, UUID, UUID]:
@@ -165,3 +177,27 @@ def test_enrichment_rejects_provider_district_mismatch(tmp_path: Path) -> None:
         [run_id, facility_id],
     ) == [("district_mismatch", None, None)]
 
+
+def test_enrichment_retries_transient_provider_error_cache(tmp_path: Path) -> None:
+    """Catches a temporary provider failure permanently poisoning a facility."""
+    db, run_id, facility_id = _database(tmp_path)
+    _license(db, run_id, facility_id)
+    db.connection.execute(
+        """insert into spatial_geocode_cache (
+               address_hash, normalized_address, provider_status,
+               response_hash, observed_at
+           ) values (?, '부산광역시 북구 시험로 1', 'provider_error', ?, current_timestamp)""",
+        [
+            address_hash("부산광역시 북구 시험로 1"),
+            "0" * 64,
+        ],
+    )
+
+    summary = enrich_current_facilities(db, RecoveringGeocoder())
+
+    assert summary.matched == 1
+    assert summary.provider_error == 0
+    assert summary.cache_hits == 0
+    assert db.query(
+        "select provider_status, longitude, latitude from spatial_geocode_cache"
+    ) == [("matched", 129.01025, 35.20610)]

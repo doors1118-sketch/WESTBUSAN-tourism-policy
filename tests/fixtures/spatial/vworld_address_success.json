@@ -1,15 +1,19 @@
 {
   "response": {
-    "service": {"name": "address", "version": "2.0", "operation": "get"},
+    "service": {"name": "search", "version": "2.0", "operation": "search"},
     "status": "OK",
-    "input": {"type": "ROAD", "address": "부산광역시 북구 시험로 1"},
-    "refined": {
-      "text": "부산광역시 북구 시험로 1",
-      "structure": {"level1": "부산광역시", "level2": "북구"}
-    },
     "result": {
       "crs": "EPSG:4326",
-      "point": {"x": "129.01025", "y": "35.20610"}
+      "type": "address",
+      "items": [
+        {
+          "address": {
+            "road": "부산광역시 북구 시험로 1",
+            "parcel": "부산광역시 북구 시험동 1"
+          },
+          "point": {"x": "129.01025", "y": "35.20610"}
+        }
+      ]
     }
   }
 }

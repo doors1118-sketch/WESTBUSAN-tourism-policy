@@ -72,7 +72,7 @@ def enrich_current_facilities(
                from spatial_geocode_cache where address_hash=?""",
             [cache_key],
         )
-        if cached:
+        if cached and cached[0][0] != "provider_error":
             counts["cache_hits"] += 1
             status, longitude, latitude, provider_district, response_hash = cached[0]
             result = GeocodeResult(
@@ -93,7 +93,15 @@ def enrich_current_facilities(
                        address_hash, normalized_address, longitude, latitude,
                        provider_status, response_hash, source_artifact_id,
                        observed_at, provider_district
-                   ) values (?, ?, ?, ?, ?, ?, null, current_timestamp, ?)""",
+                   ) values (?, ?, ?, ?, ?, ?, null, current_timestamp, ?)
+                   on conflict (address_hash) do update set
+                       normalized_address=excluded.normalized_address,
+                       longitude=excluded.longitude,
+                       latitude=excluded.latitude,
+                       provider_status=excluded.provider_status,
+                       response_hash=excluded.response_hash,
+                       observed_at=excluded.observed_at,
+                       provider_district=excluded.provider_district""",
                 [
                     cache_key,
                     normalized,

@@ -11,7 +11,9 @@ from typing import Any
 
 import httpx
 
-_ENDPOINT = "https://api.vworld.kr/req/address"
+from westbusan.config import BUSAN_DISTRICTS
+
+_ENDPOINT = "https://api.vworld.kr/req/search"
 _CRS = "EPSG:4326"
 _BUSAN_BOUNDS = (128.7, 34.8, 129.4, 35.5)
 _WHITESPACE = re.compile(r"\s+")
@@ -57,12 +59,21 @@ def parse_vworld_address_response(body: bytes) -> GeocodeResult:
     try:
         result = response["result"]
         crs = str(result["crs"])
-        point = result["point"]
+        item = result["items"][0]
+        point = item["point"]
         longitude = float(point["x"])
         latitude = float(point["y"])
-        district_value: Any = response["refined"]["structure"]["level2"]
-        district = str(district_value).strip()
-    except (KeyError, TypeError, ValueError):
+        address: Any = item["address"]
+        address_text = " ".join(
+            str(address.get(key) or "") for key in ("road", "parcel")
+        )
+        districts = sorted(
+            (district for district in BUSAN_DISTRICTS if district in address_text),
+            key=len,
+            reverse=True,
+        )
+        district = districts[0]
+    except (IndexError, KeyError, TypeError, ValueError):
         return _empty("invalid_response", response_hash)
 
     west, south, east, north = _BUSAN_BOUNDS
@@ -105,13 +116,17 @@ class VWorldGeocoder:
         if kind not in {"ROAD", "PARCEL"}:
             raise ValueError("address_type must be ROAD or PARCEL")
         parameters = {
-            "service": "address",
-            "request": "getAddress",
+            "service": "search",
+            "request": "search",
             "version": "2.0",
             "crs": _CRS,
-            "address": normalized,
+            "size": "1",
+            "page": "1",
+            "query": normalized,
+            "type": "address",
+            "category": kind.lower(),
             "format": "json",
-            "type": kind,
+            "errorFormat": "json",
             "key": self._api_key,
         }
         try:

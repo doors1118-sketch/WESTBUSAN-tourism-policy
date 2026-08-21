@@ -60,10 +60,12 @@ def test_not_found_response_is_terminal_without_fabricated_coordinates() -> None
             {
                 "response": {
                     "status": "OK",
-                    "refined": {"structure": {"level2": "북구"}},
                     "result": {
                         "crs": "EPSG:5174",
-                        "point": {"x": "129.0", "y": "35.2"},
+                        "items": [{
+                            "address": {"road": "부산광역시 북구 시험로 1"},
+                            "point": {"x": "129.0", "y": "35.2"},
+                        }],
                     },
                 }
             }
@@ -72,10 +74,12 @@ def test_not_found_response_is_terminal_without_fabricated_coordinates() -> None
             {
                 "response": {
                     "status": "OK",
-                    "refined": {"structure": {"level2": "북구"}},
                     "result": {
                         "crs": "EPSG:4326",
-                        "point": {"x": "0", "y": "0"},
+                        "items": [{
+                            "address": {"road": "부산광역시 북구 시험로 1"},
+                            "point": {"x": "0", "y": "0"},
+                        }],
                     },
                 }
             }
@@ -111,13 +115,17 @@ def test_client_sends_fixed_contract_and_never_exposes_key() -> None:
 
     assert result.status == "matched"
     assert captured == {
-        "service": "address",
-        "request": "getAddress",
+        "service": "search",
+        "request": "search",
         "version": "2.0",
         "crs": "EPSG:4326",
-        "address": "부산광역시 북구 시험로 1",
+        "size": "1",
+        "page": "1",
+        "query": "부산광역시 북구 시험로 1",
+        "type": "address",
+        "category": "road",
         "format": "json",
-        "type": "ROAD",
+        "errorFormat": "json",
         "key": "secret-test-key",
     }
     assert "secret-test-key" not in repr(geocoder)
