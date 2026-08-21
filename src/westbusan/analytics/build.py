@@ -250,8 +250,8 @@ def build_marts(
     records = _region_rows(db, run_id, as_of, district_metrics, periods, policy)
     commit_stage(
         lambda: (
-            _replace_regions(db, run_id, records),
-            _replace_group_regions(db, run_id, records),
+            _replace_regions(db, run_id, records, progress=heartbeat),
+            _replace_group_regions(db, run_id, records, progress=heartbeat),
         )
     )
     heartbeat()
@@ -1472,10 +1472,18 @@ def _growth_and_supply_bands(rows: list[dict[str, object]]) -> None:
         row["supply"] = _tercile(float(supply_growth), [float(item["supply_growth"]) for item in comparable]) if supply_growth is not None and len(comparable) >= 12 else "unclassified"
 
 
-def _replace_regions(db: Database, run_id: UUID, rows: list[dict[str, object]]) -> None:
+def _replace_regions(
+    db: Database,
+    run_id: UUID,
+    rows: list[dict[str, object]],
+    *,
+    progress: Callable[[], None] | None = None,
+) -> None:
+    heartbeat = progress or (lambda: None)
     db.connection.execute("delete from mart_region_month where run_id = ?", [run_id])
     db.connection.execute("delete from mart_metric_evidence where run_id = ?", [run_id])
     for row in rows:
+        heartbeat()
         v, e = row["values"], row["evidence"]
         db.connection.execute(
             """insert into mart_region_month (
@@ -1504,15 +1512,21 @@ def _replace_regions(db: Database, run_id: UUID, rows: list[dict[str, object]]) 
 
 
 def _replace_group_regions(
-    db: Database, run_id: UUID, rows: list[dict[str, object]]
+    db: Database,
+    run_id: UUID,
+    rows: list[dict[str, object]],
+    *,
+    progress: Callable[[], None] | None = None,
 ) -> None:
     """Materialize explicit West/East/Other aggregates without inventing missing stock."""
+    heartbeat = progress or (lambda: None)
     db.connection.execute("delete from mart_region_group_month where run_id = ?", [run_id])
     configured = RegionConfig.default()
     by_group_period: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     for row in rows:
         by_group_period[(str(row["group"]), str(row["period"]))].append(row)
     for (group, period), group_rows in sorted(by_group_period.items()):
+        heartbeat()
         expected_districts = set(getattr(configured, group))
         expected = len(expected_districts)
         observed = [row for row in group_rows if row["values"].get("stock_observed")]

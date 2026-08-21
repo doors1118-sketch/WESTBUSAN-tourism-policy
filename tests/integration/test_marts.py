@@ -909,6 +909,30 @@ def test_mart_stage_write_rolls_back_when_fence_is_lost_before_commit(
     assert mart_manifest_is_valid(db, run_id) is False
 
 
+def test_region_stage_reports_progress_during_long_transaction(tmp_path: Path) -> None:
+    """Long row-by-row mart writes must keep the writer lease renewable."""
+    db, run_id = _built_db(
+        tmp_path,
+        [_license("lodgings", "L1", "호텔", "부산광역시 사하구 하단동 1", 10)],
+    )
+    progress_calls = 0
+
+    def progress() -> None:
+        nonlocal progress_calls
+        progress_calls += 1
+
+    build_marts(
+        db,
+        run_id,
+        PolicyConfig(small_room_threshold=20, old_building_years=[20, 30]),
+        progress=progress,
+    )
+
+    # Stage-boundary callbacks alone currently total six. Region and group rows
+    # must also report progress while their transaction is open.
+    assert progress_calls > 10
+
+
 def test_same_day_correction_and_later_blocked_facility_do_not_rewrite_earlier_mart(
     tmp_path: Path,
 ) -> None:
