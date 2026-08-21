@@ -928,9 +928,10 @@ def test_region_stage_reports_progress_during_long_transaction(tmp_path: Path) -
         progress=progress,
     )
 
-    # Stage-boundary callbacks alone currently total six. Region and group rows
-    # must also report progress while their transaction is open.
-    assert progress_calls > 10
+    # Stage boundaries plus write callbacks are fewer than thirty for this
+    # fixture. Region calculation must also report progress before the write
+    # transaction begins.
+    assert progress_calls > 30
 
 
 def test_same_day_correction_and_later_blocked_facility_do_not_rewrite_earlier_mart(

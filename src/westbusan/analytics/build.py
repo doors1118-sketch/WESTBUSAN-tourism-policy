@@ -249,7 +249,15 @@ def build_marts(
     district_metrics.update(_event_only_districts(db, run_id, as_of, district_metrics))
     district_metrics = _seed_all_districts(db, run_id, district_metrics)
     periods = _periods(db, run_id, as_of, district_metrics)
-    records = _region_rows(db, run_id, as_of, district_metrics, periods, policy)
+    records = _region_rows(
+        db,
+        run_id,
+        as_of,
+        district_metrics,
+        periods,
+        policy,
+        progress=heartbeat,
+    )
     commit_stage(
         lambda: (
             _replace_regions(db, run_id, records, progress=transaction_heartbeat),
@@ -842,11 +850,20 @@ def _periods(
 
 
 def _region_rows(
-    db: Database, run_id: UUID, as_of: date | None, metrics: dict[str, dict[str, object]], periods: dict[str, set[str]], policy: PolicyConfig
+    db: Database,
+    run_id: UUID,
+    as_of: date | None,
+    metrics: dict[str, dict[str, object]],
+    periods: dict[str, set[str]],
+    policy: PolicyConfig,
+    *,
+    progress: Callable[[], None] | None = None,
 ) -> list[dict[str, object]]:
+    heartbeat = progress or (lambda: None)
     rows: list[dict[str, object]] = []
     for district, values in metrics.items():
         for period in sorted(periods[district]):
+            heartbeat()
             visitor = _monthly_native_sum(db, run_id, "fact_tourism_demand", district, period, "tourism_data_lab", "locgo_regn_visitr_dd_list.visitor_count", "count")
             consumption = _monthly_native_sum(db, run_id, "fact_tourism_demand", district, period, "area_tourism_consumption", "area_tar_svc_dem_list.1107", "KRW")
             transport = _monthly_native_sum(db, run_id, "fact_transport_flow", district, period, "public_transport_od_usage", "public_transport_od_volume", "passengers")
