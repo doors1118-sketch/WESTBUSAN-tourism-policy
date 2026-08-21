@@ -20,8 +20,9 @@ def _asset(name: str) -> str:
 def test_dashboard_exposes_three_decision_questions_and_required_tabs() -> None:
     html = _asset("index.html")
 
+    assert "관광경제활력 도시 부산<br>" in html
     assert "동서 관광객 체류전환의 격차" in html
-    assert "관광경제활력 도시 부산" not in html
+    assert "관광경제활력 도시 부산," not in html
 
     for label in (
         "종합현황",
