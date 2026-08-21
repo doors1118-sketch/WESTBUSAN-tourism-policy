@@ -187,7 +187,13 @@
   }
 
   function policyColour(kind) {
-    return { new_supply: "#c53b2d", remodel: "#e98528", investment_caution: "#667784" }[kind] || "#8b959d";
+    return {
+      new_supply: "#1769aa",
+      remodel: "#e67e22",
+      quality_upgrade: "#6b5ac6",
+      content_first: "#168b89",
+      investment_caution: "#68727d",
+    }[kind] || "#a3adb5";
   }
 
   function layerValue(node) {
@@ -202,9 +208,9 @@
 
   function metricColour(value) {
     if (!Number.isFinite(value)) return "#8b959d";
-    if (activeLayer === "facility_density") return value >= 20 ? "#762a83" : value >= 8 ? "#9970ab" : value >= 3 ? "#c2a5cf" : value >= 1 ? "#e7d4e8" : "#eef1f3";
-    if (activeLayer === "aged_facilities") return value >= 10 ? "#8c2d04" : value >= 5 ? "#d94801" : value >= 2 ? "#f16913" : value >= 1 ? "#fdae6b" : "#eef1f3";
-    return value >= 75 ? "#b2182b" : value >= 50 ? "#ef8a62" : value >= 25 ? "#fddbc7" : "#67a9cf";
+    if (activeLayer === "facility_density") return value >= 20 ? "#6f1d91" : value >= 8 ? "#1769aa" : value >= 3 ? "#168b89" : value >= 1 ? "#d99b16" : "#eef1f3";
+    if (activeLayer === "aged_facilities") return value >= 10 ? "#7f0000" : value >= 5 ? "#d1495b" : value >= 2 ? "#e67e22" : value >= 1 ? "#e5b839" : "#eef1f3";
+    return value >= 75 ? "#8e0152" : value >= 50 ? "#d95f02" : value >= 25 ? "#e6b800" : "#2b83ba";
   }
 
   function setLegend(items) {
@@ -226,14 +232,23 @@
     grids.forEach((node) => {
       if (activeLayer === "policy_priority") {
         node.style.fill = policyColour(node.dataset.recommendation);
-        node.style.fillOpacity = node.dataset.recommendation ? ".68" : ".015";
+        node.style.fillOpacity = node.dataset.recommendation ? ".78" : ".12";
+        node.style.stroke = node.dataset.recommendation === "new_supply" ? "#0b3c5d" : node.dataset.recommendation === "remodel" ? "#7a3e00" : "#4f5963";
+        node.style.strokeWidth = node.dataset.recommendation ? "1.2" : ".4";
+        node.style.strokeDasharray = node.dataset.recommendation === "remodel" ? "4 2" : node.dataset.recommendation ? "" : "2 3";
       } else if (activeLayer === "facility_locations") {
         node.style.fill = "#ffffff";
         node.style.fillOpacity = ".012";
+        node.style.stroke = "";
+        node.style.strokeWidth = "";
+        node.style.strokeDasharray = "";
       } else {
         const value = layerValue(node);
         node.style.fill = metricColour(value);
-        node.style.fillOpacity = Number.isFinite(value) && value > 0 ? ".72" : ".02";
+        node.style.fillOpacity = Number.isFinite(value) && value > 0 ? ".8" : ".02";
+        node.style.stroke = Number.isFinite(value) && value > 0 ? "#ffffff" : "";
+        node.style.strokeWidth = Number.isFinite(value) && value > 0 ? ".65" : "";
+        node.style.strokeDasharray = "";
       }
     });
     const explanations = {
@@ -245,10 +260,10 @@
     };
     document.getElementById("layer-explainer").textContent = explanations[activeLayer];
     const legends = {
-      policy_priority: [["#c53b2d", "신규공급 후보"], ["#e98528", "노후시설 개선·전환 후보"], ["#667784", "추가 근거 확인 필요"]],
-      tourism_supply_gap: [["#b2182b", "75 이상 · 매우 높음"], ["#ef8a62", "50–74 · 높음"], ["#fddbc7", "25–49 · 검토"], ["#67a9cf", "0–24 · 낮음"]],
-      facility_density: [["#762a83", "20개 이상"], ["#9970ab", "8–19개"], ["#c2a5cf", "3–7개"], ["#e7d4e8", "1–2개"]],
-      aged_facilities: [["#8c2d04", "20년 이상 10개+"], ["#d94801", "5–9개"], ["#f16913", "2–4개"], ["#fdae6b", "1개"]],
+      policy_priority: [["#1769aa", "신규공급 후보 · 실선"], ["#e67e22", "노후시설 개선·전환 · 점선"], ["#6b5ac6", "품질개선 후보"], ["#168b89", "콘텐츠 선행 검토"], ["#68727d", "추가 근거 확인"]],
+      tourism_supply_gap: [["#8e0152", "75 이상 · 매우 높음"], ["#d95f02", "50–74 · 높음"], ["#e6b800", "25–49 · 검토"], ["#2b83ba", "0–24 · 낮음"]],
+      facility_density: [["#6f1d91", "20개 이상"], ["#1769aa", "8–19개"], ["#168b89", "3–7개"], ["#d99b16", "1–2개"]],
+      aged_facilities: [["#7f0000", "20년 이상 10개+"], ["#d1495b", "5–9개"], ["#e67e22", "2–4개"], ["#e5b839", "1개"]],
       facility_locations: [["#0d3b59", "저배율 · 읍면동 묶음"], ["#496173", "15레벨+ · 개별 시설"]],
     };
     setLegend(legends[activeLayer]);
@@ -292,7 +307,13 @@
     document.getElementById("region-aged-count").textContent = `${formatNumber(aged)}개 / ${formatNumber(known)}개 확인`;
     document.getElementById("region-room-count").textContent = `${formatNumber(rooms)}실`;
     document.getElementById("region-gap-score").textContent = gap === null ? "자료 없음" : `${formatNumber(gap, 1)}점`;
-    const action = { new_supply: "신규 관광숙박 공급", remodel: "노후시설 개선·전환", investment_caution: "추가 근거 확인" }[node.dataset.recommendation] || "정책 검토";
+    const action = {
+      new_supply: "신규 관광숙박 공급",
+      remodel: "노후시설 개선·전환",
+      quality_upgrade: "소규모 숙박 품질개선",
+      content_first: "관광콘텐츠 선행",
+      investment_caution: "공급 확대 신중 검토",
+    }[node.dataset.recommendation] || "수요·노후 근거 보완";
     document.getElementById("region-summary-text").textContent = `${name}의 500m 분석지역입니다. 현재 권고는 ${action}이며, 수요·공급·노후 지표를 함께 사용한 1차 검토 결과입니다.`;
   }
 
@@ -309,14 +330,20 @@
   }
 
   function buildCandidateRanking() {
-    const ranked = grids.filter((node) => westDistricts.has(node.dataset.district) && visible(node) && node.dataset.recommendation)
+    const rankKey = filters.dong.value ? "dongRank" : filters.district.value ? "districtRank" : "defaultRank";
+    const ranked = grids.filter((node) => westDistricts.has(node.dataset.district) && visible(node) && numeric(node, rankKey))
       .map((node) => {
         const kind = node.dataset.recommendation;
-        const signal = kind === "new_supply" ? 3 : kind === "remodel" ? 2 : 1;
         const gap = numeric(node, "tourismSupplyGap") || 0;
         const aged = numeric(node, "agedCount") || 0;
         const facilityCount = numeric(node, "mappedFacilityCount") || 0;
-        const action = kind === "new_supply" ? "신규 관광숙박 공급 검토" : kind === "remodel" ? "노후시설 개선·전환 검토" : "추가 근거 확인";
+        const action = {
+          new_supply: "신규 관광숙박 공급 검토",
+          remodel: "노후시설 개선·전환 검토",
+          quality_upgrade: "소규모 숙박 품질개선 검토",
+          content_first: "관광콘텐츠 선행 검토",
+          investment_caution: "공급 확대 신중 검토",
+        }[kind] || "수요·노후 근거 보완 검토";
         return {
           node,
           gridKey: node.dataset.key,
@@ -327,9 +354,21 @@
           aged,
           facilities: facilityCount,
           action,
-          score: signal * 1000 + gap * 10 + aged + facilityCount * .1,
+          rank: numeric(node, rankKey),
         };
-      }).sort((a, b) => b.score - a.score || a.gridKey.localeCompare(b.gridKey)).slice(0, 5);
+      }).sort((a, b) => a.rank - b.rank || a.gridKey.localeCompare(b.gridKey)).slice(0, 5);
+    const panelTitle = document.getElementById("candidate-panel-title");
+    const panelHelp = document.getElementById("candidate-panel-help");
+    if (filters.dong.value) {
+      panelTitle.textContent = `${filters.district.value} ${filters.dong.value} 500m 세부 후보`;
+      panelHelp.textContent = "선택한 동 안에서 서로 다른 500m 분석지역을 비교합니다.";
+    } else if (filters.district.value) {
+      panelTitle.textContent = `${filters.district.value} 생활권 우선 후보`;
+      panelHelp.textContent = "같은 동의 인접 격자 중복을 제거하고 서로 다른 생활권을 비교합니다.";
+    } else {
+      panelTitle.textContent = "서부산 전체 구별 대표 생활권 후보";
+      panelHelp.textContent = "강서구·사하구·사상구·북구 대표 후보를 포함한 서부산 전체 비교입니다.";
+    }
     const list = document.getElementById("candidate-rank-list");
     list.replaceChildren();
     candidateLayer.replaceChildren();
@@ -338,7 +377,7 @@
       const button = document.createElement("button");
       button.type = "button";
       const rank = document.createElement("b");
-      rank.textContent = String(index + 1);
+      rank.textContent = String(item.rank || index + 1);
       const label = document.createElement("span");
       label.textContent = `${item.district} ${item.dong}`;
       const detail = document.createElement("small");
@@ -361,7 +400,7 @@
       circle.setAttribute("r", "14");
       const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
       text.setAttribute("y", "4");
-      text.textContent = String(index + 1);
+      text.textContent = String(item.rank || index + 1);
       const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
       title.textContent = `${item.district} ${item.dong} · ${item.action}`;
       marker.append(circle, text, title);

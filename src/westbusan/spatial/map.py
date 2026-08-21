@@ -14,6 +14,7 @@ _MAP_CENTER = (129.075, 35.18)
 _MAP_ZOOM = 10
 _MAP_WIDTH = 1000
 _MAP_HEIGHT = 700
+_WEST_DISTRICTS = ("강서구", "사하구", "사상구", "북구")
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,109 @@ class PublicSpatialData:
     facility_geojson: Mapping[str, Any]
     evidence: Sequence[Mapping[str, Any]]
     metadata: Mapping[str, Any]
+
+
+def build_policy_candidate_rankings(
+    features: Sequence[Mapping[str, Any]],
+    *,
+    limit: int = 5,
+) -> dict[str, Any]:
+    """Rank distinct west-Busan policy areas at region, district, and dong grain."""
+    candidates: list[dict[str, Any]] = []
+    for feature in features:
+        properties = feature.get("properties", {})
+        if not isinstance(properties, Mapping):
+            continue
+        district = str(properties.get("district_name") or "")
+        dong = str(properties.get("primary_dong_name") or "")
+        grid_id = str(properties.get("grid_id") or "")
+        if district not in _WEST_DISTRICTS or not dong or not grid_id:
+            continue
+        kind = str(properties.get("recommendation_kind") or "")
+        gap = _optional_number(properties.get("tourism_supply_gap"))
+        aged = _optional_number(properties.get("age_20y_facility_count")) or 0.0
+        facilities = _optional_number(properties.get("mapped_facility_count")) or 0.0
+        if facilities <= 0 and not kind:
+            continue
+        signal = {
+            "new_supply": 3.0,
+            "remodel": 2.0,
+            "quality_upgrade": 1.5,
+            "content_first": 1.25,
+            "investment_caution": 1.0,
+        }.get(kind, 0.0)
+        candidates.append(
+            {
+                "grid_id": grid_id,
+                "district": district,
+                "dong": dong,
+                "score": signal * 1000
+                + (gap or 0.0) * 10
+                + aged
+                + facilities * 0.1,
+            }
+        )
+
+    def ranked(items: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+        return sorted(
+            items,
+            key=lambda item: (-float(item["score"]), str(item["grid_id"])),
+        )
+
+    best_by_area: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for item in ranked(candidates):
+        best_by_area.setdefault((str(item["district"]), str(item["dong"])), item)
+    area_candidates = ranked(list(best_by_area.values()))
+
+    representatives: list[Mapping[str, Any]] = []
+    for district in _WEST_DISTRICTS:
+        district_items = [
+            item for item in area_candidates if item["district"] == district
+        ]
+        if district_items:
+            representatives.append(district_items[0])
+    selected_keys = {
+        (str(item["district"]), str(item["dong"])) for item in representatives
+    }
+    extras = [
+        item
+        for item in area_candidates
+        if (str(item["district"]), str(item["dong"])) not in selected_keys
+    ]
+    default_items = ranked(
+        representatives + extras[: max(0, limit - len(representatives))]
+    )[:limit]
+
+    district_rankings: dict[str, dict[str, int]] = {}
+    for district in _WEST_DISTRICTS:
+        items = [item for item in area_candidates if item["district"] == district][
+            :limit
+        ]
+        district_rankings[district] = {
+            str(item["grid_id"]): rank for rank, item in enumerate(items, start=1)
+        }
+
+    dong_rankings: dict[str, dict[str, int]] = {}
+    for district, dong in best_by_area:
+        items = ranked(
+            [
+                item
+                for item in candidates
+                if item["district"] == district and item["dong"] == dong
+            ]
+        )[:limit]
+        dong_rankings[f"{district}|{dong}"] = {
+            str(item["grid_id"]): rank for rank, item in enumerate(items, start=1)
+        }
+
+    return {
+        "default": {
+            str(item["grid_id"]): rank
+            for rank, item in enumerate(default_items, start=1)
+        },
+        "district": district_rankings,
+        "dong": dong_rankings,
+    }
 
 
 def render_map(bundle_data: PublicSpatialData) -> str:
@@ -76,6 +180,7 @@ def _render_svg(
 ) -> str:
     grid_features = list(grids.get("features", []))
     facility_features = list(facilities.get("features", []))
+    candidate_rankings = build_policy_candidate_rankings(grid_features)
     policy_by_district = {
         str(item["name"]): (
             _policy_kind(int(item["rank"])),
@@ -102,7 +207,16 @@ def _render_svg(
         properties = feature.get("properties", {})
         grade = str(properties.get("composite_grade", "insufficient_evidence"))
         district = str(properties.get("district_name", ""))
+        dong = str(properties.get("primary_dong_name", ""))
+        grid_key = str(properties.get("grid_id", ""))
         policy_kind = policy_by_district.get(district, ("", 0, ""))[0]
+        default_rank = candidate_rankings["default"].get(grid_key, "")
+        district_rank = candidate_rankings["district"].get(district, {}).get(
+            grid_key, ""
+        )
+        dong_rank = candidate_rankings["dong"].get(f"{district}|{dong}", {}).get(
+            grid_key, ""
+        )
         geometry = feature.get("geometry", {})
         path_data = _geometry_path(geometry, project)
         min_x, min_y, max_x, max_y = _projected_geometry_bounds(geometry, project)
@@ -118,6 +232,8 @@ def _render_svg(
             'data-aged-count="{aged_count}" data-age-known="{age_known}" '
             'data-room-count="{room_count}" data-room-coverage="{room_coverage}" '
             'data-demand-score="{demand_score}" data-supply-score="{supply_score}" '
+            'data-default-rank="{default_rank}" data-district-rank="{district_rank}" '
+            'data-dong-rank="{dong_rank}" '
             'data-map-bounds="{min_x:.3f},{min_y:.3f},{max_x:.3f},{max_y:.3f}" '
             'data-geo-bounds="{min_lon:.7f},{min_lat:.7f},{max_lon:.7f},{max_lat:.7f}" '
             'data-recommendation="{recommendation}" data-policy-kind="{policy_kind}">'
@@ -143,6 +259,9 @@ def _render_svg(
                 room_coverage=_attribute(properties.get("room_coverage")),
                 demand_score=_attribute(properties.get("demand_context_score")),
                 supply_score=_attribute(properties.get("room_supply_score")),
+                default_rank=_attribute(default_rank),
+                district_rank=_attribute(district_rank),
+                dong_rank=_attribute(dong_rank),
                 min_x=min_x,
                 min_y=min_y,
                 max_x=max_x,
@@ -363,6 +482,16 @@ def _metric_label(value: object, *, percent: bool = False) -> str:
         number *= 100
         return f"{number:.1f}%"
     return f"{number:.1f}"
+
+
+def _optional_number(value: object) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _policy_kind(rank: int) -> str:

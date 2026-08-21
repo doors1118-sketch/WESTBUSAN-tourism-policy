@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import json
 
-from westbusan.spatial.map import PublicSpatialData, render_map
+from westbusan.spatial.map import (
+    PublicSpatialData,
+    build_policy_candidate_rankings,
+    render_map,
+)
 
 
 def _map_data() -> PublicSpatialData:
@@ -304,6 +308,74 @@ def test_policy_layer_ranks_dong_and_500m_candidates_not_whole_districts() -> No
     assert "requestRegionInsight(item.node)" in rendered
     assert "function updateVisibleCounts" in rendered
     assert "selectedGridNode && visible(selectedGridNode)" in rendered
+
+
+def test_default_candidates_cover_west_busan_and_do_not_repeat_one_dong() -> None:
+    """Catches adjacent cells from one dong occupying the whole regional ranking."""
+    features: list[dict[str, object]] = []
+
+    def add(
+        grid_id: str,
+        district: str,
+        dong: str,
+        kind: str | None,
+        gap: float,
+        aged: int,
+        facilities: int,
+    ) -> None:
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "grid_id": grid_id,
+                    "district_name": district,
+                    "primary_dong_name": dong,
+                    "period": "2026-08",
+                    "recommendation_kind": kind,
+                    "tourism_supply_gap": gap,
+                    "age_20y_facility_count": aged,
+                    "mapped_facility_count": facilities,
+                },
+            }
+        )
+
+    add("saha-jangnim-1", "사하구", "장림동", "new_supply", 90, 3, 4)
+    add("saha-jangnim-2", "사하구", "장림동", "new_supply", 89, 2, 3)
+    add("saha-jangnim-3", "사하구", "장림동", "new_supply", 88, 1, 2)
+    add("saha-hadan", "사하구", "하단동", "new_supply", 70, 1, 2)
+    add("gangseo-myeongji", "강서구", "명지동", "remodel", 60, 4, 5)
+    add("sasang-gwaebeop", "사상구", "괘법동", "investment_caution", 40, 7, 8)
+    add("buk-gu-gupo", "북구", "구포동", None, 35, 5, 6)
+
+    rankings = build_policy_candidate_rankings(features)
+    default = rankings["default"]
+
+    assert list(default.values()) == [1, 2, 3, 4, 5]
+    selected = [
+        next(
+            feature["properties"]
+            for feature in features
+            if feature["properties"]["grid_id"] == grid_id  # type: ignore[index]
+        )
+        for grid_id in default
+    ]
+    assert {item["district_name"] for item in selected} == {
+        "강서구",
+        "사하구",
+        "사상구",
+        "북구",
+    }
+    assert len(
+        {
+            (item["district_name"], item["primary_dong_name"])
+            for item in selected
+        }
+    ) == 5
+    assert sum(item["primary_dong_name"] == "장림동" for item in selected) == 1
+    assert set(rankings["district"]["사하구"]) == {
+        "saha-jangnim-1",
+        "saha-hadan",
+    }
 
 
 def test_facility_location_click_exposes_public_address_rooms_and_age() -> None:

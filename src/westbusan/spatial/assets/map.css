@@ -39,7 +39,7 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .kpis span { font-size: .82rem; }
 .legend { list-style: none; padding: 0; margin: 0; display: grid; gap: 9px; font-size: .86rem; }
 .legend li { display: flex; gap: 9px; align-items: center; }
-.legend i { width: 15px; height: 15px; border-radius: 3px; background: #8b959d; flex: 0 0 auto; }
+.legend i { width: 17px; height: 17px; border: 1px solid #314552; border-radius: 3px; background: #8b959d; flex: 0 0 auto; }
 .legend .priority-1 { background: #c53b2d; }
 .legend .priority-2 { background: #e98528; }
 .legend .transport-quality { background: #168b89; }
@@ -54,8 +54,8 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 #vworld-tile-layer img { position: absolute; width: 256px; height: 256px; max-width: none; user-select: none; pointer-events: none; }
 #spatial-map { z-index: 1; background: transparent; touch-action: none; }
 .grid-feature { stroke: none; fill: #8b959d; fill-opacity: .035; cursor: pointer; vector-effect: non-scaling-stroke; }
-.grid-feature:hover, .grid-feature:focus { stroke: #102a43; stroke-width: 2; outline: none; }
-.grid-feature.is-selected { stroke: #0057d9; stroke-width: 3; fill-opacity: .88 !important; }
+.grid-feature:hover, .grid-feature:focus { stroke: #102a43 !important; stroke-width: 2.4 !important; outline: none; }
+.grid-feature.is-selected { stroke: #0057d9 !important; stroke-width: 3.2 !important; fill-opacity: .9 !important; }
 .facility-feature, .facility-cluster { display: none; }
 .facility-feature { stroke: #fff; stroke-width: .9; fill: #102a43; fill-opacity: .78; vector-effect: non-scaling-stroke; }
 .facility-layer.detail-mode .facility-feature:not(.is-filtered) { display: block; }
