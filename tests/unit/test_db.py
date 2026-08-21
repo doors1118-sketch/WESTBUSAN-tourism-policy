@@ -37,6 +37,36 @@ def test_tourism_spatial_enrichment_migration_creates_geocode_cache(
         "response_hash",
         "source_artifact_id",
         "observed_at",
+        "provider_district",
+    }
+
+
+def test_facility_location_migration_preserves_run_and_cache_lineage(
+    tmp_path: Path,
+) -> None:
+    """Catches coordinates being stored without their publication and address identity."""
+    db = Database(tmp_path / "facility-location.duckdb", Path("sql"))
+
+    db.migrate()
+
+    columns = {
+        row[0]
+        for row in db.query(
+            """select column_name from information_schema.columns
+               where table_schema='main' and table_name='spatial_facility_location'"""
+        )
+    }
+    assert columns == {
+        "base_published_run_id",
+        "facility_id",
+        "address_hash",
+        "address_kind",
+        "provider_status",
+        "provider_district",
+        "longitude",
+        "latitude",
+        "evidence_json",
+        "observed_at",
     }
 from westbusan.models import RunContext
 from westbusan.storage import RawStore

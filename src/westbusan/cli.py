@@ -3,19 +3,23 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, NoReturn
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+import httpx
 import typer
 
 from westbusan.db import migrate_legacy_run
 from westbusan.orchestrator import Pipeline, RunSummary, export_current, redact_for_log
 from westbusan.quality.checks import approve_schema_baseline, observed_schema_contracts
 from westbusan.spatial.boundary import approve_boundary, inspect_boundary
+from westbusan.spatial.enrich import enrich_current_facilities
 from westbusan.spatial.export import export_spatial_current
+from westbusan.spatial.geocode import VWorldGeocoder
 from westbusan.spatial.grid import build_grid
 from westbusan.spatial.models import BoundaryMetadata
 from westbusan.spatial.orchestrator import SpatialPipeline
@@ -560,6 +564,49 @@ def spatial_export(
             "spatial_run_id": bundle.spatial_run_id,
             "base_run_id": base_run_id,
             "files": [path.name for path in bundle.paths],
+        }
+    )
+
+
+@app.command("spatial-geocode")
+def spatial_geocode(
+    limit: Annotated[
+        int | None,
+        typer.Option(help="Maximum current facilities to checkpoint in this call."),
+    ] = None,
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Resolve current accommodation addresses through the reviewed VWorld cache."""
+    api_key = os.environ.get("VWORLD_API_KEY", "")
+    if not api_key:
+        _print_json({"status": "BLOCKED", "reason": "vworld_key_unavailable"})
+        raise typer.Exit(1)
+    try:
+        pipeline = _pipeline(root)
+        pipeline.db.migrate()
+        with httpx.Client(
+            timeout=httpx.Timeout(15.0, connect=10.0),
+            follow_redirects=False,
+        ) as client:
+            summary = enrich_current_facilities(
+                pipeline.db,
+                VWorldGeocoder(api_key, client),
+                limit=limit,
+            )
+    except Exception as error:
+        _print_json({"status": "BLOCKED", "reason": "spatial_geocode_blocked"})
+        raise typer.Exit(1) from error
+    _print_json(
+        {
+            "status": "CHECKPOINTED",
+            "total": summary.total,
+            "matched": summary.matched,
+            "cache_hits": summary.cache_hits,
+            "district_mismatch": summary.district_mismatch,
+            "not_found": summary.not_found,
+            "provider_error": summary.provider_error,
+            "invalid_response": summary.invalid_response,
+            "missing_address": summary.missing_address,
         }
     )
 

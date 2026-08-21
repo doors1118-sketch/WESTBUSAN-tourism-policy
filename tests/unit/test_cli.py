@@ -125,6 +125,7 @@ def test_cli_help_lists_all_operational_commands() -> None:
         "spatial-boundary-approve",
         "spatial-run",
         "spatial-export",
+        "spatial-geocode",
         "vacant-house-profile",
         "vacant-house-stage",
         "vacant-house-import",
@@ -339,6 +340,7 @@ def test_vacant_house_import_failure_is_retryable_without_partial_publication(
         "spatial-boundary-approve",
         "spatial-run",
         "spatial-export",
+        "spatial-geocode",
     ),
 )
 def test_spatial_cli_help_constructs_each_operator_command(command: str) -> None:
@@ -346,6 +348,24 @@ def test_spatial_cli_help_constructs_each_operator_command(command: str) -> None
     result = CliRunner().invoke(app, [command, "--help"])
 
     assert result.exit_code == 0
+
+
+def test_spatial_geocode_blocks_safely_when_server_key_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catches a missing credential becoming a traceback or partial DB mutation."""
+    monkeypatch.delenv("VWORLD_API_KEY", raising=False)
+
+    result = CliRunner().invoke(
+        app,
+        ["spatial-geocode", "--root", str(Path.cwd()), "--limit", "1"],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "status": "BLOCKED",
+        "reason": "vworld_key_unavailable",
+    }
 
 
 def test_spatial_boundary_inspection_prints_only_review_summary(
