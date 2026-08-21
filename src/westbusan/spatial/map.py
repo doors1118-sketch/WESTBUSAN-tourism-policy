@@ -105,6 +105,7 @@ def _render_svg(
         policy_kind = policy_by_district.get(district, ("", 0, ""))[0]
         geometry = feature.get("geometry", {})
         path_data = _geometry_path(geometry, project)
+        min_x, min_y, max_x, max_y = _projected_geometry_bounds(geometry, project)
         paths.append(
             '<path class="grid-feature" d="{path}" tabindex="0" '
             'role="button" aria-label="{label}" data-kind="grid" '
@@ -112,7 +113,11 @@ def _render_svg(
             'data-dong="{dong}" data-period="{period}" '
             'data-small-scale="{small}" data-aged="{aged}" '
             'data-context="{context}" data-tourism-supply-gap="{gap}" '
-            'data-facility-density="{density}" data-aged-share="{aged_share}" '
+            'data-mapped-facility-count="{mapped_count}" '
+            'data-aged-count="{aged_count}" data-age-known="{age_known}" '
+            'data-room-count="{room_count}" data-room-coverage="{room_coverage}" '
+            'data-demand-score="{demand_score}" data-supply-score="{supply_score}" '
+            'data-map-bounds="{min_x:.3f},{min_y:.3f},{max_x:.3f},{max_y:.3f}" '
             'data-recommendation="{recommendation}" data-policy-kind="{policy_kind}">'
             '<title>{title}</title></path>'.format(
                 grade=_attribute(grade),
@@ -129,8 +134,17 @@ def _render_svg(
                 aged=_attribute(properties.get("aged_building_rating")),
                 context=_attribute(properties.get("district_context_rating")),
                 gap=_attribute(properties.get("tourism_supply_gap")),
-                density=_attribute(properties.get("facility_density")),
-                aged_share=_attribute(properties.get("aged_facility_share")),
+                mapped_count=_attribute(properties.get("mapped_facility_count")),
+                aged_count=_attribute(properties.get("age_20y_facility_count")),
+                age_known=_attribute(properties.get("age_sample_size")),
+                room_count=_attribute(properties.get("room_sum")),
+                room_coverage=_attribute(properties.get("room_coverage")),
+                demand_score=_attribute(properties.get("demand_context_score")),
+                supply_score=_attribute(properties.get("room_supply_score")),
+                min_x=min_x,
+                min_y=min_y,
+                max_x=max_x,
+                max_y=max_y,
                 recommendation=_attribute(properties.get("recommendation_kind")),
                 policy_kind=_attribute(policy_kind),
                 title=html.escape(
@@ -140,12 +154,14 @@ def _render_svg(
                             str(properties.get("primary_dong_name", "")),
                             "수요 대비 공급부족 "
                             + _metric_label(properties.get("tourism_supply_gap")),
-                            "시설밀집도 "
-                            + _metric_label(properties.get("facility_density")),
-                            "노후시설 "
-                            + _metric_label(
-                                properties.get("aged_facility_share"), percent=True
-                            ),
+                            "주소확인 시설 "
+                            + _metric_label(properties.get("mapped_facility_count"))
+                            + "개",
+                            "20년 이상 시설 "
+                            + _metric_label(properties.get("age_20y_facility_count"))
+                            + "개 / 연수 확인 "
+                            + _metric_label(properties.get("age_sample_size"))
+                            + "개",
                         )
                     )
                 ),
@@ -168,11 +184,13 @@ def _render_svg(
         grade = str(properties.get("composite_grade", "insufficient_evidence"))
         circles.append(
             '<circle class="facility-feature" cx="{x:.3f}" '
-            'cy="{y:.3f}" r="3" tabindex="0" role="button" '
+            'cy="{y:.3f}" r="3" data-base-radius="3" tabindex="0" role="button" '
             'aria-label="{label}" data-kind="facility" data-key="{key}" '
             'data-grade="{grade}" data-district="{district}" data-dong="{dong}" '
             'data-period="{period}" data-small-scale="{small}" data-aged="{aged}" '
-            'data-context="{context}"><title>{title}</title></circle>'.format(
+            'data-context="{context}" data-public-name="{public_name}" '
+            'data-public-address="{public_address}" data-room-count="{room_count}" '
+            'data-building-age="{building_age}"><title>{title}</title></circle>'.format(
                 grade=_attribute(grade),
                 x=x,
                 y=y,
@@ -186,6 +204,10 @@ def _render_svg(
                 small=_attribute(properties.get("small_scale_rating")),
                 aged=_attribute(properties.get("aged_building_rating")),
                 context=_attribute(properties.get("district_context_rating")),
+                public_name=_attribute(properties.get("public_name")),
+                public_address=_attribute(properties.get("public_address")),
+                room_count=_attribute(properties.get("room_count")),
+                building_age=_attribute(properties.get("use_approval_age_years")),
                 title=html.escape(
                     " · ".join(
                         (
@@ -212,6 +234,7 @@ def _render_svg(
         radius = min(18.0, 5.5 + math.sqrt(count) * 1.7)
         clusters.append(
             '<g class="facility-cluster" transform="translate({x:.3f} {y:.3f})" '
+            'data-x="{x:.3f}" data-y="{y:.3f}" '
             'tabindex="0" role="button" data-kind="cluster" '
             'data-district="{district}" data-dong="{dong}" data-period="{period}">'
             '<circle r="{radius:.2f}"><title>{title}</title></circle>'
@@ -229,28 +252,6 @@ def _render_svg(
                 ),
             )
         )
-    district_points: dict[str, list[Sequence[float]]] = {}
-    for feature in grid_features:
-        district = str(feature.get("properties", {}).get("district_name", ""))
-        if not district:
-            continue
-        for polygon in _polygons(feature.get("geometry", {})):
-            for ring in polygon:
-                district_points.setdefault(district, []).extend(ring)
-    labels: list[str] = []
-    for district, (_, rank, policy_label) in policy_by_district.items():
-        raw_points = district_points.get(district, [])
-        if not raw_points:
-            continue
-        lon = sum(float(point[0]) for point in raw_points) / len(raw_points)
-        lat = sum(float(point[1]) for point in raw_points) / len(raw_points)
-        x, y = project((lon, lat))
-        labels.append(
-            f'<g class="district-policy-label" transform="translate({x:.3f} {y:.3f})">'
-            f'<text><tspan x="0" y="0">{rank}순위 {html.escape(district)}</tspan>'
-            f'<tspan class="policy-action" x="0" y="15">'
-            f'{html.escape(policy_label)}</tspan></text></g>'
-        )
     return (
         '<svg id="spatial-map" viewBox="0 0 1000 700" '
         'data-map-center="129.075,35.18" data-map-zoom="10" '
@@ -259,8 +260,8 @@ def _render_svg(
         '<image id="vworld-basemap" href="/tourism/api/vworld/base.png" '
         'x="0" y="0" width="1000" height="700" preserveAspectRatio="none"/>'
         + "".join(paths)
+        + '<g id="candidate-markers"></g>'
         + "".join(clusters)
-        + "".join(labels)
         + "".join(circles)
         + "</g></svg>"
     )
@@ -311,6 +312,22 @@ def _geometry_path(geometry: Mapping[str, Any], project: Any) -> str:
                 parts.append(f"{'M' if index == 0 else 'L'}{x:.3f},{y:.3f}")
             parts.append("Z")
     return "".join(parts)
+
+
+def _projected_geometry_bounds(
+    geometry: Mapping[str, Any], project: Any
+) -> tuple[float, float, float, float]:
+    points = [
+        project(point)
+        for polygon in _polygons(geometry)
+        for ring in polygon
+        for point in ring
+    ]
+    if not points:
+        return 0.0, 0.0, 0.0, 0.0
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return min(xs), min(ys), max(xs), max(ys)
 
 
 def _metric_label(value: object, *, percent: bool = False) -> str:

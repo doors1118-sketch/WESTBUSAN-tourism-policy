@@ -24,11 +24,18 @@ def _map_data() -> PublicSpatialData:
                     "primary_dong_name": "하단동",
                     "period": "2026-08",
                     "physical_facility_count": 3,
+                    "mapped_facility_count": 3,
+                    "room_sum": 30.0,
+                    "room_coverage": 1.0,
+                    "age_sample_size": 3,
+                    "age_20y_facility_count": 2,
                     "coordinate_coverage": 0.8,
                     "facility_density": 12.0,
                     "room_density": 80.0,
                     "aged_facility_share": 0.3,
                     "tourism_supply_gap": 85.0,
+                    "demand_context_score": 100.0,
+                    "room_supply_score": 15.0,
                     "recommendation_kind": "remodel",
                     "small_scale_rating": "high",
                     "aged_building_rating": "medium",
@@ -116,6 +123,7 @@ def test_map_uses_vworld_basemap_and_policy_opportunity_layers() -> None:
     assert 'data-layer="tourism_supply_gap"' in rendered
     assert 'data-layer="facility_density"' in rendered
     assert 'data-layer="aged_facilities"' in rendered
+    assert 'data-layer="facility_locations"' in rendered
     assert "<link" not in rendered
     assert "<script src=" not in rendered
     assert "<path" in rendered
@@ -142,6 +150,11 @@ def test_map_has_filters_interactions_keyboard_labels_and_policy_decisions() -> 
         'id="layer-controls"',
         'id="visible-grid-count"',
         'id="visible-facility-count"',
+        'id="region-summary"',
+        'id="region-facility-count"',
+        'id="region-aged-count"',
+        'id="region-room-count"',
+        'id="region-gap-score"',
         'aria-label="지도 확대"',
         'aria-label="지도 축소"',
         'tabindex="0"',
@@ -150,6 +163,7 @@ def test_map_has_filters_interactions_keyboard_labels_and_policy_decisions() -> 
         "관광수요 대비 숙박공급 부족",
         "숙박시설 밀집도",
         "노후 숙박시설 밀집도",
+        "숙박시설 위치",
         "리모델링·관광숙박 전환 검토",
         "안전·위생·법적 적합성 평가가 아닙니다",
         "읍면동",
@@ -176,15 +190,17 @@ def test_supply_gap_is_applied_without_selecting_a_filter() -> None:
 
     assert 'data-district="사하구"' in rendered
     assert 'data-tourism-supply-gap="85.0"' in rendered
-    assert 'data-facility-density="12.0"' in rendered
+    assert 'data-mapped-facility-count="3"' in rendered
+    assert 'data-aged-count="2"' in rendered
+    assert 'data-age-known="3"' in rendered
+    assert 'data-room-count="30.0"' in rendered
+    assert 'data-demand-score="100.0"' in rendered
+    assert 'data-supply-score="15.0"' in rendered
     assert 'data-recommendation="remodel"' in rendered
     assert 'class="layer-button is-active" data-layer="policy_priority"' in rendered
-    assert 'data-policy-kind="remodel"' in rendered
-    assert 'class="district-policy-label"' in rendered
-    assert "2순위 사하구" in rendered
     assert "수요 대비 공급부족 85.0" in rendered
-    assert "시설밀집도 12.0" in rendered
-    assert "노후시설 30.0%" in rendered
+    assert "주소확인 시설 3.0개" in rendered
+    assert "20년 이상 시설 2.0개 / 연수 확인 3.0개" in rendered
     assert "객실 10.0" in rendered
     assert 'r="3"' in rendered
     assert "숙박투자 v1" in rendered
@@ -197,21 +213,89 @@ def test_layer_controls_change_grid_encoding() -> None:
     assert 'data-layer="facility_density"' in rendered
     assert "activeLayer" in rendered
     assert "node.dataset.tourismSupplyGap" in rendered
-    assert "node.dataset.facilityDensity" in rendered
+    assert "node.dataset.mappedFacilityCount" in rendered
+    assert "node.dataset.agedCount" in rendered
     assert 'raw === undefined || raw === ""' in rendered
 
 
-def test_default_map_uses_policy_areas_and_clusters_instead_of_a_grid_mesh() -> None:
-    """Catches unreadable grid lines and thousands of points obscuring the decision."""
+def test_default_map_uses_policy_areas_without_marker_clutter() -> None:
+    """Catches bubbles or facilities obscuring the policy and metric surfaces."""
     rendered = render_map(_map_data())
 
-    assert "색상은 우선 정책방향, 숫자는 읍면동 숙박시설 군집" in rendered
+    assert "색상으로 지역 현황을 먼저 확인" in rendered
     assert 'data-layer="policy_priority"' in rendered
     assert 'class="facility-cluster"' in rendered
-    assert "확대하면 개별 숙박시설" in rendered
+    assert "숙박시설 위치 레이어" in rendered
     assert "activeLayer = \"policy_priority\"" in rendered
     assert "detail-mode" in rendered
     assert ".grid-feature { stroke: none;" in rendered
+    assert 'document.body.classList.toggle("facility-layer"' in rendered
+    assert ".facility-layer .facility-cluster:not(.is-filtered)" in rendered
+    assert ".facility-layer.detail-mode .facility-feature:not(.is-filtered)" in rendered
+
+
+def test_clicking_a_region_populates_a_policy_readout_and_filters_are_dependent() -> None:
+    """Catches filters and coloured areas that do not explain the selected region."""
+    rendered = render_map(_map_data())
+
+    assert 'id="region-summary-title"' in rendered
+    assert "선택 지역 상세" in rendered
+    assert "숙박시설 수" in rendered
+    assert "20년 이상 시설" in rendered
+    assert "공급부족도" in rendered
+    assert "function selectRegion" in rendered
+    assert 'node.addEventListener("click"' in rendered
+    assert "function refreshDongOptions" in rendered
+    assert "filters.district.addEventListener" in rendered
+    assert "function focusSelection" in rendered
+    assert "data-map-bounds" in rendered
+    assert "function svgPoint" in rendered
+    assert "Math.min(4" in rendered
+
+
+def test_selected_region_offers_safe_regional_ai_interpretation() -> None:
+    """Catches the empty map footer and unsafe free-form location AI requests."""
+    rendered = render_map(_map_data())
+
+    assert 'id="region-ai-button"' in rendered
+    assert 'id="region-ai-result"' in rendered
+    assert "AI 권역 해석" in rendered
+    assert 'fetch("/tourism/data.json"' in rendered
+    assert 'fetch("/tourism/api/insights"' in rendered
+    assert 'period: "latest"' in rendered
+
+
+def test_metric_layers_use_counts_and_explain_the_supply_gap_formula() -> None:
+    """Catches sliver-area density and opaque demand/supply scores returning to the UI."""
+    rendered = render_map(_map_data())
+
+    assert "500m 안의 주소 확인 숙박시설 수" in rendered
+    assert "20년 이상 숙박시설 수" in rendered
+    assert "방문수요 점수 − 객실공급 점수" in rendered
+    assert "facilityDensity" not in rendered
+
+
+def test_policy_layer_ranks_dong_and_500m_candidates_not_whole_districts() -> None:
+    """Catches district-wide colours being presented as investment locations."""
+    rendered = render_map(_map_data())
+
+    assert 'id="candidate-rank-list"' in rendered
+    assert 'id="candidate-markers"' in rendered
+    assert "읍면동·500m 후보지역" in rendered
+    assert "policyColour(node.dataset.recommendation)" in rendered
+    assert "buildCandidateRanking" in rendered
+    assert "후보지역 선별 신호" in rendered
+
+
+def test_facility_location_click_exposes_public_address_rooms_and_age() -> None:
+    """Catches exact public facility details remaining inaccessible after zoom."""
+    rendered = render_map(_map_data())
+
+    assert 'data-public-name="공개 숙소"' in rendered
+    assert 'data-public-address="부산 공개로 1"' in rendered
+    assert 'data-room-count="10.0"' in rendered
+    assert 'data-building-age="31.0"' in rendered
+    assert "function renderFacilitySummary" in rendered
 
 
 def test_overview_clusters_facilities_by_dong_before_showing_exact_points() -> None:

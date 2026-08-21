@@ -19,22 +19,28 @@
 <main class="two-panel">
   <aside id="filters-panel" aria-label="지도 필터">
     <h2>지도 필터</h2>
-    <p class="filter-help">색상은 우선 정책방향, 숫자는 읍면동 숙박시설 군집을 뜻합니다. 확대하면 개별 숙박시설을 확인할 수 있습니다.</p>
+    <p class="filter-help">색상으로 지역 현황을 먼저 확인하고, 지역을 클릭하면 숙박시설·노후시설·객실·공급부족 근거가 아래에 표시됩니다. 개별 위치는 숙박시설 위치 레이어에서만 보여줍니다.</p>
     <h3>분석 레이어</h3>
     <div id="layer-controls" class="layer-controls" role="group" aria-label="분석 레이어">
       <button class="layer-button is-active" data-layer="policy_priority" type="button">서부산 정책 우선방향</button>
       <button class="layer-button" data-layer="tourism_supply_gap" type="button">관광수요 대비 숙박공급 부족</button>
       <button class="layer-button" data-layer="facility_density" type="button">숙박시설 밀집도</button>
       <button class="layer-button" data-layer="aged_facilities" type="button">노후 숙박시설 밀집도</button>
+      <button class="layer-button" data-layer="facility_locations" type="button">숙박시설 위치</button>
     </div>
-    <p id="layer-explainer" class="layer-explainer">서부산 4개 구의 수요·공급 구조에 따라 우선 검토할 정책방향입니다.</p>
+    <p id="layer-explainer" class="layer-explainer">서부산의 읍면동·500m 단위 수요·공급·노후 신호로 후보지역을 좁힙니다.</p>
+    <section class="candidate-panel">
+      <h3>읍면동·500m 후보지역</h3>
+      <p>후보지역 선별 신호: 공급부족, 노후시설, 신규공급·개선 권고를 결합합니다.</p>
+      <ol id="candidate-rank-list" class="candidate-rank-list"></ol>
+    </section>
     <label>자치구<select id="district-filter"><option value="">전체</option></select></label>
     <label>읍면동<select id="dong-filter"><option value="">전체</option></select></label>
     <label>기간<select id="period-filter"><option value="">전체</option></select></label>
-    <div class="kpis"><div><strong id="visible-grid-count">{{GRID_COUNT}}</strong><span>표시 격자</span></div>
-      <div><strong id="visible-facility-count">{{FACILITY_COUNT}}</strong><span>표시 시설</span></div></div>
+    <div class="kpis"><div><strong id="visible-grid-count">{{GRID_COUNT}}</strong><span>표시 분석지역</span></div>
+      <div><strong id="visible-facility-count">{{FACILITY_COUNT}}</strong><span>주소 확인 시설</span></div></div>
     <h3 class="evidence-grade-title">지도 색상 의미</h3>
-    <ul class="legend">
+    <ul id="dynamic-legend" class="legend">
       <li><i class="priority-1"></i><span>강서구 · 신규 관광숙박 공급</span></li>
       <li><i class="priority-2"></i><span>사하구 · 리모델링·관광숙박 전환 검토</span></li>
       <li><i class="transport-quality"></i><span>북구 · 교통연계·품질개선</span></li>
@@ -47,6 +53,20 @@
       <button id="zoom-reset" aria-label="지도 원래 크기">초기화</button></div>
     {{SVG}}
     <p class="map-note">정책지원 검토용 우선순위이며 안전·위생·법적 적합성 평가가 아닙니다. · 경계 출처 {{BOUNDARY_SOURCE}}</p>
+    <section id="region-summary" class="region-summary" aria-live="polite">
+      <div class="region-summary-head">
+        <div><p class="eyebrow">SELECTED AREA</p><h2 id="region-summary-title">부산 전체 · 선택 지역 상세</h2></div>
+        <button id="region-ai-button" type="button">AI 권역 해석</button>
+      </div>
+      <div class="region-metrics">
+        <div><span>숙박시설 수</span><strong id="region-facility-count">-</strong><small>주소 좌표 확인 기준</small></div>
+        <div><span>20년 이상 시설</span><strong id="region-aged-count">-</strong><small>건물연수 확인 표본 병기</small></div>
+        <div><span>확인 객실</span><strong id="region-room-count">-</strong><small>객실 자료 확인분 합계</small></div>
+        <div><span>공급부족도</span><strong id="region-gap-score">-</strong><small>방문수요 점수 − 객실공급 점수</small></div>
+      </div>
+      <p id="region-summary-text" class="region-summary-text">지도에서 구·읍면동 또는 색상 영역을 선택하면 해당 지역의 정책 검토 근거를 설명합니다.</p>
+      <div id="region-ai-result" class="region-ai-result" hidden></div>
+    </section>
   </section>
 </main>
 <script id="bundle-data" type="application/json">{{BUNDLE_DATA}}</script>
