@@ -53,7 +53,7 @@ def test_large_spatial_map_is_loaded_only_after_map_tab_is_selected() -> None:
     html = _asset("index.html")
     script = _asset("app.js")
 
-    assert 'data-map-src="map/index.html?v=20260821-investment-v1"' in html
+    assert 'data-map-src="map/index.html?v=20260821-policy-map-v6"' in html
     assert '<iframe src="map/index.html"' not in html
     assert 'target === "map"' in script
     assert "방문·체류·소비·교통수요가 어디에서 얼마나 발생하는가" in html
