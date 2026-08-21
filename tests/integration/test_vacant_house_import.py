@@ -145,6 +145,7 @@ def _bundle(
     extra_empty_sheet: bool = False,
     combine_last_district: bool = False,
     merge_first_district_into_second: bool = False,
+    cross_district_support_sheet: bool = False,
 ):
     tmp_path.mkdir(parents=True, exist_ok=True)
     archive_path = tmp_path / "source.zip"
@@ -167,6 +168,16 @@ def _bundle(
                 sheets = [[]]
             if merge_first_district_into_second and index == 1:
                 sheets.append([_row(districts[0])])
+            if cross_district_support_sheet and index == 1:
+                support = _row(districts[0])
+                support[5] = 999
+                quarantined = []
+                for support_index in range(7):
+                    invalid = _row(districts[0])
+                    invalid[0] = None
+                    invalid[5] = 1000 + support_index
+                    quarantined.append(invalid)
+                sheets.append([support, *quarantined])
             if index == 0 and combine_last_district:
                 sheets.append([_row(districts[-1])])
             if index == 0 and extra_empty_sheet:
@@ -402,6 +413,54 @@ def test_each_expected_workbook_must_map_to_exactly_one_district(
     assert set(bundle.district_codes) == set(DISTRICT_CODES)
     assert caught.value.code == "incomplete_workbook_coverage"
     assert db.scalar("select count(*) from vacant_house_revision") == 0
+
+
+def test_cross_district_support_sheet_is_provenanced_and_missing_codes_quarantined(
+    tmp_path: Path,
+) -> None:
+    """A single-district support sheet must retain its row and all invalid rows."""
+    bundle = _bundle(tmp_path, cross_district_support_sheet=True)
+    db = _database(tmp_path / "cross-district-support.duckdb")
+
+    token = prepare_import(db, bundle, actor="internal-operator")
+    summary = import_staged_bundle(
+        db,
+        RawStore(tmp_path / "private-raw"),
+        bundle,
+        token,
+    )
+
+    assert bundle.workbook_count == 16
+    assert bundle.sheet_count == 17
+    assert set(bundle.district_codes) == set(DISTRICT_CODES)
+    assert bundle.source_row_count == 24
+    assert bundle.normalized_row_count == 17
+    assert bundle.exception_count == 7
+    assert summary.source_artifact_count == 17
+    assert summary.revision_count == 17
+    assert summary.current_count == 17
+    assert summary.exception_count == 7
+    assert (
+        db.scalar(
+            """select count(*) from (
+                   select workbook_name
+                   from vacant_house_source_artifact
+                   where vacant_run_id = ? and source_district is not null
+                   group by workbook_name
+                   having count(distinct source_district) = 2
+               )""",
+            [token.vacant_run_id],
+        )
+        == 1
+    )
+    assert (
+        db.scalar(
+            """select count(*) from vacant_house_exception
+               where vacant_run_id = ? and exception_code = 'invalid_code'""",
+            [token.vacant_run_id],
+        )
+        == 7
+    )
 
 
 def test_ambiguous_canonical_duplicates_create_exception_without_current(

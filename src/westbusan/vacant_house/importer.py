@@ -679,7 +679,8 @@ def _source_quality_failure(
         bundle.workbook_count != len(EXPECTED_DISTRICT_CODES)
         or len(artifacts) != bundle.sheet_count
         or len(districts_by_workbook) != bundle.workbook_count
-        or any(len(codes) != 1 for codes in districts_by_workbook.values())
+        or any(not codes for codes in districts_by_workbook.values())
+        or any(len(artifact["district_codes"]) > 1 for artifact in artifacts)
     ):
         return "incomplete_workbook_coverage"
     return None

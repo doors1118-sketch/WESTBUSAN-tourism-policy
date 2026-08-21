@@ -91,8 +91,12 @@ Confirm:
 - the archive hash matches the custody record;
 - the artifact inventory contains every workbook and every sheet, including
   blank support sheets, and binds each sheet to workbook/name/sheet hashes;
-- exactly 16 distinct workbook hashes are present and each workbook maps to
-  exactly one of the 16 expected district codes;
+- exactly 16 distinct workbook identities are present, every workbook has at
+  least one district-bearing sheet, and all 16 expected district codes appear;
+- every individual sheet contains at most one district code. A workbook with
+  separately identified support sheets for another district retains each
+  sheet's district provenance, while every nonempty missing-code row is sealed
+  as an explicit normalization exception rather than discarded;
 - `source_row_count = normalized_row_count + exception_count`;
 - the bundle validates without modification;
 - duplicate evidence and every rejected row are represented explicitly; and
