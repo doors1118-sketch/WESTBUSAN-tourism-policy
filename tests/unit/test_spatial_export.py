@@ -303,6 +303,16 @@ def test_opportunity_density_uses_reviewed_points_when_stock_is_unobserved(
     assert grids[0]["aged_facility_share"] == 1.0
 
 
+def test_demand_score_compares_external_visitors_per_known_room() -> None:
+    """Catches absolute visitor totals masking a small local room supply."""
+    scores = spatial_export._demand_scores_from_rows(
+        [("서부산 시험구", 100.0), ("동부산 시험구", 100.0)],
+        [("서부산 시험구", 10.0), ("동부산 시험구", 100.0)],
+    )
+
+    assert scores == {"서부산 시험구": 100.0, "동부산 시험구": 0.0}
+
+
 def test_public_bundle_excludes_sensitive_and_internal_fields(tmp_path: Path) -> None:
     """Catches private source, review, credential, path, or entity IDs leaking."""
     db, settings, spatial_run_id = _published_fixture(tmp_path)

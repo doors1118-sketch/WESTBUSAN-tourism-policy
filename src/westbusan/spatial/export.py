@@ -534,6 +534,7 @@ def _build_artifacts(
 def _load_grids(
     db: Database, identity: _PublicationIdentity
 ) -> list[dict[str, Any]]:
+    district_demand_scores = _district_demand_scores(db, identity)
     local_statistics = {
         str(row[0]): {
             "facility_count": int(row[1]),
@@ -644,7 +645,11 @@ def _load_grids(
     )
     demand_scores = {"high": 100.0, "medium": 50.0, "low": 0.0}
     for values in result:
-        demand_score = demand_scores.get(str(values["district_context_rating"]))
+        demand_score = district_demand_scores.get(str(values["district_name"]))
+        if demand_score is None:
+            demand_score = demand_scores.get(
+                str(values["district_context_rating"])
+            )
         supply_score = _percentile_score(values["room_density"], comparable_supply)
         values["demand_context_score"] = demand_score
         values["room_supply_score"] = supply_score
@@ -689,6 +694,67 @@ def _load_grids(
         )
         values["opportunity_scope"] = "500m_grid_with_district_demand_context"
     return result
+
+
+def _district_demand_scores(
+    db: Database,
+    identity: _PublicationIdentity,
+) -> dict[str, float]:
+    visitor_rows = db.query(
+        """with eligible as (
+               select district, try_cast(period as date) as day, metric_value
+               from fact_tourism_demand
+               where metric_code='locgo_regn_visitr_dd_list.visitor_count'
+                 and unit='count' and loaded_at <= ?
+                 and try_cast(period as date) <= ?
+                 and json_extract_string(dimension_json, '$.touDivCd') in ('2','3')
+           ), latest as (
+               select max(day) as max_day from eligible where day is not null
+           ), daily as (
+               select district, day, sum(metric_value) as visitors
+               from eligible, latest
+               where day is not null and day > max_day - interval 355 day
+               group by district, day
+           )
+           select district, avg(visitors) from daily
+           group by district order by district""",
+        [identity.started_at, identity.business_date],
+    )
+    room_rows = db.query(
+        """select district_name, sum(room_count)
+           from mart_facility_priority_current
+           where spatial_run_id=? and room_count is not null
+           group by district_name order by district_name""",
+        [identity.spatial_run_id],
+    )
+    return _demand_scores_from_rows(visitor_rows, room_rows)
+
+
+def _demand_scores_from_rows(
+    visitor_rows: Sequence[Sequence[object]],
+    room_rows: Sequence[Sequence[object]],
+) -> dict[str, float]:
+    rooms = {
+        str(row[0]): float(row[1])
+        for row in room_rows
+        if row[0] is not None and row[1] is not None and float(row[1]) > 0
+    }
+    demand_per_100 = {
+        str(row[0]): float(row[1]) / rooms[str(row[0])] * 100.0
+        for row in visitor_rows
+        if row[0] is not None
+        and row[1] is not None
+        and str(row[0]) in rooms
+        and math.isfinite(float(row[1]))
+        and float(row[1]) >= 0
+    }
+    if len(demand_per_100) < 2:
+        return {}
+    comparable = sorted(demand_per_100.values())
+    return {
+        district: round(_percentile_score(value, comparable) or 0.0, 1)
+        for district, value in demand_per_100.items()
+    }
 
 
 def _percentile_score(
