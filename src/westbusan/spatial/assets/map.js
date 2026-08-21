@@ -379,13 +379,18 @@
     }
   }
 
-  function apply() {
-    filterable.forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
+  function updateVisibleCounts() {
     document.getElementById("visible-grid-count").textContent = grids.filter(visible).length;
     document.getElementById("visible-facility-count").textContent = facilities.filter(visible).length;
+  }
+
+  function apply() {
+    filterable.forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
+    updateVisibleCounts();
     setLayerEncoding();
     buildCandidateRanking();
-    renderRegionSummary();
+    if (selectedGridNode && visible(selectedGridNode)) renderGridSummary(selectedGridNode);
+    else renderRegionSummary();
     renderMap();
   }
 
@@ -478,6 +483,7 @@
     refreshDongOptions();
     filters.dong.value = item.dong;
     filterable.forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
+    updateVisibleCounts();
     grids.forEach((node) => node.classList.toggle("is-selected", node === item.node));
     setLayerEncoding();
     renderGridSummary(item.node);

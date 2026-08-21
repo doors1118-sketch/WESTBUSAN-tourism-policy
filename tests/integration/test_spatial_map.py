@@ -302,6 +302,8 @@ def test_policy_layer_ranks_dong_and_500m_candidates_not_whole_districts() -> No
     assert "selectCandidate(item)" in rendered
     assert "renderGridSummary(item.node)" in rendered
     assert "requestRegionInsight(item.node)" in rendered
+    assert "function updateVisibleCounts" in rendered
+    assert "selectedGridNode && visible(selectedGridNode)" in rendered
 
 
 def test_facility_location_click_exposes_public_address_rooms_and_age() -> None:
