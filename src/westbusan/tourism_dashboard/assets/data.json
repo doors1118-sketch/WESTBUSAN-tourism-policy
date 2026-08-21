@@ -1,9 +1,9 @@
 {
-  "asOf": "2026-08-20",
+  "asOf": "2026-08-21",
   "coreAsOf": "2026-08-19",
   "publishedRun": "6ca4fa4f-e413-53d8-a5bf-b5f28a776fae",
-  "spatialRun": "f4966cf3-db14-5e16-9e06-e1a47ff8e8cf",
-  "availability": {"transport": "preparing", "stayDuration": "preparing", "facilityPoints": "unavailable"},
+  "spatialRun": "e3efcf69-8fb3-576a-96b8-6f53abc499b7",
+  "availability": {"transport": "preparing", "stayDuration": "preparing", "facilityPoints": "available"},
   "metricNotes": {
     "consumptionIndex": "원천지표 2026-07 구 평균이며 통화금액이 아님",
     "stay3Index": "원천지표 2026-07 구 평균이며 실제 명수가 아님",
