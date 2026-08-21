@@ -455,6 +455,7 @@ class Pipeline:
     ) -> dict[str, object]:
         parameters = inspect.signature(phase).parameters
         last_refresh: float | None = None
+        last_transaction_refresh: float | None = None
 
         def progress() -> None:
             nonlocal last_refresh
@@ -467,8 +468,21 @@ class Pipeline:
             self._refresh_lease(run_id)
             last_refresh = now
 
+        def transaction_progress() -> None:
+            nonlocal last_transaction_refresh
+            now = monotonic()
+            if (
+                last_transaction_refresh is not None
+                and now - last_transaction_refresh
+                < _PHASE_PROGRESS_INTERVAL_SECONDS
+            ):
+                return
+            self._refresh_lease_in_transaction(run_id)
+            last_transaction_refresh = now
+
         values: dict[str, object] = {
             "progress": progress,
+            "transaction_progress": transaction_progress,
             "fence_check": lambda: self._assert_fence(run_id),
         }
         return {name: value for name, value in values.items() if name in parameters}
@@ -822,56 +836,60 @@ class Pipeline:
         return summary
 
     def _refresh_lease(self, run_id: UUID) -> None:
-        now = datetime.now(UTC)
         began = False
         try:
             self.db.connection.execute("begin transaction")
             began = True
-            epoch_rows = self.db.query(
-                """select writer_fence_epoch from pipeline_run
-                   where run_id = ? and status = 'RUNNING'
-                     and lease_owner_token = ?""",
-                [run_id, self._lease_owner_token],
-            )
-            if len(epoch_rows) != 1 or epoch_rows[0][0] is None:
-                raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
-            epoch = int(epoch_rows[0][0])
-            refreshed_writer = self.db.query(
-                """update pipeline_writer_lease
-                   set heartbeat_at = ?, lease_expires_at = ?
-                   where lease_key = 'writer' and run_id = ? and owner_token = ?
-                     and fence_epoch = ?
-                   returning fence_epoch""",
-                [
-                    now,
-                    now + _LEASE_DURATION,
-                    run_id,
-                    self._lease_owner_token,
-                    epoch,
-                ],
-            )
-            refreshed_run = self.db.query(
-                """update pipeline_run
-                   set heartbeat_at = ?, lease_expires_at = ?
-                   where run_id = ? and status = 'RUNNING'
-                     and lease_owner_token = ? and writer_fence_epoch = ?
-                   returning run_id""",
-                [
-                    now,
-                    now + _LEASE_DURATION,
-                    run_id,
-                    self._lease_owner_token,
-                    epoch,
-                ],
-            )
-            if not refreshed_writer or not refreshed_run:
-                raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
+            self._refresh_lease_in_transaction(run_id)
             self.db.connection.execute("commit")
             began = False
         except Exception:
             if began:
                 self.db.connection.execute("rollback")
             raise
+
+    def _refresh_lease_in_transaction(self, run_id: UUID) -> None:
+        """Renew the writer lease without nesting a transaction."""
+        now = datetime.now(UTC)
+        epoch_rows = self.db.query(
+            """select writer_fence_epoch from pipeline_run
+               where run_id = ? and status = 'RUNNING'
+                 and lease_owner_token = ?""",
+            [run_id, self._lease_owner_token],
+        )
+        if len(epoch_rows) != 1 or epoch_rows[0][0] is None:
+            raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
+        epoch = int(epoch_rows[0][0])
+        refreshed_writer = self.db.query(
+            """update pipeline_writer_lease
+               set heartbeat_at = ?, lease_expires_at = ?
+               where lease_key = 'writer' and run_id = ? and owner_token = ?
+                 and fence_epoch = ?
+               returning fence_epoch""",
+            [
+                now,
+                now + _LEASE_DURATION,
+                run_id,
+                self._lease_owner_token,
+                epoch,
+            ],
+        )
+        refreshed_run = self.db.query(
+            """update pipeline_run
+               set heartbeat_at = ?, lease_expires_at = ?
+               where run_id = ? and status = 'RUNNING'
+                 and lease_owner_token = ? and writer_fence_epoch = ?
+               returning run_id""",
+            [
+                now,
+                now + _LEASE_DURATION,
+                run_id,
+                self._lease_owner_token,
+                epoch,
+            ],
+        )
+        if not refreshed_writer or not refreshed_run:
+            raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
 
     def _acquire_global_writer(
         self,

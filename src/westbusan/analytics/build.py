@@ -204,11 +204,13 @@ def build_marts(
     *,
     stage_hook: Callable[[str], None] | None = None,
     progress: Callable[[], None] | None = None,
+    transaction_progress: Callable[[], None] | None = None,
     fence_check: Callable[[], None] | None = None,
 ) -> MartBuildResult:
     """Rebuild run-scoped facility and district/month marts from durable facts."""
     db.migrate()
     heartbeat = progress or (lambda: None)
+    transaction_heartbeat = transaction_progress or heartbeat
     guard = fence_check or (lambda: None)
     after_stage = stage_hook or (lambda _: None)
 
@@ -250,8 +252,10 @@ def build_marts(
     records = _region_rows(db, run_id, as_of, district_metrics, periods, policy)
     commit_stage(
         lambda: (
-            _replace_regions(db, run_id, records, progress=heartbeat),
-            _replace_group_regions(db, run_id, records, progress=heartbeat),
+            _replace_regions(db, run_id, records, progress=transaction_heartbeat),
+            _replace_group_regions(
+                db, run_id, records, progress=transaction_heartbeat
+            ),
         )
     )
     heartbeat()

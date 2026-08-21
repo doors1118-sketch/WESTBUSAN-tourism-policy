@@ -13,6 +13,7 @@ from pydantic import SecretStr
 import westbusan.orchestrator as orchestrator_module
 from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
+from westbusan.analytics.build import build_marts
 from westbusan.entity_resolution.match import build_facilities
 from westbusan.http import QuotaError
 from westbusan.models import SourceSpec, SourceStatus
@@ -58,6 +59,33 @@ def test_phase_progress_coalesces_hot_loop_lease_refreshes(
     now[0] += 4.999
     progress()
     now[0] += 0.001
+    progress()
+
+    assert refreshes == [run_id, run_id]
+
+
+def test_mart_transaction_progress_renews_without_nested_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mart writes use the in-transaction lease path while their stage is open."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    run_id = uuid4()
+    now = [100.0]
+    refreshes: list[object] = []
+    monkeypatch.setattr(orchestrator_module, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        pipeline,
+        "_refresh_lease_in_transaction",
+        lambda refreshed: refreshes.append(refreshed),
+    )
+
+    progress = pipeline._supported_phase_kwargs(build_marts, run_id)[
+        "transaction_progress"
+    ]
+    assert callable(progress)
+    progress()
+    progress()
+    now[0] += 5.0
     progress()
 
     assert refreshes == [run_id, run_id]
