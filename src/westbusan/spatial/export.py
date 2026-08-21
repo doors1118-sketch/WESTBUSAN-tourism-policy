@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import bisect
 import csv
 import hashlib
 import io
@@ -23,6 +24,7 @@ from pyarrow import parquet
 
 from westbusan.db import Database
 from westbusan.spatial.map import PublicSpatialData, render_map
+from westbusan.spatial.opportunity import OpportunityMetrics, recommend_investment
 from westbusan.spatial.publish import spatial_manifest_is_valid
 
 _SCHEMA_VERSION = 1
@@ -65,6 +67,18 @@ _GRID_FIELDS = (
     "composite_score",
     "composite_grade",
 )
+_GRID_OPPORTUNITY_FIELDS = (
+    "facility_density",
+    "room_density",
+    "aged_facility_share",
+    "demand_context_score",
+    "room_supply_score",
+    "tourism_supply_gap",
+    "recommendation_kind",
+    "recommendation_evidence_codes",
+    "opportunity_scope",
+)
+_GRID_PUBLIC_FIELDS = _GRID_FIELDS + _GRID_OPPORTUNITY_FIELDS
 _FACILITY_FIELDS = (
     "facility_key",
     "grid_id",
@@ -456,7 +470,7 @@ def _build_artifacts(
                 "type": "Feature",
                 "id": row["grid_id"],
                 "geometry": row["geometry"],
-                "properties": {key: row[key] for key in _GRID_FIELDS},
+                "properties": {key: row[key] for key in _GRID_PUBLIC_FIELDS},
             }
             for row in grids
         ],
@@ -493,7 +507,7 @@ def _build_artifacts(
     evidence_table = _evidence_table(evidence)
     return public_data, {
         "grid_500m.geojson": _Artifact(
-            _json_bytes(grid_collection), len(grids), _schema(_GRID_FIELDS)
+            _json_bytes(grid_collection), len(grids), _schema(_GRID_PUBLIC_FIELDS)
         ),
         "facility_priority.geojson": _Artifact(
             _json_bytes(facility_collection),
@@ -532,7 +546,8 @@ def _load_grids(
                   mart.district_context_points, mart.small_scale_rating,
                   mart.small_scale_points, mart.aged_building_rating,
                   mart.aged_building_points, mart.composite_score,
-                  mart.composite_grade, grid.geometry_geojson
+                  mart.composite_grade, grid.clipped_area_ratio,
+                  grid.geometry_geojson
            from mart_grid_month as mart
            join dim_spatial_grid_500m as grid
              on grid.boundary_version_id = ? and grid.grid_id = mart.grid_id
@@ -547,6 +562,10 @@ def _load_grids(
         geometry = json.loads(row[-1])
         _validate_geometry(geometry)
         values = {key: row[index] for index, key in enumerate(_GRID_FIELDS)}
+        clipped_area_ratio = float(row[-2])
+        area_km2 = 0.25 * clipped_area_ratio
+        if not math.isfinite(area_km2) or area_km2 <= 0:
+            raise SpatialExportError("current spatial publication grid area is invalid")
         for field in (
             "grid_id",
             "district_code",
@@ -571,9 +590,82 @@ def _load_grids(
             "composite_grade",
             allowed=_GRADE_VALUES,
         )
+        values["facility_density"] = (
+            float(values["physical_facility_count"]) / area_km2
+        )
+        values["room_density"] = (
+            None
+            if values["room_sum"] is None
+            else float(values["room_sum"]) / area_km2
+        )
+        values["aged_facility_share"] = values["age_20y_share"]
         values["geometry"] = geometry
         result.append(values)
+    comparable_supply = sorted(
+        float(item["room_density"])
+        for item in result
+        if item["room_density"] is not None
+    )
+    demand_scores = {"high": 100.0, "medium": 50.0, "low": 0.0}
+    for values in result:
+        demand_score = demand_scores.get(str(values["district_context_rating"]))
+        supply_score = _percentile_score(values["room_density"], comparable_supply)
+        values["demand_context_score"] = demand_score
+        values["room_supply_score"] = supply_score
+        values["tourism_supply_gap"] = (
+            None
+            if demand_score is None or supply_score is None
+            else round(max(0.0, demand_score - supply_score), 1)
+        )
+        recommendation = recommend_investment(
+            OpportunityMetrics(
+                demand_score=demand_score,
+                room_supply_score=supply_score,
+                accessibility_score=None,
+                facility_density=float(values["facility_density"]),
+                room_density=(
+                    None
+                    if values["room_density"] is None
+                    else float(values["room_density"])
+                ),
+                aged_share=(
+                    None
+                    if values["aged_facility_share"] is None
+                    else float(values["aged_facility_share"])
+                ),
+                small_scale_share=(
+                    None
+                    if values["small_facility_share"] is None
+                    else float(values["small_facility_share"])
+                ),
+                tourism_registration_share=None,
+                recent_entry_share=None,
+                demand_per_100_rooms=None,
+                room_coverage=float(values["room_coverage"] or 0.0),
+                age_coverage=float(values["age_coverage"] or 0.0),
+            )
+        )
+        values["recommendation_kind"] = (
+            recommendation.kind if recommendation is not None else None
+        )
+        values["recommendation_evidence_codes"] = (
+            list(recommendation.evidence_codes) if recommendation is not None else []
+        )
+        values["opportunity_scope"] = "500m_grid_with_district_demand_context"
     return result
+
+
+def _percentile_score(
+    value: object, comparable: Sequence[float]
+) -> float | None:
+    if value is None or not comparable:
+        return None
+    number = float(value)
+    if len(comparable) == 1:
+        return 50.0
+    left = bisect.bisect_left(comparable, number)
+    right = bisect.bisect_right(comparable, number) - 1
+    return ((left + right) / 2) / (len(comparable) - 1) * 100
 
 
 def _load_facilities(

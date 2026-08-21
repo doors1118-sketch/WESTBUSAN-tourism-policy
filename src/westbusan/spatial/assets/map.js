@@ -5,10 +5,9 @@
     district: document.getElementById("district-filter"),
     dong: document.getElementById("dong-filter"),
     period: document.getElementById("period-filter"),
-    policyRank: document.getElementById("policy-rank-filter"),
-    component: document.getElementById("component-filter"),
-    grade: document.getElementById("grade-filter"),
   };
+  const layerButtons = [...document.querySelectorAll(".layer-button")];
+  let activeLayer = "tourism_supply_gap";
 
   function addOptions(select, values) {
     [...new Set(values.filter(Boolean))].sort().forEach((value) => {
@@ -26,13 +25,27 @@
     if (filters.district.value && node.dataset.district !== filters.district.value) return false;
     if (filters.dong.value && node.dataset.dong !== filters.dong.value) return false;
     if (filters.period.value && node.dataset.period !== filters.period.value) return false;
-    if (filters.policyRank.value && node.dataset.policyRank !== filters.policyRank.value) return false;
-    if (filters.grade.value && node.dataset.grade !== filters.grade.value) return false;
-    const component = filters.component.value;
-    if (component === "small-scale" && node.dataset.smallScale === "unavailable") return false;
-    if (component === "aged" && node.dataset.aged === "unavailable") return false;
-    if (component === "context" && node.dataset.context === "unavailable") return false;
     return true;
+  }
+
+  function colour(value) {
+    if (!Number.isFinite(value)) return "#8b959d";
+    if (value >= 75) return "#c53b2d";
+    if (value >= 50) return "#e98528";
+    if (value >= 25) return "#e0bb32";
+    return "#3779b6";
+  }
+
+  function layerValue(node) {
+    if (activeLayer === "facility_density") return Number(node.dataset.facilityDensity);
+    if (activeLayer === "aged_facilities") return Number(node.dataset.agedShare) * 100;
+    return Number(node.dataset.tourismSupplyGap);
+  }
+
+  function setLayerEncoding() {
+    features.filter((node) => node.dataset.kind === "grid").forEach((node) => {
+      node.style.fill = colour(layerValue(node));
+    });
   }
 
   function apply() {
@@ -43,8 +56,14 @@
     document.getElementById("visible-facility-count").textContent = features.filter(
       (node) => node.dataset.kind === "facility" && visible(node),
     ).length;
+    setLayerEncoding();
   }
   Object.values(filters).forEach((select) => select.addEventListener("change", apply));
+  layerButtons.forEach((button) => button.addEventListener("click", () => {
+    activeLayer = button.dataset.layer;
+    layerButtons.forEach((node) => node.classList.toggle("is-active", node === button));
+    apply();
+  }));
 
   const viewport = document.getElementById("map-viewport");
   const svg = document.getElementById("spatial-map");

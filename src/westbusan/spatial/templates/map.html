@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>부산 숙박업 정책지원 우선도</title>
+<title>부산 관광 숙박 투자기회 지도</title>
 <style>{{STYLE}}</style>
 </head>
 <body>
 <header>
-  <div><p class="eyebrow">WEST BUSAN · OFFLINE SPATIAL EVIDENCE</p>
-  <h1>부산 숙박업 정책지원 우선도</h1></div>
+  <div><p class="eyebrow">BUSAN TOURISM INVESTMENT INTELLIGENCE</p>
+  <h1>부산 관광 숙박 투자기회 지도</h1></div>
   <div class="freshness" aria-label="자료 기준">
     <span>기준일 <strong>{{BUSINESS_DATE}}</strong></span>
     <span>경계 <strong>{{BOUNDARY_VERSION}}</strong></span>
@@ -19,51 +19,30 @@
 <main class="two-panel">
   <aside id="filters-panel" aria-label="지도 필터">
     <h2>지도 필터</h2>
-    <p class="filter-help">원하는 지역·순위를 선택하면 지도에 즉시 반영됩니다.</p>
+    <p class="filter-help">필터를 선택하지 않아도 부산 전역의 수요·공급 격차가 표시됩니다.</p>
+    <h3>분석 레이어</h3>
+    <div id="layer-controls" class="layer-controls" role="group" aria-label="분석 레이어">
+      <button class="layer-button is-active" data-layer="tourism_supply_gap" type="button">관광수요 대비 숙박공급 부족</button>
+      <button class="layer-button" data-layer="facility_density" type="button">숙박시설 밀집도</button>
+      <button class="layer-button" data-layer="aged_facilities" type="button">노후 숙박시설 밀집도</button>
+    </div>
     <label>자치구<select id="district-filter"><option value="">전체</option></select></label>
     <label>읍면동<select id="dong-filter"><option value="">전체</option></select></label>
     <label>기간<select id="period-filter"><option value="">전체</option></select></label>
-    <label>정책지원 순위<select id="policy-rank-filter"><option value="">전체</option>
-      <option value="1">1순위</option><option value="2">2순위</option>
-      <option value="3">3순위</option><option value="4">4순위</option>
-    </select></label>
-    <label>구성요소<select id="component-filter">
-      <option value="">전체</option><option value="small-scale">소규모</option>
-      <option value="aged">노후도</option><option value="context">district context</option>
-    </select></label>
-    <label>등급<select id="grade-filter"><option value="">전체</option>
-      <option value="priority_1">Priority 1</option><option value="priority_2">Priority 2</option>
-      <option value="monitor">Monitor</option><option value="general">General</option>
-      <option value="small_sample">Small sample</option>
-      <option value="insufficient_evidence">Insufficient evidence</option>
-    </select></label>
     <div class="kpis"><div><strong id="visible-grid-count">{{GRID_COUNT}}</strong><span>표시 격자</span></div>
       <div><strong id="visible-facility-count">{{FACILITY_COUNT}}</strong><span>표시 시설</span></div></div>
-    <h3>정책지원 색상</h3>
-    <ul class="legend priority-legend">
-      <li><i class="priority-1"></i><span>1순위 · 신규 공급</span></li>
-      <li><i class="priority-2"></i><span>2순위 · 노후시설 개선</span></li>
-      <li><i class="monitor"></i><span>3순위 · 교통수요 연계</span></li>
-      <li><i class="general"></i><span>4순위 · 리모델링</span></li>
-      <li><i class="insufficient"></i><span>기타 · 근거 보완</span></li>
-    </ul>
-    <h3 class="evidence-grade-title">근거충족 등급</h3>
+    <h3 class="evidence-grade-title">정책 검토 방향</h3>
     <ul class="legend">
-      <li><i class="priority-1"></i><span>Priority 1 · 최우선 검토</span></li>
-      <li><i class="priority-2"></i><span>Priority 2 · 우선 검토</span></li>
-      <li><i class="monitor"></i><span>Monitor · 모니터링</span></li>
-      <li><i class="general"></i><span>General · 일반</span></li>
-      <li><i class="insufficient"></i><span>Small sample / Insufficient evidence</span></li>
+      <li><i class="priority-1"></i><span>신규 관광숙박 공급 검토</span></li>
+      <li><i class="priority-2"></i><span>리모델링·관광숙박 전환 검토</span></li>
+      <li><i class="monitor"></i><span>콘텐츠·접근성 우선 보완</span></li>
+      <li><i class="insufficient"></i><span>근거자료 보완 필요</span></li>
     </ul>
   </aside>
-  <section id="map-panel" aria-label="정책지원 우선도 지도">
+  <section id="map-panel" aria-label="관광 숙박 투자기회 지도">
     <div class="map-toolbar"><button id="zoom-in" aria-label="지도 확대">+</button>
       <button id="zoom-out" aria-label="지도 축소">−</button>
       <button id="zoom-reset" aria-label="지도 원래 크기">초기화</button></div>
-    <aside id="district-priority-overlay" aria-label="정책지원 우선순위">
-      <h2>정책지원 우선순위</h2>
-      <ol>{{DISTRICT_PRIORITY}}</ol>
-    </aside>
     {{SVG}}
     <p class="map-note">정책지원 검토용 우선순위이며 안전·위생·법적 적합성 평가가 아닙니다. · 경계 출처 {{BOUNDARY_SOURCE}}</p>
   </section>

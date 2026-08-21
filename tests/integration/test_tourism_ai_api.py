@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
+import httpx
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -44,6 +46,7 @@ def _settings(
 ) -> TourismAISettings:
     return TourismAISettings(
         openai_api_key=SecretStr("sentinel-openai-key"),
+        vworld_api_key=SecretStr("sentinel-vworld-key"),
         tourism_ai_data_path=_write_dashboard(tmp_path),
         tourism_ai_cache_dir=tmp_path / "cache",
         tourism_ai_model="gpt-5.4-mini",
@@ -202,3 +205,57 @@ def test_corrupt_cache_is_replaced_with_valid_response(tmp_path: Path) -> None:
     assert response.json()["cached"] is False
     assert generator.calls == 2
     assert list(settings.tourism_ai_cache_dir.glob("*.invalid"))
+
+
+def test_vworld_basemap_is_server_proxied_without_disclosing_key(
+    tmp_path: Path, caplog: Any
+) -> None:
+    """Catches a browser-visible key or an unrestricted upstream map request."""
+    secret = "sentinel-vworld-key"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.vworld.kr"
+        assert request.url.path == "/req/image"
+        assert request.url.params["key"] == secret
+        assert request.url.params["center"] == "129.075,35.18"
+        assert request.url.params["zoom"] == "10"
+        assert request.url.params["size"] == "1000,700"
+        return httpx.Response(
+            200,
+            content=b"\x89PNG\r\n\x1a\nreviewed-map",
+            headers={"content-type": "image/png"},
+        )
+
+    upstream = httpx.Client(transport=httpx.MockTransport(respond))
+    caplog.set_level(logging.INFO)
+    client = TestClient(
+        create_app(
+            _settings(tmp_path),
+            generator=_CountingGenerator(_model_document()),
+            vworld_client=upstream,
+        )
+    )
+
+    response = client.get("/vworld/base.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content.startswith(b"\x89PNG")
+    assert secret not in response.text
+    assert secret not in caplog.text
+
+
+def test_vworld_basemap_is_unavailable_without_server_key(tmp_path: Path) -> None:
+    """Catches an accidental client-side fallback that would expose credentials."""
+    settings = _settings(tmp_path).model_copy(update={"vworld_api_key": None})
+    client = TestClient(
+        create_app(
+            settings,
+            generator=_CountingGenerator(_model_document()),
+        )
+    )
+
+    response = client.get("/vworld/base.png")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "vworld_unavailable"}

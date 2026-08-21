@@ -25,6 +25,10 @@ def _map_data() -> PublicSpatialData:
                     "period": "2026-08",
                     "physical_facility_count": 3,
                     "coordinate_coverage": 0.8,
+                    "facility_density": 12.0,
+                    "room_density": 80.0,
+                    "tourism_supply_gap": 85.0,
+                    "recommendation_kind": "remodel",
                     "small_scale_rating": "high",
                     "aged_building_rating": "medium",
                     "district_context_rating": "high",
@@ -94,8 +98,8 @@ def _map_data() -> PublicSpatialData:
     )
 
 
-def test_map_is_standalone_two_panel_and_network_free() -> None:
-    """Catches a sidecar/network dependency or loss of the required map layout."""
+def test_map_uses_vworld_basemap_and_policy_opportunity_layers() -> None:
+    """Catches a blank schematic replacing the required real-world spatial context."""
     rendered = render_map(_map_data())
 
     assert 'id="filters-panel"' in rendered
@@ -104,48 +108,53 @@ def test_map_is_standalone_two_panel_and_network_free() -> None:
     assert 'id="evidence-panel"' not in rendered
     assert 'id="selected-evidence"' not in rendered
     assert 'id="spatial-map"' in rendered
-    assert "Priority 1" in rendered
-    assert "district context" in rendered
-    assert "정책지원 우선도" in rendered
-    assert "https://" not in rendered
-    assert "http://" not in rendered
-    assert "fetch(" not in rendered
+    assert "부산 관광 숙박 투자기회 지도" in rendered
+    assert 'id="vworld-basemap"' in rendered
+    assert 'href="/tourism/api/vworld/base.png"' in rendered
+    assert "VWORLD_API_KEY" not in rendered
+    assert 'data-layer="tourism_supply_gap"' in rendered
+    assert 'data-layer="facility_density"' in rendered
+    assert 'data-layer="aged_facilities"' in rendered
     assert "<link" not in rendered
     assert "<script src=" not in rendered
     assert "<path" in rendered
     assert "<circle" in rendered
 
 
-def test_map_has_filters_interactions_keyboard_labels_and_priority_overlay() -> None:
-    """Catches an inaccessible colour-only map without visible policy priorities."""
+def test_policy_overlays_share_the_fixed_vworld_viewport() -> None:
+    """Catches bounds-stretching that makes facilities miss the VWorld basemap."""
+    rendered = render_map(_map_data())
+
+    assert 'data-map-center="129.075,35.18"' in rendered
+    assert 'data-map-zoom="10"' in rendered
+    assert 'd="M0.000,700.000' not in rendered
+
+
+def test_map_has_filters_interactions_keyboard_labels_and_policy_decisions() -> None:
+    """Catches an inaccessible colour-only map without decision-oriented layers."""
     rendered = render_map(_map_data())
 
     for marker in (
         'id="district-filter"',
         'id="dong-filter"',
         'id="period-filter"',
-        'id="component-filter"',
-        'id="grade-filter"',
-        'id="policy-rank-filter"',
+        'id="layer-controls"',
         'id="visible-grid-count"',
         'id="visible-facility-count"',
         'aria-label="지도 확대"',
         'aria-label="지도 축소"',
         'tabindex="0"',
         "wheel",
-        "small_sample",
-        "insufficient_evidence",
-        'id="district-priority-overlay"',
-        "정책지원 우선순위",
-        "강서구",
         "사하구",
-        "노후시설 개선·체류상품",
-        "district-priority-2",
+        "관광수요 대비 숙박공급 부족",
+        "숙박시설 밀집도",
+        "노후 숙박시설 밀집도",
+        "리모델링·관광숙박 전환 검토",
         "안전·위생·법적 적합성 평가가 아닙니다",
         "읍면동",
         "경계 출처 국토교통부",
         "지도 필터",
-        "정책지원 색상",
+        "분석 레이어",
     ):
         assert marker in rendered
 
@@ -160,24 +169,26 @@ def test_dong_and_period_filters_have_matching_facility_attributes() -> None:
     assert 'id="period-filter"' in rendered
 
 
-def test_policy_priority_is_applied_without_selecting_a_filter() -> None:
-    """Catches district priority colouring being hidden behind filter interaction."""
+def test_supply_gap_is_applied_without_selecting_a_filter() -> None:
+    """Catches the decision layer being hidden behind filter interaction."""
     rendered = render_map(_map_data())
 
     assert 'data-district="사하구"' in rendered
-    assert 'class="grid-feature grade-priority_1 district-priority-2"' in rendered
-    assert 'data-policy-rank="2"' in rendered
-    assert 'class="district-label district-label-2"' in rendered
-    assert "2순위 사하구" in rendered
+    assert 'data-tourism-supply-gap="85.0"' in rendered
+    assert 'data-facility-density="12.0"' in rendered
+    assert 'data-recommendation="remodel"' in rendered
+    assert 'class="layer-button is-active" data-layer="tourism_supply_gap"' in rendered
+    assert 'class="district-label"' in rendered
 
 
-def test_policy_rank_filter_controls_default_district_colouring() -> None:
-    """Catches a visible priority selector that is not wired to map features."""
+def test_layer_controls_change_grid_encoding() -> None:
+    """Catches visible layer buttons that do not update the mapped metric."""
     rendered = render_map(_map_data())
 
-    assert '<option value="2">2순위</option>' in rendered
-    assert "filters.policyRank.value" in rendered
-    assert "node.dataset.policyRank !== filters.policyRank.value" in rendered
+    assert 'data-layer="facility_density"' in rendered
+    assert "activeLayer" in rendered
+    assert "node.dataset.tourismSupplyGap" in rendered
+    assert "node.dataset.facilityDensity" in rendered
 
 
 def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None:
@@ -209,4 +220,4 @@ def test_default_priorities_do_not_mutate_manifest_bound_metadata() -> None:
     payload = json.loads(payload_text)
 
     assert payload["metadata"] == data.metadata
-    assert "정책지원 우선순위" in rendered
+    assert "관광수요 대비 숙박공급 부족" in rendered

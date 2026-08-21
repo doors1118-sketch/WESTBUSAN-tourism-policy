@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from westbusan.tourism_ai.cache import (
     ClientCooldownExceeded,
@@ -16,6 +17,10 @@ from westbusan.tourism_ai.config import TourismAISettings
 from westbusan.tourism_ai.models import EvidenceMetric, InsightRequest, ModelInsight
 from westbusan.tourism_ai.openai_client import OpenAIResponsesClient
 from westbusan.tourism_ai.service import InsightGenerator, InsightService
+from westbusan.tourism_ai.vworld_proxy import (
+    VWorldBasemapError,
+    VWorldBasemapProxy,
+)
 
 
 class _Generator(InsightGenerator):
@@ -32,6 +37,7 @@ def create_app(
     settings: TourismAISettings,
     *,
     generator: InsightGenerator | None = None,
+    vworld_client: httpx.Client | None = None,
 ) -> FastAPI:
     """Create the isolated application with explicit dependencies."""
 
@@ -61,6 +67,12 @@ def create_app(
         redoc_url=None,
         openapi_url=None,
     )
+    vworld: VWorldBasemapProxy | None = None
+    if settings.vworld_api_key is not None:
+        vworld = VWorldBasemapProxy(
+            api_key=settings.vworld_api_key.get_secret_value(),
+            client=vworld_client or httpx.Client(timeout=15.0),
+        )
 
     @app.middleware("http")
     async def enforce_request_boundary(request: Request, call_next: Any) -> Any:
@@ -78,6 +90,20 @@ def create_app(
             "status": "ok",
             "data_ready": settings.tourism_ai_data_path.is_file(),
         }
+
+    @app.get("/vworld/base.png", response_class=Response)
+    def vworld_basemap() -> Response:
+        if vworld is None:
+            raise HTTPException(status_code=503, detail="vworld_unavailable")
+        try:
+            payload = vworld.fetch()
+        except VWorldBasemapError as error:
+            raise HTTPException(status_code=502, detail=str(error)) from error
+        return Response(
+            content=payload,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"},
+        )
 
     @app.post("/insights")
     def insights(payload: InsightRequest, request: Request) -> dict[str, object]:

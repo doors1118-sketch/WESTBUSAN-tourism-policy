@@ -154,7 +154,7 @@ def _published_fixture(
                aged_building_points, composite_score, composite_grade,
                evidence_json
            ) values (?, ?, ?, ?, ?, ?, ?, '2026-08', 2, 2, 23.0, 1.0, 2,
-                     1.0, 2, 1.0, 2, 1.0, 2, 1.0, 2, 1.0, 'medium', 1.0,
+                     1.0, 2, 1.0, 2, 1.0, 2, 1.0, 2, 1.0, 'high', 2.0,
                      'high', 2.0, 'high', 2.0, 5.0, 'priority_1', '{}')""",
         [
             spatial_run_id,
@@ -234,6 +234,16 @@ def test_spatial_bundle_has_exact_files_schemas_counts_and_hashes(
     assert "crs" not in grids  # RFC 7946 fixes coordinates to WGS84.
     assert len(grids["features"]) == 1
     assert len(facilities["features"]) == 2
+    opportunity = grids["features"][0]["properties"]
+    assert opportunity["facility_density"] > 0
+    assert opportunity["room_density"] > 0
+    assert opportunity["aged_facility_share"] == 1.0
+    assert opportunity["tourism_supply_gap"] == 50.0
+    assert opportunity["recommendation_kind"] == "remodel"
+    assert opportunity["recommendation_evidence_codes"] == [
+        "high_demand",
+        "aged_facility_cluster",
+    ]
     assert [feature["properties"]["facility_key"] for feature in facilities["features"]] == [
         "facility-000001",
         "facility-000002",

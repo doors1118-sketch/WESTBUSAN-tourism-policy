@@ -53,7 +53,7 @@ def test_large_spatial_map_is_loaded_only_after_map_tab_is_selected() -> None:
     html = _asset("index.html")
     script = _asset("app.js")
 
-    assert 'data-map-src="map/index.html?v=20260821-priority-v3"' in html
+    assert 'data-map-src="map/index.html?v=20260821-investment-v1"' in html
     assert '<iframe src="map/index.html"' not in html
     assert 'target === "map"' in script
     assert "방문·체류·소비·교통수요가 어디에서 얼마나 발생하는가" in html
@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260821-ui-v4"' in html
-    assert 'src="app.js?v=20260821-ui-v4"' in html
+    assert 'href="app.css?v=20260821-ui-v5"' in html
+    assert 'src="app.js?v=20260821-ui-v5"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -79,6 +79,24 @@ def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None
     assert "AI로 지도 설명" in html
     assert 'requestInsight("west")' in script
     assert 'data-map-insight-button' in script
+
+
+def test_map_tab_explains_the_policy_decisions_before_interaction() -> None:
+    """Catches the spatial tab reverting to an unexplained technical grid."""
+    html = _asset("index.html")
+
+    for label in (
+        "관광수요 대비 숙박공급 부족",
+        "숙박시설 밀집도",
+        "노후 숙박시설 밀집도",
+        "신규 숙박업 진입",
+        "신규 공급",
+        "리모델링",
+        "관광숙박 전환",
+    ):
+        assert label in html
+    assert "시설 좌표 확인률이 0%" not in html
+    assert "관광 숙박 투자기회 AI 해석" in html
 
 
 def test_page_load_does_not_generate_insights() -> None:
