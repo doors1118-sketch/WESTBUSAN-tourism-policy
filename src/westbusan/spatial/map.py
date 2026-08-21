@@ -145,11 +145,32 @@ def _render_svg(
                 context=_attribute(properties.get("district_context_rating")),
             )
         )
+    district_points: dict[str, list[Sequence[float]]] = {}
+    for feature in grid_features:
+        district = str(feature.get("properties", {}).get("district_name", ""))
+        if district not in ranks:
+            continue
+        for polygon in _polygons(feature.get("geometry", {})):
+            for ring in polygon:
+                district_points.setdefault(district, []).extend(ring)
+    labels: list[str] = []
+    for district, raw_points in district_points.items():
+        if not raw_points:
+            continue
+        lon = sum(float(point[0]) for point in raw_points) / len(raw_points)
+        lat = sum(float(point[1]) for point in raw_points) / len(raw_points)
+        x, y = project((lon, lat))
+        rank = ranks[district]
+        labels.append(
+            f'<text class="district-label district-label-{rank}" x="{x:.3f}" '
+            f'y="{y:.3f}">{rank}순위 {html.escape(district)}</text>'
+        )
     return (
         '<svg id="spatial-map" viewBox="0 0 1000 700" '
         'aria-label="부산 숙박업 정책지원 우선도 지도" role="img">'
         '<g id="map-viewport">'
         + "".join(paths)
+        + "".join(labels)
         + "".join(circles)
         + "</g></svg>"
     )

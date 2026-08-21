@@ -10,6 +10,7 @@ header { display: flex; justify-content: space-between; gap: 24px; align-items: 
 h1 { margin: 3px 0 0; font-size: clamp(1.55rem, 2.5vw, 2.25rem); }
 h2 { margin: 0 0 14px; font-size: 1.15rem; }
 h3 { font-size: 1rem; }
+.filter-help { margin: -5px 0 15px; color: #52616a; font-size: .82rem; line-height: 1.45; }
 .eyebrow { margin: 0; color: #77d4c5; font-size: .82rem; letter-spacing: .1em; }
 .freshness { display: flex; gap: 18px; font-size: .86rem; }
 .freshness span { display: grid; }
@@ -29,6 +30,7 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .legend .priority-2 { background: #e98528; }
 .legend .monitor { background: #e0bb32; }
 .legend .general { background: #3779b6; }
+.evidence-grade-title { margin-top: 20px; border-top: 1px solid #dce3e6; padding-top: 16px; }
 #map-panel { position: relative; overflow: hidden; padding: 10px; }
 .map-toolbar { position: absolute; z-index: 3; top: 20px; left: 20px; display: flex; gap: 5px; }
 .map-toolbar button { font-weight: 800; box-shadow: 0 2px 8px #163d4a22; }
@@ -45,6 +47,11 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .grid-feature.district-priority-3, .facility-feature.district-priority-3 { fill: #e0bb32; }
 .grid-feature.district-priority-4, .facility-feature.district-priority-4 { fill: #3779b6; }
 .grid-feature:focus, .facility-feature:focus { outline: none; stroke: #111; stroke-width: 4; }
+.district-label { pointer-events: none; font-size: 23px; font-weight: 900; text-anchor: middle; fill: #102a43; paint-order: stroke; stroke: #fff; stroke-width: 7px; stroke-linejoin: round; }
+.district-label-1 { fill: #8e241c; }
+.district-label-2 { fill: #a94e0d; }
+.district-label-3 { fill: #7d6500; }
+.district-label-4 { fill: #155486; }
 #district-priority-overlay { position: absolute; z-index: 3; top: 20px; right: 20px; width: min(330px, 38%); padding: 15px; border: 1px solid #d5dde0; border-radius: 10px; background: #fffffff2; box-shadow: 0 8px 26px #163d4a24; backdrop-filter: blur(6px); }
 #district-priority-overlay h2 { margin-bottom: 10px; font-size: 1.05rem; }
 #district-priority-overlay ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; }

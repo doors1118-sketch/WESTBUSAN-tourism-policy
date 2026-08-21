@@ -18,10 +18,15 @@
 </header>
 <main class="two-panel">
   <aside id="filters-panel" aria-label="지도 필터">
-    <h2>필터와 현황</h2>
+    <h2>지도 필터</h2>
+    <p class="filter-help">원하는 지역·순위를 선택하면 지도에 즉시 반영됩니다.</p>
     <label>자치구<select id="district-filter"><option value="">전체</option></select></label>
     <label>읍면동<select id="dong-filter"><option value="">전체</option></select></label>
     <label>기간<select id="period-filter"><option value="">전체</option></select></label>
+    <label>정책지원 순위<select id="policy-rank-filter"><option value="">전체</option>
+      <option value="1">1순위</option><option value="2">2순위</option>
+      <option value="3">3순위</option><option value="4">4순위</option>
+    </select></label>
     <label>구성요소<select id="component-filter">
       <option value="">전체</option><option value="small-scale">소규모</option>
       <option value="aged">노후도</option><option value="context">district context</option>
@@ -34,7 +39,15 @@
     </select></label>
     <div class="kpis"><div><strong id="visible-grid-count">{{GRID_COUNT}}</strong><span>표시 격자</span></div>
       <div><strong id="visible-facility-count">{{FACILITY_COUNT}}</strong><span>표시 시설</span></div></div>
-    <h3>등급 범례</h3>
+    <h3>정책지원 색상</h3>
+    <ul class="legend priority-legend">
+      <li><i class="priority-1"></i><span>1순위 · 신규 공급</span></li>
+      <li><i class="priority-2"></i><span>2순위 · 노후시설 개선</span></li>
+      <li><i class="monitor"></i><span>3순위 · 교통수요 연계</span></li>
+      <li><i class="general"></i><span>4순위 · 리모델링</span></li>
+      <li><i class="insufficient"></i><span>기타 · 근거 보완</span></li>
+    </ul>
+    <h3 class="evidence-grade-title">근거충족 등급</h3>
     <ul class="legend">
       <li><i class="priority-1"></i><span>Priority 1 · 최우선 검토</span></li>
       <li><i class="priority-2"></i><span>Priority 2 · 우선 검토</span></li>

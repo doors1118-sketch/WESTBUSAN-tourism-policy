@@ -160,13 +160,7 @@ insightButton.addEventListener("click", async () => {
   insightButton.disabled = true;
   state.textContent = "검증된 발행지표를 해석하고 있습니다.";
   try {
-    const response = await fetch("api/insights", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ region: document.querySelector("#insight-region").value, period: "latest", published_run: dashboardData.publishedRun })
-    });
-    if (!response.ok) throw new Error("request_failed");
-    renderInsight(await response.json());
+    renderInsight(await requestInsight(document.querySelector("#insight-region").value));
     state.textContent = "현재 발행본을 기준으로 정책해석을 생성했습니다.";
   } catch (_) {
     state.textContent = "정책해석을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
@@ -174,6 +168,48 @@ insightButton.addEventListener("click", async () => {
     insightButton.disabled = false;
   }
 });
+
+const mapInsightButton = document.querySelector("[data-map-insight-button]");
+mapInsightButton.addEventListener("click", async () => {
+  if (!dashboardData) return;
+  mapInsightButton.disabled = true;
+  mapInsightButton.textContent = "지도 해석 중…";
+  try {
+    renderMapInsight(await requestInsight("west"));
+  } catch (_) {
+    const result = document.querySelector("[data-map-insight-result]");
+    result.hidden = false;
+    document.querySelector("[data-map-insight-headline]").textContent = "AI 지도해석을 불러오지 못했습니다.";
+    document.querySelector("[data-map-insight-summary]").textContent = "잠시 후 다시 시도해 주세요.";
+  } finally {
+    mapInsightButton.disabled = false;
+    mapInsightButton.textContent = "AI로 지도 설명";
+  }
+});
+
+async function requestInsight(region) {
+  const response = await fetch("api/insights", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ region, period: "latest", published_run: dashboardData.publishedRun })
+  });
+  if (!response.ok) throw new Error("request_failed");
+  return response.json();
+}
+
+function renderMapInsight(insight) {
+  const result = document.querySelector("[data-map-insight-result]");
+  result.hidden = false;
+  document.querySelector("[data-map-insight-headline]").textContent = insight.headline;
+  document.querySelector("[data-map-insight-summary]").textContent = insight.executive_summary;
+  const findings = document.querySelector("[data-map-insight-findings]");
+  clear(findings);
+  insight.findings.slice(0, 3).forEach((finding) => {
+    const item = node("article", "");
+    item.append(node("strong", "", finding.title), node("small", "", finding.claim));
+    findings.append(item);
+  });
+}
 
 function renderInsight(insight) {
   const result = document.querySelector("[data-insight-result]");

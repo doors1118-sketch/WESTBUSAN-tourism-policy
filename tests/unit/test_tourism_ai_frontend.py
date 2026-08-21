@@ -20,6 +20,9 @@ def _asset(name: str) -> str:
 def test_dashboard_exposes_three_decision_questions_and_required_tabs() -> None:
     html = _asset("index.html")
 
+    assert "동서 관광객 체류전환의 격차" in html
+    assert "관광경제활력 도시 부산" not in html
+
     for label in (
         "종합현황",
         "관광 종합현황",
@@ -49,12 +52,24 @@ def test_large_spatial_map_is_loaded_only_after_map_tab_is_selected() -> None:
     html = _asset("index.html")
     script = _asset("app.js")
 
-    assert 'data-map-src="map/index.html"' in html
+    assert 'data-map-src="map/index.html?v=20260821-priority-v3"' in html
     assert '<iframe src="map/index.html"' not in html
     assert 'target === "map"' in script
     assert "방문·체류·소비·교통수요가 어디에서 얼마나 발생하는가" in html
     assert "숙박 객실·관광숙박 비중·시설 규모·노후도·신규 진입" in html
     assert "신규 공급·리모델링·빈집 전환·콘텐츠 투자" in html
+
+
+def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
+    """Catches the map losing its explicit, user-triggered AI explanation surface."""
+    html = _asset("index.html")
+    script = _asset("app.js")
+
+    assert 'data-map-insight-button' in html
+    assert 'data-map-insight-result' in html
+    assert "AI로 지도 설명" in html
+    assert 'requestInsight("west")' in script
+    assert 'data-map-insight-button' in script
 
 
 def test_page_load_does_not_generate_insights() -> None:

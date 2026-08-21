@@ -126,6 +126,7 @@ def test_map_has_filters_interactions_keyboard_labels_and_priority_overlay() -> 
         'id="period-filter"',
         'id="component-filter"',
         'id="grade-filter"',
+        'id="policy-rank-filter"',
         'id="visible-grid-count"',
         'id="visible-facility-count"',
         'aria-label="지도 확대"',
@@ -143,6 +144,8 @@ def test_map_has_filters_interactions_keyboard_labels_and_priority_overlay() -> 
         "안전·위생·법적 적합성 평가가 아닙니다",
         "읍면동",
         "경계 출처 국토교통부",
+        "지도 필터",
+        "정책지원 색상",
     ):
         assert marker in rendered
 
@@ -164,6 +167,17 @@ def test_policy_priority_is_applied_without_selecting_a_filter() -> None:
     assert 'data-district="사하구"' in rendered
     assert 'class="grid-feature grade-priority_1 district-priority-2"' in rendered
     assert 'data-policy-rank="2"' in rendered
+    assert 'class="district-label district-label-2"' in rendered
+    assert "2순위 사하구" in rendered
+
+
+def test_policy_rank_filter_controls_default_district_colouring() -> None:
+    """Catches a visible priority selector that is not wired to map features."""
+    rendered = render_map(_map_data())
+
+    assert '<option value="2">2순위</option>' in rendered
+    assert "filters.policyRank.value" in rendered
+    assert "node.dataset.policyRank !== filters.policyRank.value" in rendered
 
 
 def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None:

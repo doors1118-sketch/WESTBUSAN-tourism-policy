@@ -5,6 +5,7 @@
     district: document.getElementById("district-filter"),
     dong: document.getElementById("dong-filter"),
     period: document.getElementById("period-filter"),
+    policyRank: document.getElementById("policy-rank-filter"),
     component: document.getElementById("component-filter"),
     grade: document.getElementById("grade-filter"),
   };
@@ -25,6 +26,7 @@
     if (filters.district.value && node.dataset.district !== filters.district.value) return false;
     if (filters.dong.value && node.dataset.dong !== filters.dong.value) return false;
     if (filters.period.value && node.dataset.period !== filters.period.value) return false;
+    if (filters.policyRank.value && node.dataset.policyRank !== filters.policyRank.value) return false;
     if (filters.grade.value && node.dataset.grade !== filters.grade.value) return false;
     const component = filters.component.value;
     if (component === "small-scale" && node.dataset.smallScale === "unavailable") return false;
