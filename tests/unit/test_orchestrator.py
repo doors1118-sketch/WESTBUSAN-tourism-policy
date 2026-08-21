@@ -1296,6 +1296,57 @@ def test_building_quota_interruption_keeps_attempt_resumable(
     assert retried.status == "BLOCKED"
 
 
+def test_transport_quota_preserves_completed_month_checkpoint_and_running_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A later-month quota failure must not discard an earlier completed month."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.fixture_dir = None
+    source_id = "public_transport_od_usage"
+    pipeline.registry = SourceRegistry(
+        (
+            SourceSpec(
+                source_id,
+                "https://example.test/transport",
+                operation="getMonthlyODUsageforGeneralBusesandUrbanRailways",
+                group="transport",
+                cadence="monthly",
+            ),
+        )
+    )
+    calls: list[tuple[date, date]] = []
+
+    def quota_after_first_month(db, registry, start, end, run, **kwargs):
+        calls.append((start, end))
+        error = QuotaError("daily quota exhausted")
+        error.source_months = (SourceMonthEvidence(source_id, "2025-03", 1),)
+        raise error
+
+    monkeypatch.setattr(
+        orchestrator_module, "load_transport", quota_after_first_month
+    )
+
+    with pytest.raises(QuotaError, match="quota"):
+        pipeline.backfill(
+            date(2025, 3, 1),
+            date(2025, 4, 30),
+            source_ids=[source_id],
+        )
+
+    run_id = pipeline.db.scalar("select run_id from pipeline_run")
+    assert calls == [(date(2025, 3, 1), date(2025, 4, 30))]
+    assert pipeline.db.scalar(
+        "select status from pipeline_run where run_id = ?", [run_id]
+    ) == "RUNNING"
+    assert pipeline.db.scalar(
+        "select count(*) from pipeline_run_summary where run_id = ?", [run_id]
+    ) == 0
+    march = pipeline._checkpoint_value(source_id, "2025-03")
+    assert march["status"] == "completed"
+    assert march["run_id"] == str(run_id)
+    assert pipeline._checkpoint_value(source_id, "2025-04") == {}
+
+
 def test_optional_family_crash_is_a_required_failure_and_preserves_lkg(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -45,7 +45,7 @@ from westbusan.quality.publish import current_published_run, publish_if_valid
 from westbusan.sources.datagokr import parse_data_page
 from westbusan.sources.registry import SourceRegistry, probe_source
 from westbusan.storage import RawStore
-from westbusan.transport.load import load_transport
+from westbusan.transport.load import SourceMonthEvidence, load_transport
 
 _LEASE_DURATION = timedelta(minutes=15)
 _PHASE_PROGRESS_INTERVAL_SECONDS = 5.0
@@ -358,6 +358,32 @@ class Pipeline:
                                     "explicit_empty": evidence.explicit_empty,
                                 },
                             )
+            except QuotaError as error:
+                for evidence in getattr(error, "source_months", ()):
+                    if (
+                        not isinstance(evidence, SourceMonthEvidence)
+                        or evidence.source_id not in selected
+                        or evidence.month not in pending
+                        or not (
+                            evidence.record_count > 0 or evidence.explicit_empty
+                        )
+                    ):
+                        continue
+                    self._checkpoint(
+                        evidence.source_id,
+                        evidence.month,
+                        "completed",
+                        2,
+                        run.run_id,
+                        evidence={
+                            "record_count": evidence.record_count,
+                            "explicit_empty": evidence.explicit_empty,
+                        },
+                    )
+                for source_id in selected:
+                    if self.registry.get(source_id).group == "transport":
+                        self._record_failure(run, source_id, error, logger)
+                raise
             except Exception as error:  # noqa: BLE001 - terminal family boundary
                 for source_id in selected:
                     if self.registry.get(source_id).group == "transport":

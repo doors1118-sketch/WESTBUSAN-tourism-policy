@@ -10,7 +10,7 @@ import pytest
 
 import westbusan.transport.load as transport_load_module
 from westbusan.db import Database
-from westbusan.http import HttpResult, SafeHttpClient
+from westbusan.http import HttpResult, QuotaError, SafeHttpClient
 from westbusan.models import RawArtifact, RunContext
 from westbusan.sources.files import read_tabular_rows
 from westbusan.sources.odcloud import build_odcloud_client, discover_latest_dataset
@@ -421,6 +421,18 @@ def test_public_transport_od_requests_every_busan_district_pair(
         for arrival in district_codes
     }
     assert len(requests) == 256
+    artifact_parameters = [
+        json.loads(request_json)["parameters"]
+        for (request_json,) in db.query(
+            """select request_json from raw_artifact
+               where source_id = 'public_transport_od_usage'"""
+        )
+    ]
+    assert {
+        (str(item["dptre_sgg_cd"]), str(item["arvl_sgg_cd"]))
+        for item in artifact_parameters
+    } == observed_pairs
+    assert len(artifact_parameters) == 256
     assert (
         requests[0]["dptre_sgg_cd"],
         requests[0]["arvl_sgg_cd"],
@@ -435,6 +447,67 @@ def test_public_transport_od_requests_every_busan_district_pair(
         (item.month, item.record_count, item.explicit_empty)
         for item in result.source_months
     ] == [("2026-01", 0, True)]
+
+
+def test_public_transport_quota_is_recorded_and_propagated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A quota interruption must pause the pipeline instead of finalizing partial facts."""
+    db = Database(tmp_path / "transport-quota.duckdb", Path("sql"))
+    db.migrate()
+    full_registry = SourceRegistry.load(Path("config/sources.yaml"))
+    spec = replace(
+        full_registry.get("public_transport_od_usage"), parameter_partitions={}
+    )
+    record_inspection(
+        spec,
+        db,
+        operation="getMonthlyODUsageforGeneralBusesandUrbanRailways",
+        required_parameters={
+            "opr_ym": "{baseYm}",
+            "dptre_ctpv_cd": "26",
+            "arvl_ctpv_cd": "26",
+        },
+        response_row_path="Response.body.items.item",
+        portal_detail_url="https://www.data.go.kr/data/15142069/openapi.do",
+    )
+    monkeypatch.setenv("WESTBUSAN_ENABLE_LIVE_TRANSPORT", "true")
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-only-key")
+    run = RunContext.start("backfill", datetime(2026, 8, 16, tzinfo=UTC))
+
+    class QuotaClient:
+        def get(self, url: str, params: dict[str, object]) -> HttpResult:
+            return HttpResult(
+                200,
+                json.dumps(
+                    {
+                        "Response": {
+                            "header": {
+                                "resultCode": "22",
+                                "resultMsg": "LIMITED NUMBER OF SERVICE REQUESTS EXCEEDS ERROR",
+                            }
+                        }
+                    }
+                ).encode(),
+                "application/json",
+            )
+
+    with pytest.raises(QuotaError) as caught:
+        load_transport(
+            db,
+            SourceRegistry((spec,)),
+            date(2026, 1, 1),
+            date(2026, 1, 31),
+            run,
+            client=QuotaClient(),
+        )
+
+    assert caught.value.source_months == ()
+    assert db.scalar(
+        """select status from source_status
+           where run_id = ? and source_id = ? order by checked_at desc limit 1""",
+        [run.run_id, spec.source_id],
+    ) == "QUOTA_EXCEEDED"
 
 
 def test_repeated_file_hash_is_auditable_without_duplicate_transport_facts(tmp_path: Path) -> None:

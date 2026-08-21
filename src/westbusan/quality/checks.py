@@ -774,14 +774,21 @@ def _transport_page_reconciliation_check(
         or page.page_no is None
         or page.page_size is None
     ]
-    by_window: dict[tuple[date | None, date | None], list[_ArtifactPage]] = (
-        defaultdict(list)
-    )
+    by_window: dict[
+        tuple[date | None, date | None, str], list[_ArtifactPage]
+    ] = defaultdict(list)
     for page in pages:
-        by_window[(page.requested_start, page.requested_end)].append(page)
+        by_window[
+            (page.requested_start, page.requested_end, page.request_signature)
+        ].append(page)
     page_outcomes: list[dict[str, object]] = []
-    for (requested_start, requested_end), grouped in sorted(
-        by_window.items(), key=lambda item: (item[0][0] or date.min, item[0][1] or date.min)
+    for (requested_start, requested_end, _request_signature_value), grouped in sorted(
+        by_window.items(),
+        key=lambda item: (
+            item[0][0] or date.min,
+            item[0][1] or date.min,
+            item[0][2],
+        ),
     ):
         totals = {
             page.total_count for page in grouped if page.total_count is not None

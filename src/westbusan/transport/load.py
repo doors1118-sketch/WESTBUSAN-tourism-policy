@@ -420,6 +420,7 @@ def _load_live(
             run,
             progress,
         )
+        raise
     except HttpStatusError as error:
         _status(
             db,
@@ -625,53 +626,70 @@ def _load_od(
             url=spec.endpoint_url,
             operation=None,
             required_parameters=parameters,
+            parameter_partitions={},
         )
         represented = 0
         explicit_empty = False
-        pages = iter(pager.iter_pages(pager_spec, parameters, include_empty=True))
-        while True:
-            progress()
-            try:
-                page = next(pages)
-            except StopIteration:
-                break
-            progress()
-            artifact = raw_store.write(
-                run,
-                spec.source_id,
-                {
-                    "operation": spec.operation,
-                    "partition": month,
-                    "parameters": parameters,
-                    "pageNo": page.page_no,
-                    "numOfRows": page.page_size,
-                    "schema_fingerprint": page.schema_fingerprint,
-                    "requested_start": month_start.isoformat(),
-                    "requested_end": (next_month - timedelta(days=1)).isoformat(),
-                },
-                page.raw_body,
-                ".json",
-                month_start,
+        parameter_sets: list[dict[str, object]] = [{}]
+        for key, values in spec.parameter_partitions.items():
+            parameter_sets = [
+                {**partition, key: value}
+                for partition in parameter_sets
+                for value in values
+            ]
+        for partition_parameters in parameter_sets:
+            request_parameters = {**parameters, **partition_parameters}
+            pages = iter(
+                pager.iter_pages(
+                    pager_spec, request_parameters, include_empty=True
+                )
             )
-            progress()
-            db.record_artifact(artifact)
-            artifacts += 1
-            if page.rows:
+            while True:
                 progress()
-                raw_store.write_rows(artifact, page.rows)
-            inserted, months = _persist_rows(
-                db,
-                spec.source_id,
-                page.rows,
-                artifact,
-                start,
-                end,
-                run,
-                progress=progress,
-            )
-            loaded += inserted
-            represented += months.get(month, 0)
-            explicit_empty = explicit_empty or not page.rows
+                try:
+                    page = next(pages)
+                except QuotaError as error:
+                    error.source_months = tuple(evidence)
+                    raise
+                except StopIteration:
+                    break
+                progress()
+                artifact = raw_store.write(
+                    run,
+                    spec.source_id,
+                    {
+                        "operation": spec.operation,
+                        "partition": month,
+                        "parameters": request_parameters,
+                        "pageNo": page.page_no,
+                        "numOfRows": page.page_size,
+                        "schema_fingerprint": page.schema_fingerprint,
+                        "requested_start": month_start.isoformat(),
+                        "requested_end": (next_month - timedelta(days=1)).isoformat(),
+                    },
+                    page.raw_body,
+                    ".json",
+                    month_start,
+                )
+                progress()
+                db.record_artifact(artifact)
+                artifacts += 1
+                if page.rows:
+                    progress()
+                    raw_store.write_rows(artifact, page.rows)
+                inserted, months = _persist_rows(
+                    db,
+                    spec.source_id,
+                    page.rows,
+                    artifact,
+                    start,
+                    end,
+                    run,
+                    progress=progress,
+                )
+                loaded += inserted
+                represented += months.get(month, 0)
+                explicit_empty = explicit_empty or not page.rows
         if represented or explicit_empty:
             evidence.append(
                 SourceMonthEvidence(

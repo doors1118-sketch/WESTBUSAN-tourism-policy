@@ -731,6 +731,114 @@ def test_data_go_transport_explicit_empty_uses_transport_fact_contract(
     assert reconciliation.actual["target_facts"] == 0
 
 
+def test_data_go_transport_reconciles_each_od_request_shard_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Different OD pairs may advertise different totals in the same month."""
+    db = _db(tmp_path)
+    run = RunContext(
+        uuid4(),
+        "backfill",
+        datetime(2026, 8, 20, tzinfo=UTC),
+        business_date=date(2026, 7, 31),
+    )
+    ensure_integrity_run(db, run.run_id, business_date=run.cutoff_date)
+    spec = replace(
+        SourceRegistry.load(Path("config/sources.yaml")).get(
+            "public_transport_od_usage"
+        ),
+        parameter_partitions={
+            "dptre_sgg_cd": ("26380",),
+            "arvl_sgg_cd": ("26440", "26530"),
+        },
+    )
+    record_inspection(
+        spec,
+        db,
+        operation="getMonthlyODUsageforGeneralBusesandUrbanRailways",
+        required_parameters={
+            "opr_ym": "{baseYm}",
+            "dptre_ctpv_cd": "26",
+            "arvl_ctpv_cd": "26",
+        },
+        response_row_path="Response.body.items.item",
+        portal_detail_url="https://www.data.go.kr/data/15142069/openapi.do",
+    )
+    monkeypatch.setenv("WESTBUSAN_ENABLE_LIVE_TRANSPORT", "true")
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-only-key")
+    template = json.loads(
+        Path("tests/fixtures/transport/od_row.json").read_text(encoding="utf-8")
+    )
+
+    class ShardedOdClient:
+        def get(self, url: str, params: dict[str, object]) -> HttpResult:
+            arrival = str(params["arvl_sgg_cd"])
+            row_count = 1 if arrival == "26440" else 2
+            rows = [
+                {
+                    **template,
+                    "opr_ym": str(params["opr_ym"]),
+                    "dptre_sgg_cd": str(params["dptre_sgg_cd"]),
+                    "arvl_sgg_cd": arrival,
+                    "arvl_sgg_nm": "강서구" if arrival == "26440" else "사상구",
+                    "arvl_emd_cd": f"{arrival}{index:05d}",
+                }
+                for index in range(row_count)
+            ]
+            return HttpResult(
+                200,
+                json.dumps(
+                    {
+                        "Response": {
+                            "header": {"resultCode": "200", "resultMsg": "SUCCESS"},
+                            "body": {
+                                "items": {"item": rows},
+                                "totalCount": row_count,
+                                "pageNo": 1,
+                                "numOfRows": 1000,
+                            },
+                        }
+                    }
+                ).encode(),
+                "application/json",
+            )
+
+    load_transport(
+        db,
+        SourceRegistry((spec,)),
+        date(2026, 7, 1),
+        date(2026, 7, 31),
+        run,
+        client=ShardedOdClient(),
+    )
+    fingerprint = db.scalar(
+        """select json_extract_string(request_json, '$.schema_fingerprint')
+           from raw_artifact where run_id = ? and source_id = ? limit 1""",
+        [run.run_id, spec.source_id],
+    )
+    approve_schema_baseline(
+        db,
+        spec.source_id,
+        "getMonthlyODUsageforGeneralBusesandUrbanRailways",
+        fingerprint,
+        approver="test-operator",
+        rationale="two reviewed OD request shards share one schema",
+    )
+
+    report = _run_quality_suite(db, run.run_id)
+    reconciliation = _check(
+        report, "raw_total_matches_staging", spec.source_id
+    )
+
+    assert reconciliation.status == "passed"
+    assert sorted(
+        (item["raw_total"], item["raw_rows"])
+        for item in reconciliation.actual["page_windows"]
+    ) == [(1, 1), (2, 2)]
+    assert reconciliation.actual["expected_facts"] == 3
+    assert reconciliation.actual["target_facts"] == 3
+
+
 def test_monthly_freshness_uses_run_business_cutoff_not_wall_clock(
     tmp_path: Path,
 ) -> None:
