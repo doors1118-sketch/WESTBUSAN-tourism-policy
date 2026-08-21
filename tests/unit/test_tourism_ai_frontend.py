@@ -61,6 +61,14 @@ def test_large_spatial_map_is_loaded_only_after_map_tab_is_selected() -> None:
     assert "신규 공급·리모델링·빈집 전환·콘텐츠 투자" in html
 
 
+def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
+    """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
+    html = _asset("index.html")
+
+    assert 'href="app.css?v=20260821-ui-v4"' in html
+    assert 'src="app.js?v=20260821-ui-v4"' in html
+
+
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
     """Catches the map losing its explicit, user-triggered AI explanation surface."""
     html = _asset("index.html")
