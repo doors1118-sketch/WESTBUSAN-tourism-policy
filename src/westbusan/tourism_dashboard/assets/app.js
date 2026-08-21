@@ -88,6 +88,25 @@ function renderDashboard(data) {
     indices.append(box);
   });
 
+  const supplyDonuts = document.querySelector("[data-supply-donuts]");
+  const facilityTotal = data.regions.reduce((sum, region) => sum + region.facilities, 0);
+  data.regions.forEach((region) => {
+    const facilityShare = region.facilities / facilityTotal * 100;
+    const card = node("article", "card region-donut-card");
+    const chart = node("div", "region-donut");
+    chart.style.setProperty("--region-color", colors[region.id]);
+    chart.style.setProperty("--region-share", `${facilityShare.toFixed(1)}%`);
+    chart.append(node("strong", "", `${facilityShare.toFixed(1)}%`), node("small", "", "부산 시설 비중"));
+    const details = node("div", "region-donut-details");
+    details.append(
+      node("h3", "", region.name),
+      node("p", "", `숙박시설 ${value(region.facilities, "개")} · 확인 객실 ${value(region.rooms, "실")}`),
+      node("p", "", `2021년 이후 신규 ${value(region.recentLicenseShare, "%")} · 20년+ ${value(region.old20Share, "%")}`),
+    );
+    card.append(chart, details);
+    supplyDonuts.append(card);
+  });
+
   const supplyBody = document.querySelector("[data-supply-table]");
   data.regions.forEach((region) => {
     const row = node("tr");

@@ -32,6 +32,17 @@ def test_dashboard_exposes_three_decision_questions_and_required_tabs() -> None:
         assert label in html
 
     assert 'data-room-donut' in html
+    assert 'data-supply-donuts' in html
+
+
+def test_dashboard_omits_unavailable_stay_duration_and_builds_region_donuts() -> None:
+    html = _asset("index.html")
+    script = _asset("app.js")
+
+    assert "체류시간" not in html
+    assert "체류시간" not in script
+    assert "region-donut-card" in script
+    assert "facilityShare" in script
 
 
 def test_large_spatial_map_is_loaded_only_after_map_tab_is_selected() -> None:
