@@ -325,6 +325,63 @@ def test_grid_district_mismatch_emits_one_redacted_exception(
     ]
 
 
+def test_reviewed_geocode_survives_cross_district_primary_grid_identity(
+    tmp_path: Path,
+) -> None:
+    """Catches border-cell primary district labels rejecting a reviewed point."""
+    db, base, _boundary, spatial, _owner = _database(tmp_path)
+    facility = _add_facility(db, base, facility_district="해운대구")
+    db.connection.execute(
+        """insert into dim_facility (
+               facility_id, canonical_name, district, region_group
+           ) values (?, '경계셀 검토 숙소', '해운대구', 'east')""",
+        [facility],
+    )
+    version = _add_registration(
+        db,
+        base,
+        facility,
+        source_id="official-reviewed-border",
+        source_record_id="B-1",
+        source_name="경계셀 검토 숙소",
+        district="해운대구",
+    )
+    db.connection.execute(
+        """update staging_license_revision
+           set projected_x=null, projected_y=null, coordinate_crs=null
+           where version_run_id=?""",
+        [version],
+    )
+    cache_key = "d" * 64
+    db.connection.execute(
+        """insert into spatial_geocode_cache (
+               address_hash, normalized_address, longitude, latitude,
+               provider_status, response_hash, observed_at, provider_district
+           ) values (?, '부산광역시 해운대구 경계로 1', ?, ?,
+                     'matched', ?, now(), '해운대구')""",
+        [cache_key, LONGITUDE, LATITUDE, "e" * 64],
+    )
+    db.connection.execute(
+        """insert into spatial_facility_location (
+               base_published_run_id, facility_id, address_hash, address_kind,
+               provider_status, provider_district, longitude, latitude,
+               evidence_json, observed_at
+           ) values (?, ?, ?, 'road', 'matched', '해운대구', ?, ?, '{}', now())""",
+        [base, facility, cache_key, LONGITUDE, LATITUDE],
+    )
+
+    assert build_facility_priority(db, spatial, lambda: None) == 1
+    assert db.scalar(
+        "select count(*) from mart_spatial_exception where spatial_run_id=?",
+        [spatial],
+    ) == 0
+    assert db.query(
+        """select district_name, grid_id from mart_facility_priority_current
+           where spatial_run_id=? and facility_id=?""",
+        [spatial, facility],
+    ) == [(DISTRICT, "g5174_500_765_337")]
+
+
 def test_distinct_subnanometre_coordinate_candidates_are_not_rounded_together(
     tmp_path: Path,
 ) -> None:

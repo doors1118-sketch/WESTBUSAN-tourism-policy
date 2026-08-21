@@ -605,7 +605,7 @@ def _build_facility_row(
     accepted: dict[tuple[float, float], tuple[ResolvedPoint, _Registration]] = {}
     rejected_codes: set[str] = set()
     location_rows = db.query(
-        """select longitude, latitude
+        """select longitude, latitude, provider_district
            from spatial_facility_location
            where base_published_run_id=? and facility_id=?
              and provider_status='matched'""",
@@ -614,7 +614,14 @@ def _build_facility_row(
     if len(location_rows) > 1:
         raise FacilityBuildError("facility has multiple reviewed location rows")
     if location_rows:
-        longitude, latitude = location_rows[0]
+        longitude, latitude, provider_district = location_rows[0]
+        if not isinstance(district, str) or provider_district != district:
+            return None, _exception_row(
+                run,
+                facility_id,
+                "DISTRICT_COORDINATE_MISMATCH",
+                {"reason": "reviewed_provider_district_disagrees"},
+            )
         resolution = resolve_facility_point(
             {
                 "longitude": longitude,
@@ -681,7 +688,10 @@ def _build_facility_row(
             "GRID_NOT_FOUND",
             {"grid_id": point.grid_id, "source_identities": source_identities},
         )
-    if not isinstance(district, str) or district != grid.district_name:
+    if (
+        not isinstance(district, str)
+        or (district != grid.district_name and not location_rows)
+    ):
         return None, _exception_row(
             run,
             facility_id,
