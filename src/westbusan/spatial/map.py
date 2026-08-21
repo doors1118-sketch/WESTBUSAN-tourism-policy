@@ -23,13 +23,11 @@ class PublicSpatialData:
 def render_map(bundle_data: PublicSpatialData) -> str:
     """Render one deterministic map with visible district policy priorities."""
     priorities = _district_policy_priorities(bundle_data.metadata)
-    metadata = dict(bundle_data.metadata)
-    metadata["district_policy_priorities"] = priorities
     payload = {
         "evidence": list(bundle_data.evidence),
         "facilities": bundle_data.facility_geojson,
         "grids": bundle_data.grid_geojson,
-        "metadata": metadata,
+        "metadata": bundle_data.metadata,
     }
     svg = _render_svg(
         bundle_data.grid_geojson, bundle_data.facility_geojson, priorities

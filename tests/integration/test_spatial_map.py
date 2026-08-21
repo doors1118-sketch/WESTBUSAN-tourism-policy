@@ -181,3 +181,18 @@ def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None
     assert payload["facilities"] == data.facility_geojson
     assert payload["evidence"] == list(data.evidence)
     assert "</script><x>" not in payload_text
+
+
+def test_default_priorities_do_not_mutate_manifest_bound_metadata() -> None:
+    """Catches renderer-only priority context changing the exported payload identity."""
+    data = _map_data()
+    data.metadata.pop("district_policy_priorities")
+
+    rendered = render_map(data)
+    payload_text = rendered.split(
+        '<script id="bundle-data" type="application/json">', 1
+    )[1].split("</script>", 1)[0]
+    payload = json.loads(payload_text)
+
+    assert payload["metadata"] == data.metadata
+    assert "정책지원 우선순위" in rendered
