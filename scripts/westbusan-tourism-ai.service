@@ -1,0 +1,27 @@
+[Unit]
+Description=West Busan Tourism AI policy insight service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=westbusan-tourism
+Group=westbusan-tourism
+EnvironmentFile=/etc/westbusan-tourism-ai/openai.env
+ExecStart=/opt/westbusan-tourism-ai/venv/bin/python -m uvicorn westbusan.tourism_ai.api:create_app_from_env --factory --host 127.0.0.1 --port 18081 --workers 1 --proxy-headers
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+ReadWritePaths=/var/cache/westbusan-tourism-ai
+
+[Install]
+WantedBy=multi-user.target
