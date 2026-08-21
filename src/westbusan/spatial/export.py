@@ -68,6 +68,7 @@ _GRID_FIELDS = (
     "composite_grade",
 )
 _GRID_OPPORTUNITY_FIELDS = (
+    "mapped_facility_count",
     "facility_density",
     "room_density",
     "aged_facility_share",
@@ -533,6 +534,25 @@ def _build_artifacts(
 def _load_grids(
     db: Database, identity: _PublicationIdentity
 ) -> list[dict[str, Any]]:
+    local_statistics = {
+        str(row[0]): {
+            "facility_count": int(row[1]),
+            "room_sum": float(row[2]) if row[2] is not None else None,
+            "room_known": int(row[3]),
+            "aged_count": int(row[4]),
+            "age_known": int(row[5]),
+        }
+        for row in db.query(
+            """select grid_id, count(*), sum(room_count), count(room_count),
+                      count(*) filter (
+                          where use_approval_age_years >= 20
+                      ),
+                      count(use_approval_age_years)
+               from mart_facility_priority_current
+               where spatial_run_id = ? group by grid_id order by grid_id""",
+            [identity.spatial_run_id],
+        )
+    }
     rows = db.query(
         """select mart.grid_id, mart.district_code, mart.district_name,
                   mart.primary_dong_code, mart.primary_dong_name, mart.period,
@@ -590,15 +610,31 @@ def _load_grids(
             "composite_grade",
             allowed=_GRADE_VALUES,
         )
+        local = local_statistics.get(
+            str(values["grid_id"]),
+            {
+                "facility_count": 0,
+                "room_sum": None,
+                "room_known": 0,
+                "aged_count": 0,
+                "age_known": 0,
+            },
+        )
+        facility_count = int(local["facility_count"] or 0)
+        values["mapped_facility_count"] = facility_count
         values["facility_density"] = (
-            float(values["physical_facility_count"]) / area_km2
+            None if facility_count == 0 else facility_count / area_km2
         )
         values["room_density"] = (
             None
-            if values["room_sum"] is None
-            else float(values["room_sum"]) / area_km2
+            if not local["room_known"] or local["room_sum"] is None
+            else float(local["room_sum"]) / area_km2
         )
-        values["aged_facility_share"] = values["age_20y_share"]
+        values["aged_facility_share"] = (
+            None
+            if not local["age_known"]
+            else float(local["aged_count"]) / float(local["age_known"])
+        )
         values["geometry"] = geometry
         result.append(values)
     comparable_supply = sorted(
@@ -617,7 +653,7 @@ def _load_grids(
             if demand_score is None or supply_score is None
             else round(max(0.0, demand_score - supply_score), 1)
         )
-        recommendation = recommend_investment(
+        recommendation = None if values["facility_density"] is None else recommend_investment(
             OpportunityMetrics(
                 demand_score=demand_score,
                 room_supply_score=supply_score,

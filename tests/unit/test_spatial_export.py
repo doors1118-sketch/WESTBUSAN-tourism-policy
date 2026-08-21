@@ -235,6 +235,7 @@ def test_spatial_bundle_has_exact_files_schemas_counts_and_hashes(
     assert len(grids["features"]) == 1
     assert len(facilities["features"]) == 2
     opportunity = grids["features"][0]["properties"]
+    assert opportunity["mapped_facility_count"] == 2
     assert opportunity["facility_density"] > 0
     assert opportunity["room_density"] > 0
     assert opportunity["aged_facility_share"] == 1.0
@@ -278,6 +279,28 @@ def test_spatial_bundle_has_exact_files_schemas_counts_and_hashes(
         "quality_band",
         "evidence_json",
     ]
+
+
+def test_opportunity_density_uses_reviewed_points_when_stock_is_unobserved(
+    tmp_path: Path,
+) -> None:
+    """Catches nullable district stock hiding known local accommodation points."""
+    db, _settings_value, spatial_run_id = _published_fixture(tmp_path)
+    identity = spatial_export._load_current_identity(db)
+    db.connection.execute(
+        """update mart_grid_month set
+               physical_facility_count=null, room_sum=null,
+               age_sample_size=null, age_20y_share=null
+           where spatial_run_id=?""",
+        [spatial_run_id],
+    )
+
+    grids = spatial_export._load_grids(db, identity)
+
+    assert grids[0]["mapped_facility_count"] == 2
+    assert grids[0]["facility_density"] > 0
+    assert grids[0]["room_density"] > 0
+    assert grids[0]["aged_facility_share"] == 1.0
 
 
 def test_public_bundle_excludes_sensitive_and_internal_fields(tmp_path: Path) -> None:

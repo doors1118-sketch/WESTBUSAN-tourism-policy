@@ -114,7 +114,7 @@ def _render_svg(
                 context=_attribute(properties.get("district_context_rating")),
                 gap=_attribute(properties.get("tourism_supply_gap")),
                 density=_attribute(properties.get("facility_density")),
-                aged_share=_attribute(properties.get("age_20y_share")),
+                aged_share=_attribute(properties.get("aged_facility_share")),
                 recommendation=_attribute(properties.get("recommendation_kind")),
             )
         )
