@@ -144,6 +144,14 @@ class InsightRequest(BaseModel):
         return self
 
 
+class ComprehensiveReportRequest(BaseModel):
+    """The complete browser contract for the publication-bound report."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    scope: Literal["west"]
+
+
 class EvidenceMetric(BaseModel):
     """One server-owned metric that a finding may cite."""
 

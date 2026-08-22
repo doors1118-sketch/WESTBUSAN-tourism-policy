@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from pydantic import ValidationError
 
 from westbusan.tourism_ai.models import InsightRequest, InsightResponse
+from westbusan.tourism_ai.report_models import ComprehensiveReportResponse
 
 
 class DailyLimitExceeded(RuntimeError):
@@ -67,6 +68,31 @@ class InsightCache:
                 self._write(path, response)
             return response
 
+    def get_or_generate_report(
+        self,
+        *,
+        publication_identity: dict[str, str],
+        model: str,
+        prompt_version: str,
+        client_id: str,
+        generate: Callable[[], ComprehensiveReportResponse],
+    ) -> ComprehensiveReportResponse:
+        key = _report_cache_key(
+            publication_identity, model=model, prompt_version=prompt_version
+        )
+        lock = self._lock_for(key)
+        with lock:
+            path = self.root / f"report-{key}.json"
+            cached = self._read_report(path)
+            if cached is not None:
+                return cached.model_copy(update={"cached": True})
+            self._enforce_client_cooldown(client_id)
+            self._consume_daily_generation()
+            response = generate()
+            if response.source == "openai":
+                self._atomic_json(path, response.model_dump(mode="json"))
+            return response
+
     def _lock_for(self, key: str) -> threading.Lock:
         with self._guard:
             return self._key_locks.setdefault(key, threading.Lock())
@@ -109,6 +135,17 @@ class InsightCache:
     def _write(self, path: Path, response: InsightResponse) -> None:
         self._atomic_json(path, response.model_dump(mode="json"))
 
+    def _read_report(self, path: Path) -> ComprehensiveReportResponse | None:
+        if not path.exists():
+            return None
+        try:
+            return ComprehensiveReportResponse.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
+        except (OSError, ValidationError, ValueError):
+            self._quarantine(path)
+            return None
+
     def _atomic_json(self, path: Path, payload: object) -> None:
         temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
         try:
@@ -138,6 +175,19 @@ def _cache_key(request: InsightRequest, *, model: str, prompt_version: str) -> s
             if request.selection is not None
             else None
         ),
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _report_cache_key(
+    publication_identity: dict[str, str], *, model: str, prompt_version: str
+) -> str:
+    identity = {
+        "model": model,
+        "prompt_version": prompt_version,
+        "publication_identity": publication_identity,
+        "report_contract": "west-comprehensive-eight-section-v1",
     }
     canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
