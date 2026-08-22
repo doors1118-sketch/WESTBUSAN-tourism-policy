@@ -72,6 +72,178 @@ function renderBarGroup(target, regions, key, suffix, ceiling) {
   });
 }
 
+const districtMetricDefinitions = [
+  { label: "숙박업체", key: "facilities", suffix: "개소", note: "영업 중 시설 수" },
+  { label: "확인 객실", key: "rooms", suffix: "실", note: "객실 수 확인 시설 기준" },
+  { label: "객실 자료 확인률", key: "roomCoverageShare", suffix: "%", note: "전체 시설 중 객실 수 확인 비율" },
+  { label: "시설당 객실 중앙값", key: "roomMedian", suffix: "실", note: "시설 규모의 중앙 수준" },
+  { label: "일평균 방문수요", key: "visitorDailyAverage", suffix: "명", note: "외지인+외국인 최근 355일 평균" },
+  { label: "객실 100실당 방문 압력", key: "demandPer100Rooms", suffix: "", note: "숙박객·점유율이 아닌 공급 검토용 지표" },
+  { label: "관광숙박업 등록시설", key: "tourismFacilityShare", suffix: "%", note: "전체 숙박시설 대비 시설 수 비율" },
+  { label: "외국인 수용 등록", key: "foreignCapableShare", suffix: "%", note: "관광숙박·외국인관광 도시민박" },
+  { label: "건축연령 20년 이상", key: "old20Share", suffix: "%", note: "건축물대장 사용승인일부터 산정" },
+  { label: "2021년 이후 신규 진입", key: "recentLicenseShare", suffix: "%", note: "시설별 최초 인허가일 기준" },
+  { label: "관광소비 원천지표", key: "consumptionIndex", suffix: "", note: "2026.07 지역 비교용·원화 아님" },
+  { label: "3박 방문 원천지표", key: "stay3Index", suffix: "", note: "2026.07 지역 비교용·실제 명수 아님" },
+];
+
+const districtChartDefinitions = [
+  { label: "숙박업체", key: "facilities", suffix: "개소" },
+  { label: "확인 객실", key: "rooms", suffix: "실" },
+  { label: "방문수요", key: "visitorDailyAverage", suffix: "명" },
+  { label: "수요압력", key: "demandPer100Rooms", suffix: "" },
+  { label: "관광숙박", key: "tourismFacilityShare", suffix: "%" },
+  { label: "노후시설", key: "old20Share", suffix: "%" },
+  { label: "신규 진입", key: "recentLicenseShare", suffix: "%" },
+];
+
+function renderWestDistrictSummary(data, selectedDistrict, onSelect) {
+  const target = document.querySelector("[data-west-district-summary]");
+  if (!target) return;
+  clear(target);
+  data.westDistricts.forEach((district) => {
+    const card = node("button", `card district-summary-card${district.id === selectedDistrict.id ? " active" : ""}`);
+    card.type = "button";
+    card.append(
+      node("span", "district-summary-rank", `우선순위 ${district.rank}`),
+      node("h3", "", district.name),
+      node("strong", "", `${value(district.facilities, "개소")} · ${value(district.rooms, "실")}`),
+      node("p", "", `일평균 ${value(district.visitorDailyAverage, "명")} · 객실100실당 ${value(district.demandPer100Rooms)}`),
+      node("small", "", district.priority),
+    );
+    card.addEventListener("click", () => onSelect(district));
+    target.append(card);
+  });
+}
+
+function renderWestDistrictChart(data, metric, selectedDistrict, onSelect) {
+  const target = document.querySelector("[data-west-district-chart]");
+  if (!target) return;
+  clear(target);
+  const benchmarkValue = data.benchmarkDistrict[metric.key];
+  const scale = Math.max(benchmarkValue || 0, ...data.westDistricts.map((district) => district[metric.key] || 0), 1);
+  const benchmark = node("div", "district-chart-benchmark");
+  benchmark.append(
+    node("span", "", "해운대구 기준"),
+    node("strong", "", value(benchmarkValue, metric.suffix)),
+  );
+  target.append(benchmark);
+  data.westDistricts.forEach((district) => {
+    const row = node("button", `district-chart-bar${district.id === selectedDistrict.id ? " active" : ""}`);
+    row.type = "button";
+    const track = node("span", "district-chart-track");
+    const fill = node("i", "district-chart-fill");
+    fill.style.width = `${Math.max(2, (district[metric.key] / scale) * 100)}%`;
+    track.append(fill);
+    row.append(node("strong", "", district.name), track, node("span", "district-chart-value", value(district[metric.key], metric.suffix)));
+    row.addEventListener("click", () => onSelect(district));
+    target.append(row);
+  });
+}
+
+function districtProfileCard(district, role) {
+  const card = node("article", `card district-profile-card ${role}`);
+  const heading = node("div", "district-profile-heading");
+  heading.append(node("span", "district-role", role === "selected" ? "선택 자치구" : "비교 기준"), node("h3", "", district.name));
+  const primary = node("div", "district-profile-primary");
+  primary.append(
+    node("strong", "", value(district.facilities, "개소")),
+    node("span", "", `확인 객실 ${value(district.rooms, "실")}`),
+  );
+  card.append(
+    heading,
+    primary,
+    node("p", "", `일평균 방문수요 ${value(district.visitorDailyAverage, "명")} · 객실100실당 ${value(district.demandPer100Rooms)}`),
+  );
+  return card;
+}
+
+function renderDistrictDetail(selected, benchmark) {
+  const profile = document.querySelector("[data-district-profile]");
+  const comparison = document.querySelector("[data-district-comparison]");
+  const policy = document.querySelector("[data-district-policy]");
+  if (!profile || !comparison || !policy) return;
+  clear(profile);
+  clear(comparison);
+  clear(policy);
+  profile.append(districtProfileCard(selected, "selected"), node("div", "district-versus", "VS"), districtProfileCard(benchmark, "benchmark"));
+
+  districtMetricDefinitions.forEach((metric) => {
+    const selectedValue = selected[metric.key];
+    const benchmarkValue = benchmark[metric.key];
+    const scale = Math.max(selectedValue || 0, benchmarkValue || 0, 1);
+    const row = node("div", "district-comparison-row");
+    const label = node("div", "district-metric-label");
+    label.append(node("strong", "", metric.label), node("small", "", metric.note));
+    const selectedBar = node("div", "district-metric-side selected");
+    const selectedTrack = node("div", "district-metric-track");
+    const selectedFill = node("i", "district-metric-fill");
+    selectedFill.style.width = `${Math.max(2, (selectedValue / scale) * 100)}%`;
+    selectedTrack.append(selectedFill);
+    selectedBar.append(node("span", "", selected.name), node("strong", "", value(selectedValue, metric.suffix)), selectedTrack);
+    const benchmarkBar = node("div", "district-metric-side benchmark");
+    const benchmarkTrack = node("div", "district-metric-track");
+    const benchmarkFill = node("i", "district-metric-fill");
+    benchmarkFill.style.width = `${Math.max(2, (benchmarkValue / scale) * 100)}%`;
+    benchmarkTrack.append(benchmarkFill);
+    benchmarkBar.append(node("span", "", benchmark.name), node("strong", "", value(benchmarkValue, metric.suffix)), benchmarkTrack);
+    row.append(label, selectedBar, benchmarkBar);
+    comparison.append(row);
+  });
+
+  const pressureRatio = benchmark.demandPer100Rooms ? selected.demandPer100Rooms / benchmark.demandPer100Rooms : null;
+  policy.append(
+    node("span", "district-policy-label", "정책 검토 포인트"),
+    node("h3", "", `${selected.name} · ${selected.priority}`),
+    node("p", "", `${selected.name}의 객실 100실당 방문 압력은 해운대구의 ${value(pressureRatio, "배")}입니다. 관광숙박업 등록 ${value(selected.tourismFacilityShare, "%")}, 외국인 수용 등록 ${value(selected.foreignCapableShare, "%")}, 2021년 이후 신규 진입 ${value(selected.recentLicenseShare, "%")}를 함께 고려해 ${selected.priority}을 우선 검토할 수 있습니다.`),
+    node("small", "", "정책·투자 검토용 비교이며 개별 사업의 수익성·법적 적합성 판단은 아닙니다."),
+  );
+}
+
+function initializeDistrictDetail(data) {
+  const tabs = document.querySelector("[data-west-district-tabs]");
+  const chartMetrics = document.querySelector("[data-district-chart-metrics]");
+  if (!tabs || !chartMetrics || !data.westDistricts?.length || !data.benchmarkDistrict) return;
+  clear(tabs);
+  clear(chartMetrics);
+  let selectedDistrict = data.westDistricts[0];
+  let selectedMetric = districtChartDefinitions[0];
+  const districtButtons = new Map();
+
+  const selectDistrict = (district) => {
+    selectedDistrict = district;
+    districtButtons.forEach((button, districtId) => {
+      const selected = districtId === district.id;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-selected", selected ? "true" : "false");
+    });
+    renderWestDistrictSummary(data, selectedDistrict, selectDistrict);
+    renderWestDistrictChart(data, selectedMetric, selectedDistrict, selectDistrict);
+    renderDistrictDetail(selectedDistrict, data.benchmarkDistrict);
+  };
+
+  data.westDistricts.forEach((district, index) => {
+    const button = node("button", index === 0 ? "active" : "", district.name);
+    button.type = "button";
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-selected", index === 0 ? "true" : "false");
+    button.addEventListener("click", () => selectDistrict(district));
+    districtButtons.set(district.id, button);
+    tabs.append(button);
+  });
+  districtChartDefinitions.forEach((metric, index) => {
+    const button = node("button", index === 0 ? "active" : "", metric.label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      selectedMetric = metric;
+      chartMetrics.querySelectorAll("button").forEach((item) => item.classList.toggle("active", item === button));
+      renderWestDistrictChart(data, selectedMetric, selectedDistrict, selectDistrict);
+    });
+    chartMetrics.append(button);
+  });
+  selectDistrict(selectedDistrict);
+}
+
 function renderMonthlyTrend(data) {
   const chart = document.querySelector("[data-trend-chart]");
   const summary = document.querySelector("[data-trend-summary]");
@@ -265,20 +437,7 @@ function renderDashboard(data) {
   });
   document.querySelector("[data-core-evidence]").textContent = `관광숙박 ${west.tourismFacilityShare}% · 외국인수용 ${west.foreignCapableShare}% · 신규 ${west.recentLicenseShare}%`;
 
-  const tourism = document.querySelector("[data-tourism-kpis]");
-  tourism.append(
-    kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "일별 방문인원 평균 · 최근 355일"),
-    kpi("방문수요 대비 객실공급 압력", value(west.demandPer100Rooms), "숙박객·객실점유율이 아닌 정책 검토용 파생지표"),
-    kpi("소비효율 원천지표", value(west.consumptionIndex), "2026-07 · 통화금액 아님"),
-    kpi("3박 방문 원천지표", value(west.stay3Index), "2026-07 · 실제 명수 아님")
-  );
-  renderBarGroup(document.querySelector("[data-demand-bars]"), data.regions, "visitorDailyAverage", "", 1000000);
-  const indices = document.querySelector("[data-source-indices]");
-  data.regions.forEach((region) => {
-    const box = node("div", "source-index");
-    box.append(node("span", "", region.name), node("strong", "", `${region.consumptionIndex} / ${region.stay3Index}`), node("small", "", "소비효율 / 3박 방문"));
-    indices.append(box);
-  });
+  initializeDistrictDetail(data);
 
   const supplyDonuts = document.querySelector("[data-supply-donuts]");
   const facilityTotal = data.regions.reduce((sum, region) => sum + region.facilities, 0);

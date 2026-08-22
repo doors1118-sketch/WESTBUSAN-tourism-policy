@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-metric-explain-v29"' in html
-    assert 'src="app.js?v=20260822-metric-explain-v29"' in html
+    assert 'href="app.css?v=20260822-district-detail-v30"' in html
+    assert 'src="app.js?v=20260822-district-detail-v30"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -161,8 +161,8 @@ def test_overview_separates_absolute_demand_from_supply_pressure() -> None:
     script = _asset("app.js")
 
     assert 'kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage)' in script
-    assert 'kpi("방문수요 대비 객실공급 압력", value(west.demandPer100Rooms)' in script
-    assert "숙박객·객실점유율이 아닌 정책 검토용 파생지표" in script
+    assert '{ label: "객실 100실당 방문 압력", key: "demandPer100Rooms"' in script
+    assert "숙박객·점유율이 아닌 공급 검토용 지표" in script
     assert 'kpi("객실 100실당 방문수요"' not in script
 
 
@@ -215,6 +215,55 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     assert "white-space:nowrap" in _asset("app.css")
     assert "text-overflow:ellipsis" in _asset("app.css")
     assert "관광숙박·외국인관광 도시민박" in overview_block
+
+
+def test_tourism_tab_is_west_district_detail_with_haeundae_benchmark() -> None:
+    html = _asset("index.html")
+    script = _asset("app.js")
+    document = json.loads(_asset("data.json"))
+
+    assert '>서부산 자치구 현황</button>' in html
+    assert "관광 종합현황</button>" not in html
+    tourism_panel = html.split('data-tab-panel="tourism"', 1)[1].split('data-tab-panel="supply"', 1)[0]
+    for marker in (
+        "data-west-district-summary",
+        "data-district-chart-metrics",
+        "data-west-district-chart",
+        "data-west-district-tabs",
+        "data-district-profile",
+        "data-district-comparison",
+        "data-district-policy",
+    ):
+        assert marker in tourism_panel
+    assert "data-tourism-kpis" not in tourism_panel
+    assert "data-demand-bars" not in tourism_panel
+    assert "data-source-indices" not in tourism_panel
+    assert "해운대구를 동일 기준 비교값으로 사용" in tourism_panel
+
+    assert "function renderDistrictDetail" in script
+    assert "function renderWestDistrictSummary" in script
+    assert "function renderWestDistrictChart" in script
+    assert "district-chart-bar" in script
+    assert "district-comparison-row" in script
+    assert "benchmarkDistrict" in script
+    assert len(document["westDistricts"]) == 4
+    assert document["benchmarkDistrict"]["name"] == "해운대구"
+    for district in [*document["westDistricts"], document["benchmarkDistrict"]]:
+        for field in (
+            "facilities",
+            "rooms",
+            "roomCoverageShare",
+            "roomMedian",
+            "visitorDailyAverage",
+            "demandPer100Rooms",
+            "tourismFacilityShare",
+            "foreignCapableShare",
+            "old20Share",
+            "recentLicenseShare",
+            "consumptionIndex",
+            "stay3Index",
+        ):
+            assert field in district
 
 
 def test_facility_mix_wraps_only_between_complete_category_chips() -> None:
