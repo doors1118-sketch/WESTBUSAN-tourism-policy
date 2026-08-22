@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-compact-trend-v27"' in html
-    assert 'src="app.js?v=20260822-compact-trend-v27"' in html
+    assert 'href="app.css?v=20260822-chart-inset-v28"' in html
+    assert 'src="app.js?v=20260822-chart-inset-v28"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -341,6 +341,7 @@ def test_overview_contains_readable_demand_and_entry_combo_chart() -> None:
     assert '"trend-entry-panel"' in script
     assert '"trend-west-entry-label"' in script
     assert "const height = 390;" in script
+    assert "const xInset = 32;" in script
     assert 'data-trend-region' not in script
     assert "visitorDailyAverage" in script
     assert "newActiveFacilities" in script

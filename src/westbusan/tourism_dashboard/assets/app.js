@@ -102,6 +102,8 @@ function renderMonthlyTrend(data) {
   const demandPlot = { top: 46, height: 140 };
   const entryPlot = { top: 252, height: 62 };
   const plotWidth = width - frame.left - frame.right;
+  const xInset = 32;
+  const dataWidth = plotWidth - xInset * 2;
   const visitors = series.flatMap((item) => [item.west.visitorDailyAverage, item.east.visitorDailyAverage]);
   const visitorMin = Math.min(...visitors);
   const visitorMax = Math.max(...visitors);
@@ -109,7 +111,7 @@ function renderMonthlyTrend(data) {
   const visitorFloor = Math.max(0, visitorMin - visitorPadding);
   const visitorCeiling = visitorMax + visitorPadding;
   const entryMax = Math.max(1, ...series.flatMap((item) => [item.west.newActiveFacilities, item.east.newActiveFacilities]));
-  const x = (index) => frame.left + (plotWidth * index) / (series.length - 1);
+  const x = (index) => frame.left + xInset + (dataWidth * index) / (series.length - 1);
   const demandY = (amount) => demandPlot.top + demandPlot.height * (1 - ((amount - visitorFloor) / (visitorCeiling - visitorFloor)));
   const entryY = (amount) => entryPlot.top + entryPlot.height * (1 - amount / entryMax);
 
