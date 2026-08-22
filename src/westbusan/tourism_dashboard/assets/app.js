@@ -350,7 +350,7 @@ function renderDistrictPolicyInsight(selected, insight) {
     node("span", "district-policy-label", "AI 정책검토 포인트"),
     node("span", "district-policy-cache", insight.cached ? "저장 분석" : "새 AI 분석"),
   );
-  const option = insight.policy_options?.[0];
+  const option = insight.policy_options && insight.policy_options[0];
   policy.append(meta, node("h3", "", `${selected.name} · ${insight.headline}`), node("p", "", insight.executive_summary));
   if (option) {
     const action = node("div", "district-policy-action");
@@ -390,7 +390,7 @@ async function loadDistrictInsight(data, district, benchmark) {
 function initializeDistrictDetail(data) {
   const tabs = document.querySelector("[data-west-district-tabs]");
   const chartMetrics = document.querySelector("[data-district-chart-metrics]");
-  if (!tabs || !chartMetrics || !data.westDistricts?.length || !data.benchmarkDistrict) return;
+  if (!tabs || !chartMetrics || !data.westDistricts || !data.westDistricts.length || !data.benchmarkDistrict) return;
   clear(tabs);
   clear(chartMetrics);
   let selectedDistrict = data.westDistricts[0];
@@ -438,7 +438,7 @@ function renderMonthlyTrend(data) {
   const chart = document.querySelector("[data-trend-chart]");
   const summary = document.querySelector("[data-trend-summary]");
   const tooltip = document.querySelector("[data-trend-tooltip]");
-  if (!chart || !summary || !tooltip || !data.monthlyTrends?.length) return;
+  if (!chart || !summary || !tooltip || !data.monthlyTrends || !data.monthlyTrends.length) return;
 
   const series = data.monthlyTrends.map((month) => ({ period: month.period, west: month.west, east: month.east }));
   const latest = series.at(-1);
@@ -693,6 +693,12 @@ document.querySelectorAll("[data-tab-target]").forEach((button) => {
       const mapFrame = document.querySelector("[data-map-src]");
       if (mapFrame && !mapFrame.getAttribute("src")) {
         mapFrame.setAttribute("src", mapFrame.dataset.mapSrc);
+      }
+    }
+    if (target === "vacant") {
+      const vacantMapFrame = document.querySelector("[data-vacant-map-src]");
+      if (vacantMapFrame && !vacantMapFrame.getAttribute("src")) {
+        vacantMapFrame.setAttribute("src", vacantMapFrame.dataset.vacantMapSrc);
       }
     }
     document.querySelectorAll("[data-tab-target]").forEach((item) => {

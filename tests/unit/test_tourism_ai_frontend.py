@@ -213,8 +213,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-priority-sites-v39"' in html
-    assert 'src="app.js?v=20260822-priority-sites-v39"' in html
+    assert 'href="app.css?v=20260822-vacant-hubs-v40"' in html
+    assert 'src="app.js?v=20260822-vacant-hubs-v40"' in html
 
 
 def test_investment_information_can_request_ai_explanation_for_priority_map() -> None:
@@ -643,10 +643,16 @@ def test_overview_contains_readable_demand_and_entry_combo_chart() -> None:
     assert "@media(max-width:760px)" in stylesheet
 
 
-def test_vacant_house_tab_does_not_embed_exact_locations() -> None:
+def test_vacant_house_tab_lazy_loads_exact_internal_map_without_embedding_source() -> None:
     html = _asset("index.html")
+    script = _asset("app.js")
     document = json.loads(_asset("data.json"))
 
-    assert "정확주소는 권한이 있는 내부 상세화면에서만 제공" in html
+    assert 'data-vacant-map-src="vacant-map/index.html?v=20260822-vacant-hubs-v40"' in html
+    assert '<iframe src="vacant-map/index.html"' not in html
+    assert 'target === "vacant"' in script
+    assert "연속 필지군" in html
+    assert "빈집 개발 후보지 10개" in html
+    assert "주소·지번 분석" in html
     assert "vacantHouses" not in document
     assert "parcel" not in json.dumps(document).lower()

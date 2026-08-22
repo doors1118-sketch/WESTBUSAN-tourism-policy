@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>서부산 빈집 연속필지군 개발후보 지도</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="vacant-map.css">
+</head>
+<body>
+  <header class="map-header">
+    <div><span>WEST BUSAN VACANT-HOUSE INTELLIGENCE</span><h1>빈집 연속필지군 개발후보 지도</h1></div>
+    <p>원천 기준일 <strong>{{SOURCE_DATE}}</strong></p>
+  </header>
+  <main>
+    <aside class="map-sidebar">
+      <h2>빈집 개발 후보지 10개</h2>
+      <p>서부산 4개 구에서 3개 이상 빈집 필지가 경계를 직접 맞댄 연속 필지군만 순위를 표시합니다.</p>
+      <label>자치구<select id="district-filter"><option value="">서부산 전체</option></select></label>
+      <ol id="candidate-list" class="candidate-list"></ol>
+      <div class="legend"><strong>확대 단계</strong><span><i class="hub"></i>후보 연속필지군</span><span><i class="parcel"></i>개별 지적필지</span><span><i class="house"></i>개별 빈집 위치</span></div>
+    </aside>
+    <section class="map-workspace">
+      <div id="vacant-slippy-map" data-map-center="129.035,35.155" data-map-zoom="11"
+        data-min-zoom="7" data-max-zoom="19"
+        data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png">
+        <div class="zoom-guide" id="zoom-guide">후보 번호를 선택하면 연속필지군으로 확대됩니다.</div>
+      </div>
+      <section class="selected-detail" id="selected-detail" aria-live="polite">
+        <div><span>SELECTED VACANT HUB</span><h2 id="detail-title">서부산 빈집 연속필지군</h2><p id="detail-summary">지도 또는 후보 목록을 선택하면 필지 수와 상세 빈집 주소를 확인할 수 있습니다.</p></div>
+        <div class="detail-kpis"><article><span>후보순위</span><strong id="detail-rank">—</strong></article><article><span>연속필지</span><strong id="detail-parcels">—</strong></article><article><span>개별 빈집</span><strong id="detail-houses">—</strong></article><article><span>필지면적</span><strong id="detail-area">—</strong></article></div>
+        <div id="house-list" class="house-list"></div>
+      </section>
+      <section class="address-analysis">
+        <div><span>LOT ADDRESS REVIEW</span><h2>주소·지번 분석</h2><p>입력한 부산 주소가 후보 연속필지군 내부·인접·고립 빈집인지 현재 게시본으로 확인합니다.</p></div>
+        <form id="address-analysis-form"><input name="address" id="address-input" maxlength="160" required placeholder="부산광역시 북구 구포동 123-4"><button type="submit">빈집 거점개발 판정</button></form>
+        <div id="address-analysis-result" hidden></div>
+      </section>
+      <p class="map-note">지도 점은 지적필지 내부 대표점입니다. 관광숙박 전환은 토지이용·건축·소방·위생·소유관계와 사업성을 별도 검토해야 합니다.</p>
+    </section>
+  </main>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="vacant-map.js"></script>
+</body>
+</html>
