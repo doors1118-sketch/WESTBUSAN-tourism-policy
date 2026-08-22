@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="관광수요를 부산의 체류·숙박·소비로 연결하기 위한 정책 분석 대시보드">
   <title>부산 관광경제 활력 분석</title>
-  <link rel="stylesheet" href="app.css?v=20260822-metric-tooltips-v23">
+  <link rel="stylesheet" href="app.css?v=20260822-demand-entry-trend-v24">
 </head>
 <body>
   <header class="topbar">
@@ -46,6 +46,23 @@
     <section class="tab-panel active" data-tab-panel="overview" id="overview">
       <div class="section-head"><div><span>OVERVIEW</span><h2>한눈에 보는 서부산 체류전환 격차</h2></div><p data-load-state>운영 DB 지표를 불러오는 중입니다.</p></div>
       <div class="kpi-grid" data-overview-kpis></div>
+      <article class="card trend-card" data-monthly-trend>
+        <header class="trend-header">
+          <div><span class="trend-eyebrow">12 MONTH TREND</span><h3>월별 방문수요·신규 숙박업체 진입 추이</h3><p>최근 12개 완결월 · 외지인+외국인 일평균 방문수요와 현재 영업시설의 최초 인허가 월</p></div>
+          <div class="trend-controls" role="group" aria-label="권역 선택">
+            <button type="button" class="active" aria-pressed="true" data-trend-region="west">서부산</button>
+            <button type="button" aria-pressed="false" data-trend-region="east">동부산</button>
+            <button type="button" aria-pressed="false" data-trend-region="other">기타 부산</button>
+          </div>
+        </header>
+        <div class="trend-summary" data-trend-summary></div>
+        <div class="trend-chart-shell">
+          <div class="trend-legend"><span class="demand">일평균 방문수요</span><span class="entry">월별 신규 진입</span></div>
+          <div class="trend-chart" data-trend-chart role="img" aria-label="월별 일평균 방문수요 선과 신규 숙박업체 진입 막대 비교"></div>
+          <div class="trend-tooltip" data-trend-tooltip hidden></div>
+        </div>
+        <footer class="trend-footnote"><span>방문수요 선축은 월별 변화를 보기 위해 선택 권역 범위에 맞춰 확대합니다.</span><span>신규 진입은 현재 영업 중 시설의 최초 인허가월 기준이며 전체 과거 개업 건수는 아닙니다.</span></footer>
+      </article>
       <div class="two-column">
         <article class="card"><div class="card-head"><h3>권역별 핵심지표 비교</h3><span>서부산 · 동부산 · 기타</span></div><div class="region-comparison"><div class="room-donut" data-room-donut aria-label="권역별 확인 객실 구성"><div><strong>확인 객실</strong><span>권역 구성</span></div></div><div class="region-summary" data-region-summary></div></div></article>
         <article class="card diagnosis"><span class="label">핵심 진단</span><h3>관광객 부족보다<br>체류전환 구조의 부족</h3><p>서부산은 현재 확인 객실 대비 방문 압력이 높지만 관광숙박·외국인 수용 등록과 최근 신규 진입은 동부산보다 낮습니다.</p><div class="evidence-line" data-core-evidence></div></article>
@@ -127,6 +144,6 @@
   </main>
 
   <footer><span>부산광역시 관광정책 내부 검토용</span><span>데이터 기준일 <strong data-as-of>—</strong></span></footer>
-  <script src="app.js?v=20260822-metric-tooltips-v23"></script>
+  <script src="app.js?v=20260822-demand-entry-trend-v24"></script>
 </body>
 </html>

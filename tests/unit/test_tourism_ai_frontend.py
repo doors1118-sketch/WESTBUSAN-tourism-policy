@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-metric-tooltips-v23"' in html
-    assert 'src="app.js?v=20260822-metric-tooltips-v23"' in html
+    assert 'href="app.css?v=20260822-demand-entry-trend-v24"' in html
+    assert 'src="app.js?v=20260822-demand-entry-trend-v24"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -281,6 +281,71 @@ def test_overview_comparison_badges_are_pinned_to_each_card_bottom() -> None:
 
     assert "[data-overview-kpis] .kpi{display:flex;flex-direction:column}" in stylesheet
     assert "[data-overview-kpis] .kpi .delta{align-self:flex-start;margin-top:auto}" in stylesheet
+
+
+def test_monthly_trend_data_has_12_complete_months_and_explicit_semantics() -> None:
+    document = json.loads(_asset("data.json"))
+    trends = document["monthlyTrends"]
+
+    assert len(trends) == 12
+    assert trends[0]["period"] == "2025-07"
+    assert trends[-1]["period"] == "2026-06"
+    assert trends[0]["west"] == {
+        "visitorDailyAverage": 367179.6,
+        "newActiveFacilities": 1,
+    }
+    assert trends[-1]["west"] == {
+        "visitorDailyAverage": 361358.7,
+        "newActiveFacilities": 0,
+    }
+    assert trends[-1]["east"]["newActiveFacilities"] == 42
+    for month in trends:
+        assert set(month) == {"period", "west", "east", "other"}
+        for region in ("west", "east", "other"):
+            assert month[region]["visitorDailyAverage"] > 0
+            assert month[region]["newActiveFacilities"] >= 0
+    assert "현재 영업 중인 시설" in document["metricNotes"]["monthlyNewActiveFacilities"]
+    assert "최초 인허가월" in document["metricNotes"]["monthlyNewActiveFacilities"]
+
+
+def test_overview_contains_readable_demand_and_entry_combo_chart() -> None:
+    html = _asset("index.html")
+    script = _asset("app.js")
+    stylesheet = _asset("app.css")
+
+    for marker in (
+        "data-monthly-trend",
+        "data-trend-summary",
+        "data-trend-chart",
+        "data-trend-tooltip",
+    ):
+        assert marker in html
+    for region in ("west", "east", "other"):
+        assert f'data-trend-region="{region}"' in html
+    assert "월별 방문수요·신규 숙박업체 진입 추이" in html
+    assert "최근 12개 완결월" in html
+    assert "현재 영업시설의 최초 인허가 월" in html
+
+    assert "function renderMonthlyTrend" in script
+    assert 'createElementNS("http://www.w3.org/2000/svg", "svg")' in script
+    assert '"trend-line"' in script
+    assert '"trend-bar"' in script
+    assert 'data-trend-region' in script
+    assert "visitorDailyAverage" in script
+    assert "newActiveFacilities" in script
+    assert "월별 신규 진입" in script
+
+    for selector in (
+        ".trend-card",
+        ".trend-summary",
+        ".trend-controls",
+        ".trend-chart",
+        ".trend-line",
+        ".trend-bar",
+        ".trend-tooltip",
+    ):
+        assert selector in stylesheet
+    assert "@media(max-width:760px)" in stylesheet
 
 
 def test_vacant_house_tab_does_not_embed_exact_locations() -> None:

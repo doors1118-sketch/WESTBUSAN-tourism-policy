@@ -72,6 +72,133 @@ function renderBarGroup(target, regions, key, suffix, ceiling) {
   });
 }
 
+function renderMonthlyTrend(data, regionId = "west") {
+  const chart = document.querySelector("[data-trend-chart]");
+  const summary = document.querySelector("[data-trend-summary]");
+  const tooltip = document.querySelector("[data-trend-tooltip]");
+  if (!chart || !summary || !tooltip || !data.monthlyTrends?.length) return;
+
+  const regionNames = { west: "서부산", east: "동부산", other: "기타 부산" };
+  const series = data.monthlyTrends.map((month) => ({ period: month.period, ...month[regionId] }));
+  const latest = series.at(-1);
+  const previous = series.at(-2);
+  const entryTotal = series.reduce((sum, item) => sum + item.newActiveFacilities, 0);
+  const eastEntryTotal = data.monthlyTrends.reduce((sum, item) => sum + item.east.newActiveFacilities, 0);
+  const westEntryTotal = data.monthlyTrends.reduce((sum, item) => sum + item.west.newActiveFacilities, 0);
+  const comparisonRegion = regionId === "west" ? "동부산" : "서부산";
+  const comparisonTotal = regionId === "west" ? eastEntryTotal : westEntryTotal;
+  const monthChange = previous.visitorDailyAverage === 0
+    ? null
+    : ((latest.visitorDailyAverage / previous.visitorDailyAverage) - 1) * 100;
+
+  clear(summary);
+  [
+    ["최신 월 방문수요", value(Math.round(latest.visitorDailyAverage)), latest.period.replace("-", ".")],
+    ["전월 대비", monthChange == null ? "—" : `${monthChange >= 0 ? "+" : ""}${monthChange.toFixed(1)}%`, "일평균 방문수요"],
+    ["12개월 신규 진입", value(entryTotal, "개소"), regionNames[regionId]],
+    [`${comparisonRegion} 신규 진입`, value(comparisonTotal, "개소"), "동일 12개월 기준"],
+  ].forEach(([label, main, note]) => {
+    const item = node("article", "trend-stat");
+    item.append(node("span", "", label), node("strong", "", main), node("small", "", note));
+    summary.append(item);
+  });
+
+  clear(chart);
+  const width = 1120;
+  const height = 360;
+  const plot = { left: 76, right: 66, top: 28, bottom: 56 };
+  const plotWidth = width - plot.left - plot.right;
+  const plotHeight = height - plot.top - plot.bottom;
+  const visitors = series.map((item) => item.visitorDailyAverage);
+  const visitorMin = Math.min(...visitors);
+  const visitorMax = Math.max(...visitors);
+  const visitorPadding = Math.max((visitorMax - visitorMin) * 0.15, visitorMax * 0.025);
+  const visitorFloor = Math.max(0, visitorMin - visitorPadding);
+  const visitorCeiling = visitorMax + visitorPadding;
+  const entryMax = Math.max(1, ...series.map((item) => item.newActiveFacilities));
+  const x = (index) => plot.left + (plotWidth * index) / (series.length - 1);
+  const demandY = (amount) => plot.top + plotHeight * (1 - ((amount - visitorFloor) / (visitorCeiling - visitorFloor)));
+  const entryY = (amount) => plot.top + plotHeight * (1 - amount / entryMax);
+
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("aria-hidden", "true");
+  const svgNode = (tag, attributes = {}) => {
+    const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    Object.entries(attributes).forEach(([name, content]) => element.setAttribute(name, content));
+    return element;
+  };
+
+  for (let tick = 0; tick <= 4; tick += 1) {
+    const y = plot.top + (plotHeight * tick) / 4;
+    const amount = visitorCeiling - ((visitorCeiling - visitorFloor) * tick) / 4;
+    svg.append(svgNode("line", { x1: plot.left, x2: width - plot.right, y1: y, y2: y, class: "trend-grid" }));
+    const label = svgNode("text", { x: plot.left - 12, y: y + 4, class: "trend-axis-label", "text-anchor": "end" });
+    label.textContent = fmt.format(Math.round(amount));
+    svg.append(label);
+  }
+
+  [0, Math.ceil(entryMax / 2), entryMax].forEach((amount) => {
+    const label = svgNode("text", { x: width - plot.right + 12, y: entryY(amount) + 4, class: "trend-axis-label entry-axis", "text-anchor": "start" });
+    label.textContent = `${amount}개`;
+    svg.append(label);
+  });
+
+  const barWidth = Math.min(30, plotWidth / series.length * 0.34);
+  series.forEach((item, index) => {
+    const y = entryY(item.newActiveFacilities);
+    const bar = svgNode("rect", {
+      x: x(index) - barWidth / 2,
+      y: item.newActiveFacilities === 0 ? plot.top + plotHeight - 2 : y,
+      width: barWidth,
+      height: item.newActiveFacilities === 0 ? 2 : plot.top + plotHeight - y,
+      rx: 5,
+      class: item.newActiveFacilities === 0 ? "trend-bar zero" : "trend-bar",
+    });
+    svg.append(bar);
+  });
+
+  const linePath = series.map((item, index) => `${index === 0 ? "M" : "L"}${x(index)},${demandY(item.visitorDailyAverage)}`).join(" ");
+  svg.append(svgNode("path", { d: linePath, class: "trend-line" }));
+  series.forEach((item, index) => {
+    svg.append(svgNode("circle", { cx: x(index), cy: demandY(item.visitorDailyAverage), r: 5, class: "trend-point" }));
+    const label = svgNode("text", { x: x(index), y: height - 22, class: "trend-month", "text-anchor": "middle" });
+    label.textContent = item.period.slice(2).replace("-", ".");
+    svg.append(label);
+  });
+
+  function showTooltip(index, clientX) {
+    const item = series[index];
+    tooltip.hidden = false;
+    clear(tooltip);
+    tooltip.append(
+      node("strong", "", item.period.replace("-", ".")),
+      node("span", "demand", `일평균 방문수요 ${value(Math.round(item.visitorDailyAverage))}`),
+      node("span", "entry", `월별 신규 진입 ${value(item.newActiveFacilities, "개소")}`),
+    );
+    const chartRect = chart.getBoundingClientRect();
+    const proposed = clientX == null ? (x(index) / width) * chart.scrollWidth - chart.scrollLeft : clientX - chartRect.left;
+    tooltip.style.left = `${Math.max(92, Math.min(chart.clientWidth - 92, proposed))}px`;
+    tooltip.style.top = "54px";
+  }
+
+  series.forEach((item, index) => {
+    const previousX = index === 0 ? plot.left : (x(index - 1) + x(index)) / 2;
+    const nextX = index === series.length - 1 ? width - plot.right : (x(index) + x(index + 1)) / 2;
+    const target = svgNode("rect", { x: previousX, y: plot.top, width: nextX - previousX, height: plotHeight, class: "trend-hit" });
+    target.setAttribute("tabindex", "0");
+    target.setAttribute("aria-label", `${item.period}, 일평균 방문수요 ${Math.round(item.visitorDailyAverage)}, 월별 신규 진입 ${item.newActiveFacilities}개소`);
+    target.addEventListener("pointerenter", (event) => showTooltip(index, event.clientX));
+    target.addEventListener("pointermove", (event) => showTooltip(index, event.clientX));
+    target.addEventListener("focus", () => showTooltip(index));
+    target.addEventListener("pointerleave", () => { tooltip.hidden = true; });
+    target.addEventListener("blur", () => { tooltip.hidden = true; });
+    svg.append(target);
+  });
+  chart.append(svg);
+  chart.setAttribute("aria-label", `${regionNames[regionId]} 최근 12개월 일평균 방문수요 선과 현재 영업시설 신규 진입 막대`);
+}
+
 function renderDashboard(data) {
   dashboardData = data;
   document.querySelectorAll("[data-as-of]").forEach((item) => { item.textContent = data.asOf; });
@@ -90,6 +217,7 @@ function renderDashboard(data) {
     kpi("평균 인허가 경과연수", value(west.licenseAgeAverageYears, "년"), "최초 인허가일~기준일 평균", relativeToEast(west.licenseAgeAverageYears, east.licenseAgeAverageYears), "시설별 연결 인허가 중 가장 이른 인허가일부터 기준일까지의 평균 경과연수입니다. 건축물 연령이나 동일 사업자의 영업기간과 다릅니다."),
     kpi("외국인 대상 관광등록", value(west.foreignCapableShare, "%"), "관광숙박·외국인관광 도시민박", relativeToEast(west.foreignCapableShare, east.foreignCapableShare))
   );
+  renderMonthlyTrend(data, "west");
 
   const summary = document.querySelector("[data-region-summary]");
   const roomDonut = document.querySelector("[data-room-donut]");
@@ -171,6 +299,17 @@ function renderDashboard(data) {
     districtBody.append(row);
   });
 }
+
+document.querySelectorAll("[data-trend-region]").forEach((button) => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll("[data-trend-region]").forEach((item) => {
+      const selected = item === button;
+      item.classList.toggle("active", selected);
+      item.setAttribute("aria-pressed", selected ? "true" : "false");
+    });
+    if (dashboardData) renderMonthlyTrend(dashboardData, button.dataset.trendRegion);
+  });
+});
 
 document.querySelectorAll("[data-tab-target]").forEach((button) => {
   button.addEventListener("click", () => {
