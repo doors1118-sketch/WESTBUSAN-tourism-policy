@@ -27,7 +27,7 @@ def test_dashboard_exposes_three_decision_questions_and_required_tabs() -> None:
     for label in (
         "종합현황",
         "관광 종합현황",
-        "공급 격차",
+        "동서 공급 격차",
         "민간투자 유도",
         "정책 인사이트 도출",
         "공간지도",
@@ -37,6 +37,49 @@ def test_dashboard_exposes_three_decision_questions_and_required_tabs() -> None:
 
     assert 'data-room-donut' in html
     assert 'data-supply-donuts' in html
+
+
+def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
+    """Catches the supply tab losing the demand evidence that explains the gap."""
+    html = _asset("index.html")
+    script = _asset("app.js")
+    stylesheet = _asset("app.css")
+    document = json.loads(_asset("data.json"))
+
+    assert 'data-tab-target="supply">동서 공급 격차<' in html
+    assert "동·서부산 숙박공급 격차" in html
+    assert 'data-supply-gap-summary' in html
+    assert 'data-visitor-demand-bars' in html
+    assert "외지인·외국인 방문수요" in html
+    assert "관광객 순인원·숙박객이 아닌 일별 추정 방문인원" in html
+
+    regions = {region["id"]: region for region in document["regions"]}
+    assert regions["west"]["nonlocalVisitorDailyAverage"] == 346768.6
+    assert regions["west"]["foreignVisitorDailyAverage"] == 24784.7
+    assert regions["east"]["nonlocalVisitorDailyAverage"] == 435173.1
+    assert regions["east"]["foreignVisitorDailyAverage"] == 27476.9
+    for region in regions.values():
+        split_total = (
+            region["nonlocalVisitorDailyAverage"]
+            + region["foreignVisitorDailyAverage"]
+        )
+        assert round(split_total) == region["visitorDailyAverage"]
+
+    assert "function renderSupplyGapSummary" in script
+    assert "function renderVisitorDemandComparison" in script
+    assert '"외지인 방문수요"' in script
+    assert '"외국인 방문수요"' in script
+    assert "외국인 방문수요는 동부산의" in script
+    assert "외국인 수용 등록시설은 동부산의" in script
+    for selector in (
+        ".supply-gap-summary",
+        ".supply-gap-stat",
+        ".visitor-demand-card",
+        ".visitor-demand-row",
+        ".visitor-demand-bar",
+        ".visitor-demand-insight",
+    ):
+        assert selector in stylesheet
 
 
 def test_dashboard_omits_unavailable_stay_duration_and_builds_region_donuts() -> None:
@@ -65,8 +108,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-district-ai-v31"' in html
-    assert 'src="app.js?v=20260822-district-ai-v31"' in html
+    assert 'href="app.css?v=20260822-east-west-supply-v32"' in html
+    assert 'src="app.js?v=20260822-east-west-supply-v32"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:

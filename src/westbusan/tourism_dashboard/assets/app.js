@@ -74,6 +74,78 @@ function renderBarGroup(target, regions, key, suffix, ceiling) {
   });
 }
 
+function renderSupplyGapSummary(target, west, east) {
+  clear(target);
+  const metrics = [
+    {
+      label: "객실 100실당 방문수요",
+      west: value(west.demandPer100Rooms),
+      east: value(east.demandPer100Rooms),
+      comparison: `서부산이 동부산의 ${value(west.demandPer100Rooms / east.demandPer100Rooms, "배")}`,
+    },
+    {
+      label: "관광숙박 등록",
+      west: value(west.tourismFacilityShare, "%"),
+      east: value(east.tourismFacilityShare, "%"),
+      comparison: `서부산이 ${value(east.tourismFacilityShare - west.tourismFacilityShare, "%p 낮음")}`,
+    },
+    {
+      label: "외국인 수용 등록",
+      west: value(west.foreignCapableShare, "%"),
+      east: value(east.foreignCapableShare, "%"),
+      comparison: `서부산이 ${value(east.foreignCapableShare - west.foreignCapableShare, "%p 낮음")}`,
+    },
+    {
+      label: "2021년 이후 신규 진입",
+      west: value(west.recentLicenseShare, "%"),
+      east: value(east.recentLicenseShare, "%"),
+      comparison: `서부산이 ${value(east.recentLicenseShare - west.recentLicenseShare, "%p 낮음")}`,
+    },
+  ];
+  metrics.forEach((metric) => {
+    const card = node("article", "supply-gap-stat");
+    const values = node("div", "supply-gap-values");
+    values.append(
+      node("span", "west", `서부산 ${metric.west}`),
+      node("span", "east", `동부산 ${metric.east}`),
+    );
+    card.append(node("h3", "", metric.label), values, node("p", "", metric.comparison));
+    target.append(card);
+  });
+}
+
+function renderVisitorDemandComparison(target, west, east) {
+  clear(target);
+  const metrics = [
+    { label: "외지인 방문수요", key: "nonlocalVisitorDailyAverage" },
+    { label: "외국인 방문수요", key: "foreignVisitorDailyAverage" },
+  ];
+  metrics.forEach((metric) => {
+    const group = node("section", "visitor-demand-group");
+    group.append(node("h4", "", metric.label));
+    const maximum = Math.max(west[metric.key], east[metric.key]);
+    [west, east].forEach((region) => {
+      const row = node("div", "visitor-demand-row");
+      const track = node("div", "visitor-demand-bar");
+      const fill = node("span", region.id);
+      fill.style.width = `${(region[metric.key] / maximum) * 100}%`;
+      track.append(fill);
+      row.append(
+        node("strong", "", region.name),
+        track,
+        node("span", "visitor-demand-value", value(Math.round(region[metric.key]), "명/일")),
+      );
+      group.append(row);
+    });
+    target.append(group);
+  });
+
+  const foreignDemandRatio = (west.foreignVisitorDailyAverage / east.foreignVisitorDailyAverage) * 100;
+  const foreignCapacityRatio = (west.foreignCapableShare / east.foreignCapableShare) * 100;
+  const insight = document.querySelector("[data-visitor-demand-insight]");
+  insight.textContent = `외국인 방문수요는 동부산의 ${value(foreignDemandRatio, "%")}인 반면, 외국인 수용 등록시설은 동부산의 ${value(foreignCapacityRatio, "%")} 수준입니다. 서부산은 방문수요 유입에 비해 관광숙박·외국인 대응 공급기반이 약해 신규 공급과 기존시설 전환을 함께 검토할 필요가 있습니다.`;
+}
+
 const districtMetricDefinitions = [
   { label: "숙박업체", key: "facilities", suffix: "개소", note: "영업 중 시설 수" },
   { label: "확인 객실", key: "rooms", suffix: "실", note: "객실 수 확인 시설 기준" },
@@ -504,6 +576,9 @@ function renderDashboard(data) {
   document.querySelector("[data-core-evidence]").textContent = `관광숙박 ${west.tourismFacilityShare}% · 외국인수용 ${west.foreignCapableShare}% · 신규 ${west.recentLicenseShare}%`;
 
   initializeDistrictDetail(data);
+
+  renderSupplyGapSummary(document.querySelector("[data-supply-gap-summary]"), west, east);
+  renderVisitorDemandComparison(document.querySelector("[data-visitor-demand-bars]"), west, east);
 
   const supplyDonuts = document.querySelector("[data-supply-donuts]");
   const facilityTotal = data.regions.reduce((sum, region) => sum + region.facilities, 0);

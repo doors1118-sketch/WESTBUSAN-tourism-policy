@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="관광수요를 부산의 체류·숙박·소비로 연결하기 위한 정책 분석 대시보드">
   <title>부산 관광경제 활력 분석</title>
-  <link rel="stylesheet" href="app.css?v=20260822-district-ai-v31">
+  <link rel="stylesheet" href="app.css?v=20260822-east-west-supply-v32">
 </head>
 <body>
   <header class="topbar">
@@ -17,7 +17,7 @@
     <nav class="tabs" aria-label="대시보드 메뉴" role="tablist">
       <button class="active" role="tab" aria-selected="true" data-tab-target="overview">종합현황</button>
       <button role="tab" aria-selected="false" data-tab-target="tourism">서부산 자치구 현황</button>
-      <button role="tab" aria-selected="false" data-tab-target="supply">공급 격차</button>
+      <button role="tab" aria-selected="false" data-tab-target="supply">동서 공급 격차</button>
       <button role="tab" aria-selected="false" data-tab-target="investment">민간투자 유도</button>
       <button role="tab" aria-selected="false" data-tab-target="insights">정책 인사이트 도출</button>
       <button role="tab" aria-selected="false" data-tab-target="map">공간지도</button>
@@ -38,7 +38,7 @@
 
     <section class="question-grid" aria-label="핵심 의사결정 질문">
       <article><span>01</span><div><strong>관광 종합현황</strong><p>방문·체류·소비·교통수요가 어디에서 얼마나 발생하는가</p></div></article>
-      <article><span>02</span><div><strong>공급 격차</strong><p>숙박 객실·관광숙박 비중·시설 규모·노후도·신규 진입이 수요에 비해 어디서 부족한가</p></div></article>
+      <article><span>02</span><div><strong>동서 공급 격차</strong><p>숙박 객실·관광숙박 비중·시설 규모·노후도·신규 진입이 수요에 비해 어디서 부족한가</p></div></article>
       <article><span>03</span><div><strong>민간투자 유도</strong><p>신규 공급·리모델링·빈집 전환·콘텐츠 투자를 어느 지역에 어떤 순서로 검토할 것인가</p></div></article>
     </section>
 
@@ -88,7 +88,14 @@
     </section>
 
     <section class="tab-panel" data-tab-panel="supply" id="supply">
-      <div class="section-head"><div><span>SUPPLY GAP</span><h2>숙박 공급·규모·노후도·신규 진입</h2></div><p>총량뿐 아니라 확인률과 공급구조를 함께 비교합니다.</p></div>
+      <div class="section-head"><div><span>EAST–WEST SUPPLY GAP</span><h2>동·서부산 숙박공급 격차</h2></div><p>수요압력과 관광수용 역량을 동일 기준으로 비교합니다.</p></div>
+      <div class="supply-gap-summary" data-supply-gap-summary aria-label="동서부산 공급격차 핵심 비교"></div>
+      <article class="card visitor-demand-card">
+        <div class="card-head"><h3>외지인·외국인 방문수요</h3><span>최근 355일 일평균 · 동서 비교</span></div>
+        <div class="visitor-demand-comparison" data-visitor-demand-bars></div>
+        <div class="visitor-demand-insight" data-visitor-demand-insight></div>
+        <p class="visitor-demand-definition">관광데이터랩 외지인·외국인 분류의 일별 추정 방문인원입니다. 관광객 순인원·숙박객이 아닌 일별 추정 방문인원으로, 숙박수요의 직접 실적이 아니라 지역 방문압력을 비교하는 지표입니다.</p>
+      </article>
       <div class="region-donut-grid" data-supply-donuts aria-label="권역별 숙박시설 비중"></div>
       <div class="metric-table-wrap card"><table class="metric-table"><thead><tr><th>권역</th><th>시설</th><th>확인 객실</th><th>객실 확인률</th><th>시설당 객실 중앙값</th><th>건물 평균연수</th><th>20년+</th><th>인허가 평균업력</th><th>2021년 이후 신규</th></tr></thead><tbody data-supply-table></tbody></table></div>
       <div class="three-column compact-top">
@@ -154,6 +161,6 @@
   </main>
 
   <footer><span>부산광역시 관광정책 내부 검토용</span><span>데이터 기준일 <strong data-as-of>—</strong></span></footer>
-  <script src="app.js?v=20260822-district-ai-v31"></script>
+  <script src="app.js?v=20260822-east-west-supply-v32"></script>
 </body>
 </html>
