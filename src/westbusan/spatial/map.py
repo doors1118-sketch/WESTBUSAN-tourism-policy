@@ -15,6 +15,12 @@ _MAP_ZOOM = 10
 _MAP_WIDTH = 1000
 _MAP_HEIGHT = 700
 _WEST_DISTRICTS = ("강서구", "사하구", "사상구", "북구")
+_CANDIDATE_LAYERS = (
+    "policy_priority",
+    "tourism_supply_gap",
+    "facility_density",
+    "aged_facilities",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +39,22 @@ def build_policy_candidate_rankings(
     limit: int = 5,
 ) -> dict[str, Any]:
     """Rank distinct west-Busan policy areas at region, district, and dong grain."""
+    return build_layer_candidate_rankings(
+        features,
+        layer="policy_priority",
+        limit=limit,
+    )
+
+
+def build_layer_candidate_rankings(
+    features: Sequence[Mapping[str, Any]],
+    *,
+    layer: str,
+    limit: int = 5,
+) -> dict[str, Any]:
+    """Rank one representative per west district plus one distinct extra area."""
+    if layer not in _CANDIDATE_LAYERS:
+        raise ValueError(f"unsupported candidate layer: {layer}")
     candidates: list[dict[str, Any]] = []
     for feature in features:
         properties = feature.get("properties", {})
@@ -46,25 +68,24 @@ def build_policy_candidate_rankings(
         kind = str(properties.get("recommendation_kind") or "")
         gap = _optional_number(properties.get("tourism_supply_gap"))
         aged = _optional_number(properties.get("age_20y_facility_count")) or 0.0
+        age_known = _optional_number(properties.get("age_sample_size")) or 0.0
         facilities = _optional_number(properties.get("mapped_facility_count")) or 0.0
-        if facilities <= 0 and not kind:
+        score = _candidate_score(
+            layer=layer,
+            kind=kind,
+            gap=gap,
+            aged=aged,
+            age_known=age_known,
+            facilities=facilities,
+        )
+        if score is None:
             continue
-        signal = {
-            "new_supply": 3.0,
-            "remodel": 2.0,
-            "quality_upgrade": 1.5,
-            "content_first": 1.25,
-            "investment_caution": 1.0,
-        }.get(kind, 0.0)
         candidates.append(
             {
                 "grid_id": grid_id,
                 "district": district,
                 "dong": dong,
-                "score": signal * 1000
-                + (gap or 0.0) * 10
-                + aged
-                + facilities * 0.1,
+                "score": score,
             }
         )
 
@@ -130,9 +151,43 @@ def build_policy_candidate_rankings(
     }
 
 
+def _candidate_score(
+    *,
+    layer: str,
+    kind: str,
+    gap: float | None,
+    aged: float,
+    age_known: float,
+    facilities: float,
+) -> float | None:
+    if layer == "tourism_supply_gap":
+        return gap
+    if layer == "facility_density":
+        return facilities if facilities > 0 else None
+    if layer == "aged_facilities":
+        return aged if age_known > 0 and aged > 0 else None
+    if facilities <= 0 and not kind:
+        return None
+    signal = {
+        "new_supply": 3.0,
+        "remodel": 2.0,
+        "quality_upgrade": 1.5,
+        "content_first": 1.25,
+        "investment_caution": 1.0,
+    }.get(kind, 0.0)
+    return signal * 1000 + (gap or 0.0) * 10 + aged + facilities * 0.1
+
+
 def render_map(bundle_data: PublicSpatialData) -> str:
     """Render one deterministic, policy-oriented investment opportunity map."""
     payload = {
+        "candidate_rankings": {
+            layer: build_layer_candidate_rankings(
+                list(bundle_data.grid_geojson.get("features", [])),
+                layer=layer,
+            )
+            for layer in _CANDIDATE_LAYERS
+        },
         "evidence": list(bundle_data.evidence),
         "facilities": bundle_data.facility_geojson,
         "grids": bundle_data.grid_geojson,

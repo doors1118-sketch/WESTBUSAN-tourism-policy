@@ -15,6 +15,36 @@ from pydantic import (
     model_validator,
 )
 
+from westbusan.config import BUSAN_DISTRICTS
+
+
+class ParcelGeocodeRequest(BaseModel):
+    """One bounded Busan parcel-address lookup; never a free-form AI prompt."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    address: str = Field(min_length=8, max_length=160)
+
+    @model_validator(mode="after")
+    def validate_busan_address(self) -> ParcelGeocodeRequest:
+        if "부산" not in self.address or not any(
+            district in self.address for district in BUSAN_DISTRICTS
+        ):
+            raise ValueError("a Busan district and city name are required")
+        return self
+
+
+class ParcelGeocodeResponse(BaseModel):
+    """Minimal browser response with no provider payload or cache identity."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    status: Literal["matched", "not_found", "invalid_response", "provider_error"]
+    longitude: FiniteFloat | None
+    latitude: FiniteFloat | None
+    district: str | None
+    crs: str | None
+
 
 class MapSelection(BaseModel):
     """One published 500 m map cell selected by the browser."""
@@ -32,7 +62,11 @@ class MapSelection(BaseModel):
     demand_score: FiniteFloat | None = Field(default=None, ge=-1000, le=1000)
     supply_score: FiniteFloat | None = Field(default=None, ge=-1000, le=1000)
     recommendation_kind: Literal[
-        "new_supply", "remodel", "investment_caution"
+        "new_supply",
+        "remodel",
+        "quality_upgrade",
+        "content_first",
+        "investment_caution",
     ]
 
 

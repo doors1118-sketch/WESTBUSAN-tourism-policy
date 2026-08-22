@@ -6,6 +6,7 @@
   const MIN_ZOOM = 7;
   const MAX_ZOOM = 19;
   const slippyMap = document.getElementById("slippy-map");
+  const bundle = JSON.parse(document.getElementById("bundle-data").textContent);
   const tileLayer = document.getElementById("vworld-tile-layer");
   const svg = document.getElementById("spatial-map");
   const grids = [...document.querySelectorAll(".grid-feature")];
@@ -228,6 +229,7 @@
   function setLayerEncoding() {
     document.body.classList.toggle("policy-layer", activeLayer === "policy_priority");
     document.body.classList.toggle("facility-layer", activeLayer === "facility_locations");
+    document.body.classList.toggle("candidate-layer", activeLayer !== "facility_locations");
     document.body.dataset.activeLayer = activeLayer;
     grids.forEach((node) => {
       if (activeLayer === "policy_priority") {
@@ -286,9 +288,15 @@
     const roomCount = sum("roomCount");
     const gapValues = known("tourismSupplyGap");
     const gap = gapValues.length ? gapValues.reduce((a, b) => a + b, 0) / gapValues.length : null;
+    setRegionMetricLabels({
+      first: ["숙박시설 수", "주소 좌표 확인 기준"],
+      second: ["20년 이상 시설", `건축연령 확인 ${formatNumber(ageKnown)}개 시설 기준`],
+      third: ["확인 객실", "객실 자료 확인분 합계"],
+      fourth: ["공급부족도", "방문수요 점수 − 객실공급 점수"],
+    });
     document.getElementById("region-summary-title").textContent = `${name} · 선택 지역 상세`;
     document.getElementById("region-facility-count").textContent = `${formatNumber(facilityCount)}개`;
-    document.getElementById("region-aged-count").textContent = `${formatNumber(agedCount)}개 / ${formatNumber(ageKnown)}개 확인`;
+    document.getElementById("region-aged-count").textContent = `${formatNumber(agedCount)}개`;
     document.getElementById("region-room-count").textContent = `${formatNumber(roomCount)}실`;
     document.getElementById("region-gap-score").textContent = gap === null ? "자료 없음" : `${formatNumber(gap, 1)}점`;
     document.getElementById("region-summary-text").textContent = `${name} 집계입니다. 색상 영역이나 후보 번호를 선택하면 500m 단위로 좁혀 정확한 공급·노후·수요 신호를 확인할 수 있습니다.`;
@@ -302,9 +310,15 @@
     const known = numeric(node, "ageKnown") || 0;
     const rooms = numeric(node, "roomCount") || 0;
     const gap = numeric(node, "tourismSupplyGap");
+    setRegionMetricLabels({
+      first: ["숙박시설 수", "해당 500m 주소 좌표 확인 기준"],
+      second: ["20년 이상 시설", `건축연령 확인 ${formatNumber(known)}개 시설 기준`],
+      third: ["확인 객실", "객실 자료 확인분 합계"],
+      fourth: ["공급부족도", "방문수요 점수 − 객실공급 점수"],
+    });
     document.getElementById("region-summary-title").textContent = `${name} · 500m 후보지역 상세`;
     document.getElementById("region-facility-count").textContent = `${formatNumber(facilityCount)}개`;
-    document.getElementById("region-aged-count").textContent = `${formatNumber(aged)}개 / ${formatNumber(known)}개 확인`;
+    document.getElementById("region-aged-count").textContent = `${formatNumber(aged)}개`;
     document.getElementById("region-room-count").textContent = `${formatNumber(rooms)}실`;
     document.getElementById("region-gap-score").textContent = gap === null ? "자료 없음" : `${formatNumber(gap, 1)}점`;
     const action = {
@@ -320,18 +334,35 @@
   function renderFacilitySummary(node) {
     const rooms = numeric(node, "roomCount");
     const age = numeric(node, "buildingAge");
+    setRegionMetricLabels({
+      first: ["선택 시설", "지도에 표시된 개별 숙박시설"],
+      second: ["건축연령", "사용승인일 기반 확인값"],
+      third: ["확인 객실", "인허가 원자료 확인값"],
+      fourth: ["행정구역", "주소 기준 자치구·읍면동"],
+    });
     document.getElementById("region-summary-title").textContent = `${node.dataset.publicName || "숙박시설"} · 개별 시설 상세`;
     document.getElementById("region-facility-count").textContent = "1개 시설";
     document.getElementById("region-aged-count").textContent = age === null ? "자료 없음" : `${formatNumber(age, 1)}년`;
     document.getElementById("region-room-count").textContent = rooms === null ? "자료 없음" : `${formatNumber(rooms)}실`;
-    document.getElementById("region-gap-score").textContent = "지역 카드 참조";
+    document.getElementById("region-gap-score").textContent = `${node.dataset.district || "-"} ${node.dataset.dong || ""}`.trim();
     document.getElementById("region-summary-text").textContent = `${node.dataset.publicAddress || "주소 자료 없음"} · 개별 시설의 적합성·권리관계·사업성은 별도 확인이 필요합니다.`;
     document.getElementById("region-ai-result").hidden = true;
   }
 
+  function setRegionMetricLabels(labels) {
+    const entries = [labels.first, labels.second, labels.third, labels.fourth];
+    entries.forEach(([label, note], index) => {
+      document.getElementById(`region-metric-${index + 1}-label`).textContent = label;
+      document.getElementById(`region-metric-${index + 1}-note`).textContent = note;
+    });
+  }
+
   function buildCandidateRanking() {
-    const rankKey = filters.dong.value ? "dongRank" : filters.district.value ? "districtRank" : "defaultRank";
-    const ranked = grids.filter((node) => westDistricts.has(node.dataset.district) && visible(node) && numeric(node, rankKey))
+    const rankings = bundle.candidate_rankings?.[activeLayer];
+    let activeRanks = rankings?.default || {};
+    if (filters.dong.value) activeRanks = rankings?.dong?.[`${filters.district.value}|${filters.dong.value}`] || {};
+    else if (filters.district.value) activeRanks = rankings?.district?.[filters.district.value] || {};
+    const ranked = grids.filter((node) => westDistricts.has(node.dataset.district) && visible(node) && activeRanks[node.dataset.key])
       .map((node) => {
         const kind = node.dataset.recommendation;
         const gap = numeric(node, "tourismSupplyGap") || 0;
@@ -354,7 +385,7 @@
           aged,
           facilities: facilityCount,
           action,
-          rank: numeric(node, rankKey),
+          rank: Number(activeRanks[node.dataset.key]),
         };
       }).sort((a, b) => a.rank - b.rank || a.gridKey.localeCompare(b.gridKey)).slice(0, 5);
     const panelTitle = document.getElementById("candidate-panel-title");
@@ -366,8 +397,14 @@
       panelTitle.textContent = `${filters.district.value} 생활권 우선 후보`;
       panelHelp.textContent = "같은 동의 인접 격자 중복을 제거하고 서로 다른 생활권을 비교합니다.";
     } else {
-      panelTitle.textContent = "서부산 전체 구별 대표 생활권 후보";
-      panelHelp.textContent = "강서구·사하구·사상구·북구 대표 후보를 포함한 서부산 전체 비교입니다.";
+      const titles = {
+        policy_priority: "서부산 숙박시설 정책 우선 사업지",
+        tourism_supply_gap: "관광수요 대비 공급부족 최상위 지역",
+        facility_density: "숙박시설 밀집 최상위 지역",
+        aged_facilities: "노후 숙박시설 밀집 최상위 지역",
+      };
+      panelTitle.textContent = titles[activeLayer] || "서부산 숙박시설 분석지역";
+      panelHelp.textContent = "강서·사하·북·사상구별 최우선 1곳과 서부산 전체 차순위 1곳을 표시합니다.";
     }
     const list = document.getElementById("candidate-rank-list");
     list.replaceChildren();
@@ -381,7 +418,13 @@
       const label = document.createElement("span");
       label.textContent = `${item.district} ${item.dong}`;
       const detail = document.createElement("small");
-      detail.textContent = `${item.action} · 시설 ${formatNumber(item.facilities)}개 · 20년+ ${formatNumber(item.aged)}개`;
+      const details = {
+        policy_priority: `${item.action} · 시설 ${formatNumber(item.facilities)}개 · 20년+ ${formatNumber(item.aged)}개`,
+        tourism_supply_gap: `공급부족도 ${formatNumber(item.gap, 1)}점 · 수요 대비 객실공급 취약`,
+        facility_density: `500m 내 숙박시설 ${formatNumber(item.facilities)}개 · 밀집지역`,
+        aged_facilities: `20년 이상 ${formatNumber(item.aged)}개 · 개선·전환 검토`,
+      };
+      detail.textContent = details[activeLayer] || item.action;
       label.append(detail);
       button.append(rank, label);
       button.addEventListener("click", () => selectCandidate(item));
@@ -468,8 +511,8 @@
     };
   }
 
-  async function requestRegionInsight(node = selectedGridNode) {
-    const result = document.getElementById("region-ai-result");
+  async function requestRegionInsight(node = selectedGridNode, target = document.getElementById("region-ai-result"), lotBased = false) {
+    const result = target;
     const district = node ? node.dataset.district : filters.district.value;
     const region = !district ? "all" : westDistricts.has(district) ? "west" : eastDistricts.has(district) ? "east" : "other";
     const selectionContext = node ? buildSelectionContext(node) : null;
@@ -491,7 +534,7 @@
       const insight = await response.json();
       result.replaceChildren();
       const title = document.createElement("strong");
-      title.textContent = insight.headline;
+      title.textContent = lotBased ? `입력 지번 주변 500m · ${insight.headline}` : insight.headline;
       const summary = document.createElement("p");
       summary.textContent = insight.executive_summary;
       const heading = document.createElement("h3");
@@ -528,6 +571,35 @@
     renderGridSummary(item.node);
     fitGeographicBounds((item.node.dataset.geoBounds || "").split(",").map(Number), 17);
     requestRegionInsight(item.node);
+  }
+
+  function pointInRing(point, ring) {
+    let inside = false;
+    for (let index = 0, previous = ring.length - 1; index < ring.length; previous = index, index += 1) {
+      const [x, y] = ring[index];
+      const [previousX, previousY] = ring[previous];
+      if (((y > point[1]) !== (previousY > point[1]))
+        && point[0] < ((previousX - x) * (point[1] - y)) / (previousY - y) + x) inside = !inside;
+    }
+    return inside;
+  }
+
+  function pointInGeometry(point, geometry) {
+    const polygons = geometry?.type === "Polygon" ? [geometry.coordinates]
+      : geometry?.type === "MultiPolygon" ? geometry.coordinates : [];
+    return polygons.some((polygon) => polygon.length && pointInRing(point, polygon[0])
+      && !polygon.slice(1).some((hole) => pointInRing(point, hole)));
+  }
+
+  function findGridForPoint(longitude, latitude, district) {
+    const point = [Number(longitude), Number(latitude)];
+    const feature = (bundle.grids?.features || []).find((item) => {
+      const properties = item.properties || {};
+      return (!district || properties.district_name === district)
+        && pointInGeometry(point, item.geometry);
+    });
+    if (!feature) return null;
+    return grids.find((node) => node.dataset.key === feature.properties.grid_id) || null;
   }
 
   grids.forEach((node) => {
@@ -569,6 +641,42 @@
     apply();
   }));
   document.getElementById("region-ai-button").addEventListener("click", () => requestRegionInsight());
+  document.getElementById("lot-investment-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const address = document.getElementById("lot-address").value.trim();
+    const result = document.getElementById("lot-investment-result");
+    result.hidden = false;
+    result.textContent = "지번을 확인하고 주변 500m 발행지표를 찾고 있습니다.";
+    try {
+      const response = await fetch("/tourism/api/vworld/geocode", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ address }),
+      });
+      if (!response.ok) throw new Error("geocode unavailable");
+      const geocode = await response.json();
+      if (geocode.status !== "matched") {
+        result.textContent = "입력한 부산 지번을 확인하지 못했습니다. 시·구·동과 번지를 포함해 다시 입력해 주세요.";
+        return;
+      }
+      const node = findGridForPoint(geocode.longitude, geocode.latitude, geocode.district);
+      if (!node) {
+        result.textContent = "해당 지번과 연결되는 현재 발행 500m 분석지역이 없습니다.";
+        return;
+      }
+      selectedGridNode = node;
+      filters.district.value = node.dataset.district;
+      refreshDongOptions();
+      filters.dong.value = node.dataset.dong;
+      apply();
+      grids.forEach((item) => item.classList.toggle("is-selected", item === node));
+      renderGridSummary(node);
+      fitGeographicBounds((node.dataset.geoBounds || "").split(",").map(Number), 17);
+      await requestRegionInsight(node, result, true);
+    } catch (_) {
+      result.textContent = "지번 기반 투자검토를 불러오지 못했습니다. 주소를 확인한 뒤 다시 시도해 주세요.";
+    }
+  });
 
   function zoomAt(nextZoom, clientX, clientY) {
     const zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(nextZoom)));

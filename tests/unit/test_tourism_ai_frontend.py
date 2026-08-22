@@ -201,7 +201,7 @@ def test_large_spatial_map_is_loaded_only_after_investment_tab_is_selected() -> 
     html = _asset("index.html")
     script = _asset("app.js")
 
-    assert 'data-map-src="map/index.html?v=20260821-west-coverage-v12"' in html
+    assert 'data-map-src="map/index.html?v=20260822-priority-sites-v39"' in html
     assert '<iframe src="map/index.html"' not in html
     assert 'target === "investment"' in script
     assert "방문·체류·소비·교통수요가 어디에서 얼마나 발생하는가" in html
@@ -213,8 +213,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-investment-info-v38"' in html
-    assert 'src="app.js?v=20260822-investment-info-v38"' in html
+    assert 'href="app.css?v=20260822-priority-sites-v39"' in html
+    assert 'src="app.js?v=20260822-priority-sites-v39"' in html
 
 
 def test_investment_information_can_request_ai_explanation_for_priority_map() -> None:

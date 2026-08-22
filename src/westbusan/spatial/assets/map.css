@@ -24,7 +24,7 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .layer-button.is-active { color: #fff; background: #0f5d79; border-color: #0f5d79; box-shadow: 0 5px 14px #0f5d7930; }
 .layer-explainer { min-height: 45px; margin: -7px 0 14px; padding: 10px 11px; border-radius: 7px; background: #eef7f5; color: #36525d; font-size: .8rem; line-height: 1.45; }
 .candidate-panel { display: none; margin: 0 0 16px; padding: 12px; border: 1px solid #dce5e8; border-radius: 8px; background: #f8fafb; }
-.policy-layer .candidate-panel { display: block; }
+.candidate-layer .candidate-panel { display: block; }
 .candidate-panel h3 { margin: 0 0 5px; }
 .candidate-panel p { margin: 0 0 8px; color: #64737b; font-size: .73rem; line-height: 1.4; }
 .candidate-rank-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
@@ -74,7 +74,7 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .district-policy-label text { font-size: 14px; font-weight: 900; text-anchor: middle; fill: #102a43; paint-order: stroke; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; }
 .district-policy-label .policy-action { font-size: 9px; font-weight: 800; stroke-width: 3px; }
 .candidate-marker { display: none; cursor: pointer; }
-.policy-layer .candidate-marker { display: block; }
+.candidate-layer .candidate-marker { display: block; }
 .candidate-marker circle { fill: #0f5d79; stroke: #fff; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .candidate-marker text { fill: #fff; font-size: 11px; font-weight: 900; text-anchor: middle; pointer-events: none; }
 .candidate-marker:hover circle, .candidate-marker:focus circle { fill: #c53b2d; stroke: #102a43; }
@@ -98,6 +98,14 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .region-ai-result ol { display: grid; gap: 10px; margin: 0; padding-left: 22px; }
 .region-ai-result li { padding: 9px 11px; border-radius: 8px; background: #f3f8f8; }
 .region-ai-result li p { margin: 4px 0; }
+.lot-investment { margin-top: 18px; padding-top: 17px; border-top: 1px solid #d7e0e4; }
+.lot-investment h3 { margin: 4px 0 10px; }
+.lot-investment form { display: grid; gap: 6px; }
+.lot-investment form label { margin: 0; }
+.lot-input-row { display: grid; grid-template-columns: minmax(240px, 1fr) auto; gap: 8px; }
+.lot-input-row input { min-width: 0; border: 1px solid #a9b3b8; border-radius: 6px; padding: 10px 12px; font: inherit; }
+.lot-input-row button { border-color: #0f5d79; background: #0f5d79; color: #fff; font-weight: 800; white-space: nowrap; }
+.lot-help { margin: 8px 0 0; color: #62737b; font-size: .77rem; line-height: 1.45; }
 .is-hidden, .is-filtered { display: none !important; }
 @media (max-width: 900px) {
   :root { font-size: 16px; }
@@ -110,4 +118,5 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
   #slippy-map { height: 72vh; min-height: 540px; }
   aside { max-height: none; }
   .region-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lot-input-row { grid-template-columns: 1fr; }
 }

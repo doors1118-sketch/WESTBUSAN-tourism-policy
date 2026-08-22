@@ -330,3 +330,65 @@ def test_vworld_tile_is_unavailable_without_server_key(tmp_path: Path) -> None:
 
     assert response.status_code == 503
     assert response.json() == {"detail": "vworld_unavailable"}
+
+
+def test_vworld_parcel_geocode_is_server_proxied_and_redacted(tmp_path: Path) -> None:
+    """Catches browser-side credentials or exact-address AI without a reviewed point."""
+    secret = "sentinel-vworld-key"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "api.vworld.kr"
+        assert request.url.path == "/req/search"
+        assert request.url.params["key"] == secret
+        assert request.url.params["category"] == "parcel"
+        return httpx.Response(
+            200,
+            content=(Path("tests/fixtures/spatial") / "vworld_address_success.json").read_bytes(),
+        )
+
+    upstream = httpx.Client(transport=httpx.MockTransport(respond))
+    client = TestClient(
+        create_app(
+            _settings(tmp_path),
+            generator=_CountingGenerator(_model_document()),
+            vworld_client=upstream,
+        )
+    )
+
+    response = client.post(
+        "/vworld/geocode",
+        json={"address": "부산광역시 북구 구포동 1-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "matched",
+        "longitude": 129.01025,
+        "latitude": 35.2061,
+        "district": "북구",
+        "crs": "EPSG:4326",
+    }
+    assert secret not in response.text
+    assert "response_hash" not in response.text
+
+
+def test_vworld_parcel_geocode_rejects_non_busan_or_missing_key(tmp_path: Path) -> None:
+    client = TestClient(
+        create_app(
+            _settings(tmp_path),
+            generator=_CountingGenerator(_model_document()),
+        )
+    )
+    assert client.post(
+        "/vworld/geocode", json={"address": "서울특별시 중구 1-1"}
+    ).status_code == 422
+
+    settings = _settings(tmp_path).model_copy(update={"vworld_api_key": None})
+    without_key = TestClient(
+        create_app(settings, generator=_CountingGenerator(_model_document()))
+    )
+    response = without_key.post(
+        "/vworld/geocode", json={"address": "부산광역시 북구 구포동 1-1"}
+    )
+    assert response.status_code == 503
+    assert response.json() == {"detail": "vworld_unavailable"}

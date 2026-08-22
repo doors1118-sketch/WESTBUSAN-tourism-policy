@@ -8,6 +8,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
+from westbusan.spatial.geocode import VWorldGeocoder
 from westbusan.tourism_ai.cache import (
     ClientCooldownExceeded,
     DailyLimitExceeded,
@@ -19,6 +20,8 @@ from westbusan.tourism_ai.models import (
     InsightRequest,
     MapSelection,
     ModelInsight,
+    ParcelGeocodeRequest,
+    ParcelGeocodeResponse,
 )
 from westbusan.tourism_ai.openai_client import OpenAIResponsesClient
 from westbusan.tourism_ai.service import InsightGenerator, InsightService
@@ -76,6 +79,7 @@ def create_app(
     )
     vworld: VWorldBasemapProxy | None = None
     vworld_tiles: VWorldTileProxy | None = None
+    vworld_geocoder: VWorldGeocoder | None = None
     if settings.vworld_api_key is not None:
         upstream = vworld_client or httpx.Client(timeout=15.0)
         vworld = VWorldBasemapProxy(
@@ -86,16 +90,33 @@ def create_app(
             api_key=settings.vworld_api_key.get_secret_value(),
             client=upstream,
         )
+        vworld_geocoder = VWorldGeocoder(
+            settings.vworld_api_key.get_secret_value(),
+            upstream,
+        )
 
     @app.middleware("http")
     async def enforce_request_boundary(request: Request, call_next: Any) -> Any:
-        if request.url.path == "/insights":
+        if request.url.path in {"/insights", "/vworld/geocode"}:
             if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
                 return JSONResponse(status_code=415, content={"detail": "json_required"})
             body = await request.body()
             if len(body) > 2048:
                 return JSONResponse(status_code=413, content={"detail": "body_too_large"})
         return await call_next(request)
+
+    @app.post("/vworld/geocode")
+    def vworld_geocode(payload: ParcelGeocodeRequest) -> dict[str, object]:
+        if vworld_geocoder is None:
+            raise HTTPException(status_code=503, detail="vworld_unavailable")
+        result = vworld_geocoder.resolve(payload.address, address_type="PARCEL")
+        return ParcelGeocodeResponse(
+            status=result.status,  # type: ignore[arg-type]
+            longitude=result.longitude,
+            latitude=result.latitude,
+            district=result.district,
+            crs=result.crs,
+        ).model_dump(mode="json")
 
     @app.get("/healthz")
     def health() -> dict[str, bool | str]:

@@ -4,6 +4,7 @@ import json
 
 from westbusan.spatial.map import (
     PublicSpatialData,
+    build_layer_candidate_rankings,
     build_policy_candidate_rankings,
     render_map,
 )
@@ -378,6 +379,72 @@ def test_default_candidates_cover_west_busan_and_do_not_repeat_one_dong() -> Non
     }
 
 
+def test_each_decision_layer_selects_four_district_winners_plus_one_extra() -> None:
+    """Catches every layer reusing the policy score or one district taking all ranks."""
+    features: list[dict[str, object]] = []
+
+    def add(
+        grid_id: str,
+        district: str,
+        dong: str,
+        *,
+        gap: float,
+        facilities: int,
+        aged: int,
+    ) -> None:
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {
+                    "grid_id": grid_id,
+                    "district_name": district,
+                    "primary_dong_name": dong,
+                    "period": "2026-08",
+                    "recommendation_kind": "remodel",
+                    "tourism_supply_gap": gap,
+                    "demand_context_score": gap + 10,
+                    "room_supply_score": 10,
+                    "age_20y_facility_count": aged,
+                    "age_sample_size": max(aged, 1),
+                    "mapped_facility_count": facilities,
+                },
+            }
+        )
+
+    add("gangseo-a", "강서구", "명지동", gap=80, facilities=2, aged=1)
+    add("gangseo-b", "강서구", "대저동", gap=60, facilities=9, aged=7)
+    add("saha-a", "사하구", "하단동", gap=75, facilities=8, aged=5)
+    add("saha-b", "사하구", "장림동", gap=70, facilities=10, aged=8)
+    add("buk-a", "북구", "구포동", gap=65, facilities=11, aged=4)
+    add("sasang-a", "사상구", "괘법동", gap=55, facilities=12, aged=6)
+
+    rankings = {
+        layer: build_layer_candidate_rankings(features, layer=layer)["default"]
+        for layer in (
+            "policy_priority",
+            "tourism_supply_gap",
+            "facility_density",
+            "aged_facilities",
+        )
+    }
+
+    for default in rankings.values():
+        assert len(default) == 5
+        selected_districts = {
+            next(
+                feature["properties"]["district_name"]  # type: ignore[index]
+                for feature in features
+                if feature["properties"]["grid_id"] == grid_id  # type: ignore[index]
+            )
+            for grid_id in default
+        }
+        assert selected_districts == {"강서구", "사하구", "북구", "사상구"}
+
+    assert next(iter(rankings["tourism_supply_gap"])) == "gangseo-a"
+    assert next(iter(rankings["facility_density"])) == "sasang-a"
+    assert next(iter(rankings["aged_facilities"])) == "saha-b"
+
+
 def test_facility_location_click_exposes_public_address_rooms_and_age() -> None:
     """Catches exact public facility details remaining inaccessible after zoom."""
     rendered = render_map(_map_data())
@@ -387,6 +454,24 @@ def test_facility_location_click_exposes_public_address_rooms_and_age() -> None:
     assert 'data-room-count="10.0"' in rendered
     assert 'data-building-age="31.0"' in rendered
     assert "function renderFacilitySummary" in rendered
+    assert 'id="region-metric-1-label"' in rendered
+    assert 'id="region-metric-2-label"' in rendered
+    assert "개별 시설 상세" in rendered
+
+
+def test_map_has_layer_specific_candidates_and_lot_investment_ai() -> None:
+    """Catches a generic top-five list or a free-form address prompt without evidence."""
+    rendered = render_map(_map_data())
+
+    assert "서부산 숙박시설 정책 우선방향" in rendered
+    assert 'id="lot-investment-form"' in rendered
+    assert 'id="lot-address"' in rendered
+    assert 'fetch("/tourism/api/vworld/geocode"' in rendered
+    assert "function findGridForPoint" in rendered
+    assert "입력 지번 주변 500m" in rendered
+    assert "buildCandidateRanking" in rendered
+    assert "candidate_rankings" in rendered
+    assert "20년 이상 ${formatNumber(agedCount)}개 /" not in rendered
 
 
 def test_overview_clusters_facilities_by_dong_before_showing_exact_points() -> None:
