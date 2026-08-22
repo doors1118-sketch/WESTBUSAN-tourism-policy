@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-top-tabs-v21"' in html
-    assert 'src="app.js?v=20260822-top-tabs-v21"' in html
+    assert 'href="app.css?v=20260822-metric-tooltips-v23"' in html
+    assert 'src="app.js?v=20260822-metric-tooltips-v23"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -182,11 +182,11 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     for label in (
         "서부산 숙박업체",
         "서부산 일평균 방문수요",
-        "관광숙박 등록",
-        "2021년 이후 신규",
-        "관광소비 지표",
-        "20년 이상 노후시설",
-        "인허가 평균업력",
+        "관광숙박업 등록시설 비율",
+        "2021년 이후 신규 인허가",
+        "방문량 대비 관광소비 원천지표",
+        "건축연령 20년 이상 시설",
+        "평균 인허가 경과연수",
         "외국인 대상 관광등록",
     ):
         assert label in script
@@ -195,7 +195,23 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     overview_block = overview_block.split('const summary = document.querySelector("[data-region-summary]");', 1)[0]
     assert overview_block.count("kpi(") == 7
     assert overview_block.count("facilitySupplyKpi(west, east)") == 1
-    assert "통화금액이 아닌 원천지표" in overview_block
+    assert "객실 비중이 아닙니다" in overview_block
+    assert "가장 이른 인허가일을 기준" in overview_block
+    assert "한국관광공사 ‘방문량 대비 방문 소비액’ 원천지표" in overview_block
+    assert "내부 리모델링 상태를 뜻하지 않습니다" in overview_block
+    assert "동일 사업자의 영업기간과 다릅니다" in overview_block
+    for note in (
+        "전체 숙박시설 대비 · 시설 수 기준",
+        "최초 인허가일 2021.1.1 이후",
+        "관광공사 원천지표 · 2026.07 구 평균",
+        "사용승인일 기준 · 자료 확인률",
+        "최초 인허가일~기준일 평균",
+    ):
+        assert note in overview_block
+    assert 'noteElement.classList.add("metric-definition")' in script
+    assert "metric-definition" in _asset("app.css")
+    assert "white-space:nowrap" in _asset("app.css")
+    assert "text-overflow:ellipsis" in _asset("app.css")
     assert "관광숙박·외국인관광 도시민박" in overview_block
 
 

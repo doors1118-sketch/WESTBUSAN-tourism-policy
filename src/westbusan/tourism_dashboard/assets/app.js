@@ -22,9 +22,17 @@ function clear(target) {
   while (target.firstChild) target.removeChild(target.firstChild);
 }
 
-function kpi(label, main, note, delta) {
+function kpi(label, main, note, delta, definition) {
   const card = node("article", "card kpi");
-  card.append(node("span", "label", label), node("strong", "", main), node("small", "", note));
+  const noteElement = node("small", "", note);
+  if (definition) {
+    noteElement.classList.add("metric-definition");
+    noteElement.textContent = `${note} ⓘ`;
+    noteElement.title = definition;
+    noteElement.tabIndex = 0;
+    noteElement.setAttribute("aria-label", `${note}. ${definition}`);
+  }
+  card.append(node("span", "label", label), node("strong", "", main), noteElement);
   if (delta) card.append(node("span", "delta", delta));
   return card;
 }
@@ -75,11 +83,11 @@ function renderDashboard(data) {
   overview.append(
     facilitySupplyKpi(west, east),
     kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "외지인+외국인 · 일별 방문인원 평균", relativeToEast(west.visitorDailyAverage, east.visitorDailyAverage)),
-    kpi("관광숙박 등록", value(west.tourismFacilityShare, "%"), "시설 비율", relativeToEast(west.tourismFacilityShare, east.tourismFacilityShare)),
-    kpi("2021년 이후 신규", value(west.recentLicenseShare, "%"), "시설 인허가 기준", relativeToEast(west.recentLicenseShare, east.recentLicenseShare)),
-    kpi("관광소비 지표", value(west.consumptionIndex), "통화금액이 아닌 원천지표", relativeToEast(west.consumptionIndex, east.consumptionIndex)),
-    kpi("20년 이상 노후시설", value(west.old20Share, "%"), `건축물 연령 확인 ${west.buildingAgeCoverageShare}%`, relativeToEast(west.old20Share, east.old20Share)),
-    kpi("인허가 평균업력", value(west.licenseAgeAverageYears, "년"), "시설 인허가 연혁 기준", relativeToEast(west.licenseAgeAverageYears, east.licenseAgeAverageYears)),
+    kpi("관광숙박업 등록시설 비율", value(west.tourismFacilityShare, "%"), "전체 숙박시설 대비 · 시설 수 기준", relativeToEast(west.tourismFacilityShare, east.tourismFacilityShare), "전체 숙박시설 중 관광진흥법상 관광숙박업 등록을 보유한 시설 수의 비율입니다. 객실 비중이 아닙니다."),
+    kpi("2021년 이후 신규 인허가", value(west.recentLicenseShare, "%"), "최초 인허가일 2021.1.1 이후", relativeToEast(west.recentLicenseShare, east.recentLicenseShare), "시설별 연결 인허가 가운데 가장 이른 인허가일을 기준으로, 2021.1.1 이후인 시설이 전체 시설에서 차지하는 비율입니다."),
+    kpi("방문량 대비 관광소비 원천지표", value(west.consumptionIndex), "관광공사 원천지표 · 2026.07 구 평균", relativeToEast(west.consumptionIndex, east.consumptionIndex), "한국관광공사 ‘방문량 대비 방문 소비액’ 원천지표를 2026.07 권역 내 구 단위로 평균한 값입니다. 원화 금액으로 해석하지 않습니다."),
+    kpi("건축연령 20년 이상 시설", value(west.old20Share, "%"), `사용승인일 기준 · 자료 확인률 ${west.buildingAgeCoverageShare}%`, relativeToEast(west.old20Share, east.old20Share), "건축물대장 사용승인일이 확인된 시설만 분모로 하여 기준일 현재 20년 이상인 시설 비율입니다. 내부 리모델링 상태를 뜻하지 않습니다."),
+    kpi("평균 인허가 경과연수", value(west.licenseAgeAverageYears, "년"), "최초 인허가일~기준일 평균", relativeToEast(west.licenseAgeAverageYears, east.licenseAgeAverageYears), "시설별 연결 인허가 중 가장 이른 인허가일부터 기준일까지의 평균 경과연수입니다. 건축물 연령이나 동일 사업자의 영업기간과 다릅니다."),
     kpi("외국인 대상 관광등록", value(west.foreignCapableShare, "%"), "관광숙박·외국인관광 도시민박", relativeToEast(west.foreignCapableShare, east.foreignCapableShare))
   );
 
