@@ -1,6 +1,8 @@
 const fmt = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 });
 const colors = { west: "#176bff", east: "#19b6c9", other: "#9aa8ba" };
 let dashboardData = null;
+const districtInsightPromises = new Map();
+let activeDistrictInsightId = null;
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -88,14 +90,27 @@ const districtMetricDefinitions = [
 ];
 
 const districtChartDefinitions = [
-  { label: "숙박업체", key: "facilities", suffix: "개소" },
-  { label: "확인 객실", key: "rooms", suffix: "실" },
-  { label: "방문수요", key: "visitorDailyAverage", suffix: "명" },
+  { label: "숙박업체", key: "facilities", suffix: "개소", cityShare: true },
+  { label: "확인 객실", key: "rooms", suffix: "실", cityShare: true },
+  { label: "방문수요", key: "visitorDailyAverage", suffix: "명", cityShare: true },
   { label: "수요압력", key: "demandPer100Rooms", suffix: "" },
   { label: "관광숙박", key: "tourismFacilityShare", suffix: "%" },
   { label: "노후시설", key: "old20Share", suffix: "%" },
   { label: "신규 진입", key: "recentLicenseShare", suffix: "%" },
 ];
+
+function districtCityShare(data, district, metric) {
+  if (!metric.cityShare) return null;
+  const cityTotal = data.regions.reduce((sum, region) => sum + (Number(region[metric.key]) || 0), 0);
+  if (!cityTotal) return null;
+  return (district[metric.key] / cityTotal) * 100;
+}
+
+function districtChartValue(data, district, metric) {
+  const base = value(district[metric.key], metric.suffix);
+  const share = districtCityShare(data, district, metric);
+  return share == null ? base : `${base} (${value(share, "%")})`;
+}
 
 function renderWestDistrictSummary(data, selectedDistrict, onSelect) {
   const target = document.querySelector("[data-west-district-summary]");
@@ -107,8 +122,8 @@ function renderWestDistrictSummary(data, selectedDistrict, onSelect) {
     card.append(
       node("span", "district-summary-rank", `우선순위 ${district.rank}`),
       node("h3", "", district.name),
-      node("strong", "", `${value(district.facilities, "개소")} · ${value(district.rooms, "실")}`),
-      node("p", "", `일평균 ${value(district.visitorDailyAverage, "명")} · 객실100실당 ${value(district.demandPer100Rooms)}`),
+      node("strong", "", `${districtChartValue(data, district, districtChartDefinitions[0])} · ${districtChartValue(data, district, districtChartDefinitions[1])}`),
+      node("p", "", `일평균 ${districtChartValue(data, district, districtChartDefinitions[2])} · 객실100실당 ${value(district.demandPer100Rooms)}`),
       node("small", "", district.priority),
     );
     card.addEventListener("click", () => onSelect(district));
@@ -125,7 +140,7 @@ function renderWestDistrictChart(data, metric, selectedDistrict, onSelect) {
   const benchmark = node("div", "district-chart-benchmark");
   benchmark.append(
     node("span", "", "해운대구 기준"),
-    node("strong", "", value(benchmarkValue, metric.suffix)),
+    node("strong", "", districtChartValue(data, data.benchmarkDistrict, metric)),
   );
   target.append(benchmark);
   data.westDistricts.forEach((district) => {
@@ -135,7 +150,7 @@ function renderWestDistrictChart(data, metric, selectedDistrict, onSelect) {
     const fill = node("i", "district-chart-fill");
     fill.style.width = `${Math.max(2, (district[metric.key] / scale) * 100)}%`;
     track.append(fill);
-    row.append(node("strong", "", district.name), track, node("span", "district-chart-value", value(district[metric.key], metric.suffix)));
+    row.append(node("strong", "", district.name), track, node("span", "district-chart-value", districtChartValue(data, district, metric)));
     row.addEventListener("click", () => onSelect(district));
     target.append(row);
   });
@@ -161,11 +176,9 @@ function districtProfileCard(district, role) {
 function renderDistrictDetail(selected, benchmark) {
   const profile = document.querySelector("[data-district-profile]");
   const comparison = document.querySelector("[data-district-comparison]");
-  const policy = document.querySelector("[data-district-policy]");
-  if (!profile || !comparison || !policy) return;
+  if (!profile || !comparison) return;
   clear(profile);
   clear(comparison);
-  clear(policy);
   profile.append(districtProfileCard(selected, "selected"), node("div", "district-versus", "VS"), districtProfileCard(benchmark, "benchmark"));
 
   districtMetricDefinitions.forEach((metric) => {
@@ -191,13 +204,63 @@ function renderDistrictDetail(selected, benchmark) {
     comparison.append(row);
   });
 
+}
+
+function renderDistrictPolicyLoading(selected) {
+  const policy = document.querySelector("[data-district-policy]");
+  if (!policy) return;
+  clear(policy);
+  policy.append(
+    node("span", "district-policy-label", "AI 정책검토 포인트"),
+    node("h3", "", `${selected.name} 분석을 준비하고 있습니다.`),
+    node("p", "", "현재 발행본의 수요·공급·노후도·신규 진입 지표를 해운대구와 비교해 해석합니다."),
+  );
+}
+
+function renderDistrictPolicyInsight(selected, insight) {
+  const policy = document.querySelector("[data-district-policy]");
+  if (!policy) return;
+  clear(policy);
+  const meta = node("div", "district-policy-meta");
+  meta.append(
+    node("span", "district-policy-label", "AI 정책검토 포인트"),
+    node("span", "district-policy-cache", insight.cached ? "저장 분석" : "새 AI 분석"),
+  );
+  const option = insight.policy_options?.[0];
+  policy.append(meta, node("h3", "", `${selected.name} · ${insight.headline}`), node("p", "", insight.executive_summary));
+  if (option) {
+    const action = node("div", "district-policy-action");
+    action.append(node("strong", "", option.action), node("span", "", option.rationale));
+    policy.append(action);
+  }
+  policy.append(node("small", "", "현재 DB 발행본에 근거한 정책 아이디어이며 수익성·법적 적합성·투자 확정 판단은 아닙니다."));
+}
+
+function renderDistrictPolicyFallback(selected, benchmark) {
+  const policy = document.querySelector("[data-district-policy]");
+  if (!policy) return;
+  clear(policy);
   const pressureRatio = benchmark.demandPer100Rooms ? selected.demandPer100Rooms / benchmark.demandPer100Rooms : null;
   policy.append(
-    node("span", "district-policy-label", "정책 검토 포인트"),
+    node("span", "district-policy-label", "정책검토 포인트"),
     node("h3", "", `${selected.name} · ${selected.priority}`),
     node("p", "", `${selected.name}의 객실 100실당 방문 압력은 해운대구의 ${value(pressureRatio, "배")}입니다. 관광숙박업 등록 ${value(selected.tourismFacilityShare, "%")}, 외국인 수용 등록 ${value(selected.foreignCapableShare, "%")}, 2021년 이후 신규 진입 ${value(selected.recentLicenseShare, "%")}를 함께 고려해 ${selected.priority}을 우선 검토할 수 있습니다.`),
-    node("small", "", "정책·투자 검토용 비교이며 개별 사업의 수익성·법적 적합성 판단은 아닙니다."),
+    node("small", "", "AI 분석을 불러오지 못해 검증된 지표의 기본 해석을 표시합니다."),
   );
+}
+
+async function loadDistrictInsight(data, district, benchmark) {
+  const cacheKey = `${data.publishedRun}:${district.id}`;
+  if (!districtInsightPromises.has(cacheKey)) {
+    districtInsightPromises.set(cacheKey, requestInsight("west", district.id));
+  }
+  try {
+    const insight = await districtInsightPromises.get(cacheKey);
+    if (activeDistrictInsightId === district.id) renderDistrictPolicyInsight(district, insight);
+  } catch (_) {
+    districtInsightPromises.delete(cacheKey);
+    if (activeDistrictInsightId === district.id) renderDistrictPolicyFallback(district, benchmark);
+  }
 }
 
 function initializeDistrictDetail(data) {
@@ -212,6 +275,7 @@ function initializeDistrictDetail(data) {
 
   const selectDistrict = (district) => {
     selectedDistrict = district;
+    activeDistrictInsightId = district.id;
     districtButtons.forEach((button, districtId) => {
       const selected = districtId === district.id;
       button.classList.toggle("active", selected);
@@ -220,6 +284,8 @@ function initializeDistrictDetail(data) {
     renderWestDistrictSummary(data, selectedDistrict, selectDistrict);
     renderWestDistrictChart(data, selectedMetric, selectedDistrict, selectDistrict);
     renderDistrictDetail(selectedDistrict, data.benchmarkDistrict);
+    renderDistrictPolicyLoading(selectedDistrict);
+    loadDistrictInsight(data, selectedDistrict, data.benchmarkDistrict);
   };
 
   data.westDistricts.forEach((district, index) => {
@@ -543,11 +609,13 @@ mapInsightButton.addEventListener("click", async () => {
   }
 });
 
-async function requestInsight(region) {
+async function requestInsight(region, district = null) {
+  const payload = { region, period: "latest", published_run: dashboardData.publishedRun };
+  if (district) payload.district = district;
   const response = await fetch("api/insights", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ region, period: "latest", published_run: dashboardData.publishedRun })
+    body: JSON.stringify(payload)
   });
   if (!response.ok) throw new Error("request_failed");
   return response.json();

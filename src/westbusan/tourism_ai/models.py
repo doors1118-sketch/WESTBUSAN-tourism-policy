@@ -42,9 +42,16 @@ class InsightRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     region: Literal["west", "east", "other", "all"]
+    district: Literal["gangseo", "saha", "buk", "sasang"] | None = None
     period: Literal["latest"]
     published_run: UUID
     selection: MapSelection | None = None
+
+    @model_validator(mode="after")
+    def validate_district_focus(self) -> InsightRequest:
+        if self.district is not None and self.region != "west":
+            raise ValueError("district focus requires the west region")
+        return self
 
 
 class EvidenceMetric(BaseModel):

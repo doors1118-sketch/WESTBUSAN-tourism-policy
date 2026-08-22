@@ -56,12 +56,15 @@ def _settings(
     )
 
 
-def _request(region: str = "west") -> dict[str, str]:
-    return {
+def _request(region: str = "west", district: str | None = None) -> dict[str, str]:
+    payload = {
         "region": region,
         "period": "latest",
         "published_run": str(RUN_ID),
     }
+    if district is not None:
+        payload["district"] = district
+    return payload
 
 
 def test_same_publication_is_generated_once(tmp_path: Path) -> None:
@@ -75,6 +78,23 @@ def test_same_publication_is_generated_once(tmp_path: Path) -> None:
     assert first.json()["cached"] is False
     assert second.json()["cached"] is True
     assert generator.calls == 1
+
+
+def test_same_district_is_generated_once_and_other_district_has_new_cache_key(
+    tmp_path: Path,
+) -> None:
+    generator = _CountingGenerator(_model_document())
+    client = TestClient(create_app(_settings(tmp_path), generator=generator))
+
+    gangseo_first = client.post("/insights", json=_request(district="gangseo"))
+    gangseo_second = client.post("/insights", json=_request(district="gangseo"))
+    saha = client.post("/insights", json=_request(district="saha"))
+
+    assert gangseo_first.status_code == gangseo_second.status_code == saha.status_code == 200
+    assert gangseo_first.json()["cached"] is False
+    assert gangseo_second.json()["cached"] is True
+    assert saha.json()["cached"] is False
+    assert generator.calls == 2
 
 
 def test_concurrent_same_key_is_single_flight(tmp_path: Path) -> None:

@@ -67,14 +67,62 @@ def _dashboard_document(*, published_run: UUID = RUN_ID) -> dict[str, object]:
         ],
         "westDistricts": [
             {
+                "id": "gangseo",
                 "name": "강서구",
+                "facilities": 75,
                 "rooms": 1936,
+                "roomCoverageShare": 58.7,
+                "roomMedian": 35.5,
+                "buildingAgeAverageYears": 16.3,
                 "demandPer100Rooms": 7405,
+                "visitorDailyAverage": 143355,
+                "tourismFacilityShare": 0.0,
+                "foreignCapableShare": 0.0,
                 "stay3Index": 77.33,
+                "consumptionIndex": 93.29,
                 "old20Share": 52.2,
+                "licenseAgeAverageYears": 11.8,
+                "recentLicenseShare": 28.0,
                 "priority": "신규 공급·외국인 수용",
+            },
+            {
+                "id": "saha",
+                "name": "사하구",
+                "facilities": 86,
+                "rooms": 2091,
+                "roomCoverageShare": 91.9,
+                "roomMedian": 20.0,
+                "buildingAgeAverageYears": 35.1,
+                "demandPer100Rooms": 3518.0,
+                "visitorDailyAverage": 73562,
+                "tourismFacilityShare": 1.2,
+                "foreignCapableShare": 8.1,
+                "stay3Index": 82.37,
+                "consumptionIndex": 58.25,
+                "old20Share": 94.7,
+                "licenseAgeAverageYears": 30.4,
+                "recentLicenseShare": 5.8,
+                "priority": "노후시설 개선·체류상품",
             }
         ],
+        "benchmarkDistrict": {
+            "id": "haeundae",
+            "name": "해운대구",
+            "facilities": 472,
+            "rooms": 15962,
+            "roomCoverageShare": 79.4,
+            "roomMedian": 22.0,
+            "buildingAgeAverageYears": 22.8,
+            "demandPer100Rooms": 1356.0,
+            "visitorDailyAverage": 216447,
+            "tourismFacilityShare": 11.4,
+            "foreignCapableShare": 20.3,
+            "stay3Index": 120.0,
+            "consumptionIndex": 90.63,
+            "old20Share": 59.9,
+            "licenseAgeAverageYears": 12.0,
+            "recentLicenseShare": 40.0,
+        },
         "credentials": "must-never-be-read",
         "exactVacantHouseAddress": "must-never-be-read",
     }
@@ -137,6 +185,36 @@ def test_west_catalogue_contains_only_allowlisted_aggregate_metrics(
     assert not any("credential" in key.lower() for key in catalogue)
     assert not any("address" in key.lower() for key in catalogue)
     assert all(metric.period == date(2026, 8, 20) for metric in catalogue.values())
+
+
+def test_district_focus_contains_selected_district_and_haeundae_only(
+    tmp_path: Path,
+) -> None:
+    catalogue = load_metric_catalogue(
+        _write_dashboard(tmp_path),
+        InsightRequest(
+            region="west",
+            district="gangseo",
+            period="latest",
+            published_run=RUN_ID,
+        ),
+    )
+
+    assert catalogue["west.district.gangseo.facilities"].value == 75
+    assert catalogue["west.district.gangseo.visitor_daily_average"].value == 143355
+    assert catalogue["benchmark.haeundae.facilities"].value == 472
+    assert catalogue["benchmark.haeundae.demand_per_100_rooms"].value == 1356.0
+    assert not any(".saha." in metric_id for metric_id in catalogue)
+
+
+def test_district_focus_is_rejected_outside_west_region() -> None:
+    with pytest.raises(ValidationError, match="district focus"):
+        InsightRequest(
+            region="east",
+            district="gangseo",
+            period="latest",
+            published_run=RUN_ID,
+        )
 
 
 def test_catalogue_rejects_boolean_numeric_value(tmp_path: Path) -> None:

@@ -55,13 +55,13 @@ class InsightService:
         try:
             insight = self.generator.generate(
                 catalogue,
-                focus_region=request.region,
+                focus_region=_focus_region(request),
                 focus_selection=request.selection,
             )
             evidence = _resolve_evidence(insight, catalogue)
             source = "openai"
         except (RuntimeError, ValueError):
-            insight = _fallback_insight(catalogue, request.selection)
+            insight = _fallback_insight(catalogue, request.selection, request.district)
             evidence = _resolve_evidence(insight, catalogue)
             source = "rule_fallback"
 
@@ -77,7 +77,7 @@ class InsightService:
         """Return a deterministic interpretation without calling OpenAI."""
 
         catalogue = load_metric_catalogue(self.data_path, request)
-        insight = _fallback_insight(catalogue, request.selection)
+        insight = _fallback_insight(catalogue, request.selection, request.district)
         return self._response(
             request=request,
             catalogue=catalogue,
@@ -130,8 +130,13 @@ def _resolve_evidence(
 def _fallback_insight(
     catalogue: dict[str, EvidenceMetric],
     selection: MapSelection | None = None,
+    district: str | None = None,
 ) -> ModelInsight:
-    prefix = "west" if "west.rooms" in catalogue else next(iter(catalogue)).split(".")[0]
+    prefix = (
+        f"west.district.{district}"
+        if district is not None
+        else "west" if "west.rooms" in catalogue else next(iter(catalogue)).split(".")[0]
+    )
 
     def choose(*suffixes: str) -> list[str]:
         selected = [f"{prefix}.{suffix}" for suffix in suffixes]
@@ -171,7 +176,7 @@ def _fallback_insight(
     target_area = (
         f"{selection.district} {selection.dong} 500m 후보지역"
         if selection is not None
-        else "수요압력 상위지역"
+        else _district_name(district) if district is not None else "수요압력 상위지역"
     )
     options = [
         ModelPolicyOption(
@@ -210,3 +215,18 @@ def _fallback_insight(
         findings=findings,
         policy_options=options,
     )
+
+
+def _focus_region(request: InsightRequest) -> str:
+    if request.district is not None:
+        return _district_name(request.district)
+    return request.region
+
+
+def _district_name(district: str) -> str:
+    return {
+        "gangseo": "강서구",
+        "saha": "사하구",
+        "buk": "북구",
+        "sasang": "사상구",
+    }[district]

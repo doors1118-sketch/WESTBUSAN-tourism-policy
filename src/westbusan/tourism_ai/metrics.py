@@ -46,12 +46,44 @@ class _Region(BaseModel):
 class _WestDistrict(BaseModel):
     model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
 
+    id: Literal["gangseo", "saha", "buk", "sasang"]
     name: Literal["강서구", "사하구", "북구", "사상구"]
+    facilities: StrictInt = Field(ge=0)
     rooms: StrictInt = Field(ge=0)
+    roomCoverageShare: Number = Field(ge=0, le=100)
+    roomMedian: Number = Field(ge=0)
+    buildingAgeAverageYears: Number = Field(ge=0)
     demandPer100Rooms: Number = Field(ge=0)
+    visitorDailyAverage: Number = Field(ge=0)
+    tourismFacilityShare: Number = Field(ge=0, le=100)
+    foreignCapableShare: Number = Field(ge=0, le=100)
     stay3Index: Number = Field(ge=0)
+    consumptionIndex: Number = Field(ge=0)
     old20Share: Number = Field(ge=0, le=100)
+    licenseAgeAverageYears: Number = Field(ge=0)
+    recentLicenseShare: Number = Field(ge=0, le=100)
     priority: str = Field(min_length=1, max_length=100)
+
+
+class _BenchmarkDistrict(BaseModel):
+    model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
+
+    id: Literal["haeundae"]
+    name: Literal["해운대구"]
+    facilities: StrictInt = Field(ge=0)
+    rooms: StrictInt = Field(ge=0)
+    roomCoverageShare: Number = Field(ge=0, le=100)
+    roomMedian: Number = Field(ge=0)
+    buildingAgeAverageYears: Number = Field(ge=0)
+    demandPer100Rooms: Number = Field(ge=0)
+    visitorDailyAverage: Number = Field(ge=0)
+    tourismFacilityShare: Number = Field(ge=0, le=100)
+    foreignCapableShare: Number = Field(ge=0, le=100)
+    stay3Index: Number = Field(ge=0)
+    consumptionIndex: Number = Field(ge=0)
+    old20Share: Number = Field(ge=0, le=100)
+    licenseAgeAverageYears: Number = Field(ge=0)
+    recentLicenseShare: Number = Field(ge=0, le=100)
 
 
 class _DashboardDocument(BaseModel):
@@ -63,6 +95,7 @@ class _DashboardDocument(BaseModel):
     west_districts: list[_WestDistrict] = Field(
         alias="westDistricts", min_length=1, max_length=4
     )
+    benchmark_district: _BenchmarkDistrict = Field(alias="benchmarkDistrict")
 
 
 _REGION_SLUG = {"west": "west", "east": "east", "other": "other"}
@@ -104,6 +137,23 @@ _REGION_METRICS: tuple[tuple[str, str, str, str], ...] = (
     ),
     ("stay3_index", "stay3Index", "3박 이상 체류지수", "지수"),
     ("consumption_index", "consumptionIndex", "관광소비지수", "지수"),
+)
+
+_DISTRICT_METRICS: tuple[tuple[str, str, str, str], ...] = (
+    ("facilities", "facilities", "숙박시설 수", "개"),
+    ("rooms", "rooms", "확인 객실 수", "실"),
+    ("room_coverage_share", "roomCoverageShare", "객실 자료 확인률", "%"),
+    ("room_median", "roomMedian", "시설당 객실 중앙값", "실"),
+    ("visitor_daily_average", "visitorDailyAverage", "일평균 방문수요", "명"),
+    ("demand_per_100_rooms", "demandPer100Rooms", "객실 100실당 방문수요", "지수"),
+    ("tourism_facility_share", "tourismFacilityShare", "관광숙박업 시설 비율", "%"),
+    ("foreign_capable_share", "foreignCapableShare", "외국인 수용 등록 비율", "%"),
+    ("building_age_average", "buildingAgeAverageYears", "건축물 평균연령", "년"),
+    ("old20_share", "old20Share", "20년 이상 건축물 비율", "%"),
+    ("license_age_average", "licenseAgeAverageYears", "인허가 평균업력", "년"),
+    ("recent_license_share", "recentLicenseShare", "2021년 이후 신규 진입 비율", "%"),
+    ("consumption_index", "consumptionIndex", "관광소비 원천지표", "지수"),
+    ("stay3_index", "stay3Index", "3박 방문 원천지표", "지수"),
 )
 
 
@@ -149,19 +199,14 @@ def load_metric_catalogue(
             )
 
     if request.region == "west":
-        for district in document.west_districts:
+        districts = document.west_districts
+        if request.district is not None:
+            districts = [item for item in districts if item.id == request.district]
+            if len(districts) != 1:
+                raise MetricCatalogueError("district_not_found")
+        for district in districts:
             prefix = f"west.district.{_DISTRICT_SLUG[district.name]}"
-            for suffix, field_name, label, unit in (
-                ("rooms", "rooms", "객실 수", "실"),
-                (
-                    "demand_per_100_rooms",
-                    "demandPer100Rooms",
-                    "객실 100실당 방문수요",
-                    "지수",
-                ),
-                ("stay3_index", "stay3Index", "3박 이상 체류지수", "지수"),
-                ("old20_share", "old20Share", "20년 이상 건축물 비율", "%"),
-            ):
+            for suffix, field_name, label, unit in _DISTRICT_METRICS:
                 metric_id = f"{prefix}.{suffix}"
                 catalogue[metric_id] = EvidenceMetric(
                     metric_id=metric_id,
@@ -171,6 +216,20 @@ def load_metric_catalogue(
                     region=district.name,
                     period=document.as_of,
                     quality_note="서부산 구별 정책검토 집계지표",
+                )
+
+        if request.district is not None:
+            benchmark = document.benchmark_district
+            for suffix, field_name, label, unit in _DISTRICT_METRICS:
+                metric_id = f"benchmark.haeundae.{suffix}"
+                catalogue[metric_id] = EvidenceMetric(
+                    metric_id=metric_id,
+                    label=f"{benchmark.name} {label}",
+                    value=getattr(benchmark, field_name),
+                    unit=unit,
+                    region=benchmark.name,
+                    period=document.as_of,
+                    quality_note="동일 발행본의 비교 기준 자치구 집계지표",
                 )
 
     if request.selection is not None:

@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-district-detail-v30"' in html
-    assert 'src="app.js?v=20260822-district-detail-v30"' in html
+    assert 'href="app.css?v=20260822-district-ai-v31"' in html
+    assert 'src="app.js?v=20260822-district-ai-v31"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -264,6 +264,33 @@ def test_tourism_tab_is_west_district_detail_with_haeundae_benchmark() -> None:
             "stay3Index",
         ):
             assert field in district
+
+
+def test_district_chart_marks_city_shares_and_explains_priority_basis() -> None:
+    html = _asset("index.html")
+    script = _asset("app.js")
+    document = json.loads(_asset("data.json"))
+
+    city_facilities = sum(region["facilities"] for region in document["regions"])
+    city_rooms = sum(region["rooms"] for region in document["regions"])
+    city_visitors = sum(region["visitorDailyAverage"] for region in document["regions"])
+    assert city_facilities == 3103
+    assert city_rooms == 67949
+    assert city_visitors == 1814315
+    assert [round(district["facilities"] / city_facilities * 100, 1) for district in document["westDistricts"]] == [2.4, 2.8, 3.2, 5.5]
+    assert [district["name"] for district in sorted(document["westDistricts"], key=lambda item: item["demandPer100Rooms"], reverse=True)] == ["강서구", "사하구", "북구", "사상구"]
+
+    assert "data-district-priority-note" in html
+    assert "괄호는 부산 전체 비중" in html
+    assert "객실 100실당 일평균 방문수요" in html
+    assert "최종 투자 확정 순위가 아닙니다" in html
+    assert "function districtCityShare" in script
+    assert script.count("cityShare: true") == 3
+    assert "function loadDistrictInsight" in script
+    assert "districtInsightPromises" in script
+    assert 'requestInsight("west", district.id)' in script
+    assert "AI 정책검토 포인트" in script
+    assert "저장 분석" in script
 
 
 def test_facility_mix_wraps_only_between_complete_category_chips() -> None:

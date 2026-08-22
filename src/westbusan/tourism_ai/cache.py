@@ -131,6 +131,7 @@ def _cache_key(request: InsightRequest, *, model: str, prompt_version: str) -> s
         "prompt_version": prompt_version,
         "published_run": str(request.published_run),
         "region": request.region,
+        "district": request.district,
         "selection": (
             request.selection.model_dump(mode="json")
             if request.selection is not None
