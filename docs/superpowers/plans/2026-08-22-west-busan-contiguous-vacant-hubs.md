@@ -54,7 +54,7 @@ def test_replaces_only_encrypted_workbook_and_preserves_custody(tmp_path: Path) 
 
 - [ ] **Step 2: Run the test and verify RED**
 
-Run: `python -m pytest tests/unit/test_vacant_house_correction.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_correction.py -q`
 Expected: FAIL because `westbusan.vacant_house.correction` does not exist.
 
 - [ ] **Step 3: Implement one-member replacement with deterministic ZIP metadata**
@@ -80,7 +80,7 @@ def build_corrected_archive(original: Path, seo_replacement: Path, output: Path)
 
 - [ ] **Step 4: Run correction and existing source tests**
 
-Run: `python -m pytest tests/unit/test_vacant_house_correction.py tests/unit/test_vacant_house_source.py tests/unit/test_vacant_house_normalize.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_correction.py tests/unit/test_vacant_house_source.py tests/unit/test_vacant_house_normalize.py -q`
 Expected: PASS with no source filename, address, or private path in failure output.
 
 - [ ] **Step 5: Commit**
@@ -119,7 +119,7 @@ def test_collapses_units_to_one_parcel_without_dropping_row_lineage() -> None:
 
 - [ ] **Step 2: Run the tests and verify RED**
 
-Run: `python -m pytest tests/unit/test_vacant_house_parcel.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_parcel.py -q`
 Expected: FAIL because `build_pnu` and `collapse_to_parcels` are absent.
 
 - [ ] **Step 3: Implement strict identity and immutable contracts**
@@ -134,7 +134,7 @@ def build_pnu(house: NormalizedVacantHouse) -> str:
 
 - [ ] **Step 4: Run parcel and normalization regressions**
 
-Run: `python -m pytest tests/unit/test_vacant_house_parcel.py tests/unit/test_vacant_house_normalize.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_parcel.py tests/unit/test_vacant_house_normalize.py -q`
 Expected: PASS, including invalid land type, missing main lot, and duplicate unit cases.
 
 - [ ] **Step 5: Commit**
@@ -180,7 +180,7 @@ def test_migration_creates_separate_hub_publication_tables(migrated_db: Database
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/unit/test_vacant_house_cadastral.py tests/integration/test_vacant_house_hub_schema.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_cadastral.py tests/integration/test_vacant_house_hub_schema.py -q`
 Expected: FAIL because the client and migration tables are absent.
 
 - [ ] **Step 3: Implement the credential-redacted VWorld client and schema**
@@ -203,7 +203,7 @@ manifest tables. It must not edit migrations `037` or `038`.
 
 - [ ] **Step 4: Run client, schema, and migration-integrity tests**
 
-Run: `python -m pytest tests/unit/test_vacant_house_cadastral.py tests/integration/test_vacant_house_hub_schema.py tests/unit/test_schema.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_cadastral.py tests/integration/test_vacant_house_hub_schema.py tests/unit/test_schema.py -q`
 Expected: PASS and no key value in captured requests, exceptions, or rows.
 
 - [ ] **Step 5: Commit**
@@ -244,7 +244,7 @@ def test_nearby_parcels_across_positive_gap_never_connect() -> None:
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/unit/test_vacant_house_hubs.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_hubs.py -q`
 Expected: FAIL because `build_contiguous_hubs` does not exist.
 
 - [ ] **Step 3: Implement deterministic STRtree adjacency and connected components**
@@ -266,7 +266,7 @@ orders parcel count and union area before covered tourism context.
 
 - [ ] **Step 4: Run topology tests and mutation cases**
 
-Run: `python -m pytest tests/unit/test_vacant_house_hubs.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_hubs.py -q`
 Expected: PASS for touching, transitive connection, gap, overlap, duplicate PNU,
 invalid geometry, West Busan scope, minimum-three, no-padding, and stable ties.
 
@@ -308,7 +308,7 @@ def test_same_inputs_publish_same_manifest_and_candidate_order(hub_db: Database)
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/integration/test_vacant_house_hub_publication.py -q`  
+Run: `python -m pytest tests/integration/test_vacant_house_hub_publication.py -q`
 Expected: FAIL because publication code and CLI are absent.
 
 - [ ] **Step 3: Implement target-run-only persistence and pointer finalization**
@@ -326,7 +326,7 @@ with db.transaction():
 
 - [ ] **Step 4: Run hub publication and existing fencing regressions**
 
-Run: `python -m pytest tests/integration/test_vacant_house_hub_publication.py tests/integration/test_vacant_house_publication.py tests/integration/test_spatial_fencing.py -q`  
+Run: `python -m pytest tests/integration/test_vacant_house_hub_publication.py tests/integration/test_vacant_house_publication.py tests/integration/test_spatial_fencing.py -q`
 Expected: PASS with active-owner denial, takeover, stale-owner denial, crash/retry,
 same-input idempotence, exact manifest, and prior-pointer preservation.
 
@@ -367,7 +367,7 @@ def test_returns_only_evidence_supported_address_status(parcel: str, expected: s
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/unit/test_vacant_house_address_analysis.py tests/integration/test_tourism_ai_api.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_address_analysis.py tests/integration/test_tourism_ai_api.py -q`
 Expected: FAIL because the request, response, analyser, and route are absent.
 
 - [ ] **Step 3: Implement exact membership/adjacency and the narrow route**
@@ -397,7 +397,7 @@ location = /tourism/api/vacant/address-analysis {
 }
 ```
 
-Run: `python -m pytest tests/unit/test_vacant_house_address_analysis.py tests/integration/test_tourism_ai_api.py tests/unit/test_tourism_ai_operations.py -q`  
+Run: `python -m pytest tests/unit/test_vacant_house_address_analysis.py tests/integration/test_tourism_ai_api.py tests/unit/test_tourism_ai_operations.py -q`
 Expected: PASS and no credential/provider payload in response or logs.
 
 - [ ] **Step 5: Commit**
@@ -449,7 +449,7 @@ def test_map_is_slippy_and_progressively_discloses_vacant_locations(tmp_path: Pa
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/integration/test_vacant_house_map.py tests/unit/test_tourism_ai_frontend.py -q`  
+Run: `python -m pytest tests/integration/test_vacant_house_map.py tests/unit/test_tourism_ai_frontend.py -q`
 Expected: FAIL because the exporter and completed tab are absent.
 
 - [ ] **Step 3: Implement deterministic bundle and Leaflet interactions**
@@ -471,8 +471,8 @@ warning. Lazy-load the map only when the vacant tab opens.
 
 - [ ] **Step 5: Run frontend, map, accessibility, and syntax tests**
 
-Run: `python -m pytest tests/integration/test_vacant_house_map.py tests/unit/test_tourism_ai_frontend.py -q`  
-Run: `node --check src/westbusan/vacant_house/assets/vacant_map.js`  
+Run: `python -m pytest tests/integration/test_vacant_house_map.py tests/unit/test_tourism_ai_frontend.py -q`
+Run: `node --check src/westbusan/vacant_house/assets/vacant_map.js`
 Expected: PASS; filters change counts, candidate click fits component bounds,
 wheel/button zoom changes tile scale, maximum zoom reveals individual vacant-
 house locations, parcel/house click exposes detail, no static background map is
@@ -498,9 +498,9 @@ git commit -m "feat(tourism): map contiguous vacant-house hubs"
 
 - [ ] **Step 1: Run the complete local quality gate**
 
-Run: `python -m pytest tests/unit/test_vacant_house_*.py tests/integration/test_vacant_house_*.py tests/integration/test_tourism_ai_api.py tests/unit/test_tourism_ai_frontend.py -q`  
-Run: `ruff check src tests`  
-Run: `git diff --check`  
+Run: `python -m pytest tests/unit/test_vacant_house_*.py tests/integration/test_vacant_house_*.py tests/integration/test_tourism_ai_api.py tests/unit/test_tourism_ai_frontend.py -q`
+Run: `ruff check src tests`
+Run: `git diff --check`
 Expected: all pass with a clean credential/private-path scan.
 
 - [ ] **Step 2: Perform read-only production precheck and backup**

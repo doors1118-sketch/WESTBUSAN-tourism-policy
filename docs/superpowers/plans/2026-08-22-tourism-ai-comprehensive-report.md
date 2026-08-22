@@ -50,7 +50,7 @@ def test_report_rejects_duplicate_priorities_and_unknown_metric_ids() -> None:
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/unit/test_tourism_ai_report_models.py -q`  
+Run: `python -m pytest tests/unit/test_tourism_ai_report_models.py -q`
 Expected: FAIL because report models and evidence validation are absent.
 
 - [ ] **Step 3: Implement frozen Pydantic models and validators**
@@ -70,7 +70,7 @@ def require_sections(self):
 
 - [ ] **Step 4: Run model tests**
 
-Run: `python -m pytest tests/unit/test_tourism_ai_report_models.py -q`  
+Run: `python -m pytest tests/unit/test_tourism_ai_report_models.py -q`
 Expected: PASS for missing/duplicate sections, priority collisions, unsupported
 claims, excessive length, and unknown evidence.
 
@@ -104,7 +104,7 @@ def test_catalogue_pins_every_publication_and_reconciles_hub_counts(report_db: P
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/unit/test_tourism_ai_report_metrics.py -q`  
+Run: `python -m pytest tests/unit/test_tourism_ai_report_metrics.py -q`
 Expected: FAIL because the report catalogue is absent.
 
 - [ ] **Step 3: Implement one read-only snapshot transaction**
@@ -124,7 +124,7 @@ never count source units as parcels.
 
 - [ ] **Step 4: Run metrics and existing KPI regressions**
 
-Run: `python -m pytest tests/unit/test_tourism_ai_report_metrics.py tests/unit/test_tourism_ai_metrics.py -q`  
+Run: `python -m pytest tests/unit/test_tourism_ai_report_metrics.py tests/unit/test_tourism_ai_metrics.py -q`
 Expected: PASS for nulls, dates, coverage, East-West comparisons, district
 metrics, hub aggregates, and pointer mismatch rejection.
 
@@ -164,7 +164,7 @@ def test_provider_failure_returns_all_eight_fallback_sections() -> None:
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/unit/test_tourism_ai_report_service.py -q`  
+Run: `python -m pytest tests/unit/test_tourism_ai_report_service.py -q`
 Expected: FAIL because the comprehensive report service is absent.
 
 - [ ] **Step 3: Implement bounded structured prompt and fallback builder**
@@ -185,7 +185,7 @@ PNU, coordinates, source paths, provider payloads, and credentials.
 
 - [ ] **Step 4: Run service and credential-redaction tests**
 
-Run: `python -m pytest tests/unit/test_tourism_ai_report_service.py tests/unit/test_tourism_ai_service.py -q`  
+Run: `python -m pytest tests/unit/test_tourism_ai_report_service.py tests/unit/test_tourism_ai_service.py -q`
 Expected: PASS for malformed JSON, invented metrics, unsupported guarantees,
 timeouts, 401 text containing a secret, and deterministic fallback.
 
@@ -229,7 +229,7 @@ def test_new_hub_pointer_invalidates_report_cache(client: TestClient) -> None:
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/integration/test_tourism_ai_api.py -q`  
+Run: `python -m pytest tests/integration/test_tourism_ai_api.py -q`
 Expected: FAIL because `/report` and its cache identity are absent.
 
 - [ ] **Step 3: Implement atomic model-only cache and daily guard**
@@ -257,7 +257,7 @@ location = /tourism/api/report {
 }
 ```
 
-Run: `python -m pytest tests/integration/test_tourism_ai_api.py tests/unit/test_tourism_ai_operations.py -q`  
+Run: `python -m pytest tests/integration/test_tourism_ai_api.py tests/unit/test_tourism_ai_operations.py -q`
 Expected: PASS for cache hit/miss, publication invalidation, fallback non-cache,
 strict body, rate-route config, and health isolation.
 
@@ -292,7 +292,7 @@ def test_comprehensive_tab_has_all_report_sections_and_print_action() -> None:
 
 - [ ] **Step 2: Run tests and verify RED**
 
-Run: `python -m pytest tests/unit/test_tourism_ai_frontend.py -q`  
+Run: `python -m pytest tests/unit/test_tourism_ai_frontend.py -q`
 Expected: FAIL because the existing insight cards are not the approved report layout.
 
 - [ ] **Step 3: Implement safe report rendering**
@@ -315,8 +315,8 @@ date, source, cache status, cited evidence, and limitations. `인쇄` invokes
 
 - [ ] **Step 4: Run frontend and JavaScript syntax tests**
 
-Run: `python -m pytest tests/unit/test_tourism_ai_frontend.py -q`  
-Run: `node --check src/westbusan/tourism_dashboard/assets/app.js`  
+Run: `python -m pytest tests/unit/test_tourism_ai_frontend.py -q`
+Run: `node --check src/westbusan/tourism_dashboard/assets/app.js`
 Expected: PASS at desktop/mobile fixtures, keyboard buttons, fallback rendering,
 empty/error states, evidence disclosure, and print markup.
 
@@ -340,9 +340,9 @@ git commit -m "feat(tourism): present comprehensive AI policy report"
 
 - [ ] **Step 1: Run the complete report and affected regression gate**
 
-Run: `python -m pytest tests/unit/test_tourism_ai_*.py tests/integration/test_tourism_ai_api.py tests/integration/test_vacant_house_map.py tests/integration/test_spatial_map.py -q`  
-Run: `ruff check src tests`  
-Run: `git diff --check`  
+Run: `python -m pytest tests/unit/test_tourism_ai_*.py tests/integration/test_tourism_ai_api.py tests/integration/test_vacant_house_map.py tests/integration/test_spatial_map.py -q`
+Run: `ruff check src tests`
+Run: `git diff --check`
 Expected: all pass; secret scan finds no key, exact vacant address in model prompt,
 provider payload, or internal source path.
 

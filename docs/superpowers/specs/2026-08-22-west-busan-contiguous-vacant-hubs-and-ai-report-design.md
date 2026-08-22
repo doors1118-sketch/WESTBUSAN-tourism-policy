@@ -1,7 +1,7 @@
 # West Busan Contiguous Vacant-House Hubs and AI Report Design
 
-**Date:** 2026-08-22  
-**Status:** Approved for implementation  
+**Date:** 2026-08-22
+**Status:** Approved for implementation
 **Target branch:** `codex/busan-authority-filter`
 
 ## 1. Purpose
