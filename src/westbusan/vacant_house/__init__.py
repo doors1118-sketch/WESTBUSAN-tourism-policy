@@ -14,6 +14,7 @@ from westbusan.vacant_house.hub_models import (
     VacantHub,
     VacantParcel,
 )
+from westbusan.vacant_house.hubs import build_contiguous_hubs
 from westbusan.vacant_house.models import (
     ArchiveProfile,
     VacantHouseSourceError,
@@ -33,6 +34,7 @@ __all__ = [
     "VacantHouseSourceRow",
     "VacantHub",
     "VacantParcel",
+    "build_contiguous_hubs",
     "build_corrected_archive",
     "build_pnu",
     "collapse_to_parcels",
