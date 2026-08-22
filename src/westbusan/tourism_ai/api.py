@@ -8,7 +8,6 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-from westbusan.spatial.geocode import VWorldGeocoder
 from westbusan.tourism_ai.cache import (
     ClientCooldownExceeded,
     DailyLimitExceeded,
@@ -28,6 +27,7 @@ from westbusan.tourism_ai.service import InsightGenerator, InsightService
 from westbusan.tourism_ai.vworld_proxy import (
     VWorldBasemapError,
     VWorldBasemapProxy,
+    VWorldGeocodeProxy,
     VWorldTileProxy,
 )
 
@@ -79,7 +79,7 @@ def create_app(
     )
     vworld: VWorldBasemapProxy | None = None
     vworld_tiles: VWorldTileProxy | None = None
-    vworld_geocoder: VWorldGeocoder | None = None
+    vworld_geocoder: VWorldGeocodeProxy | None = None
     if settings.vworld_api_key is not None:
         upstream = vworld_client or httpx.Client(timeout=15.0)
         vworld = VWorldBasemapProxy(
@@ -90,9 +90,9 @@ def create_app(
             api_key=settings.vworld_api_key.get_secret_value(),
             client=upstream,
         )
-        vworld_geocoder = VWorldGeocoder(
-            settings.vworld_api_key.get_secret_value(),
-            upstream,
+        vworld_geocoder = VWorldGeocodeProxy(
+            api_key=settings.vworld_api_key.get_secret_value(),
+            client=upstream,
         )
 
     @app.middleware("http")
@@ -109,7 +109,7 @@ def create_app(
     def vworld_geocode(payload: ParcelGeocodeRequest) -> dict[str, object]:
         if vworld_geocoder is None:
             raise HTTPException(status_code=503, detail="vworld_unavailable")
-        result = vworld_geocoder.resolve(payload.address, address_type="PARCEL")
+        result = vworld_geocoder.resolve(payload.address)
         return ParcelGeocodeResponse(
             status=result.status,  # type: ignore[arg-type]
             longitude=result.longitude,

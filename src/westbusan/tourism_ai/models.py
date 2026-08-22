@@ -15,7 +15,24 @@ from pydantic import (
     model_validator,
 )
 
-from westbusan.config import BUSAN_DISTRICTS
+_BUSAN_DISTRICTS = (
+    "중구",
+    "서구",
+    "동구",
+    "영도구",
+    "부산진구",
+    "동래구",
+    "남구",
+    "북구",
+    "해운대구",
+    "사하구",
+    "금정구",
+    "강서구",
+    "연제구",
+    "수영구",
+    "사상구",
+    "기장군",
+)
 
 
 class ParcelGeocodeRequest(BaseModel):
@@ -28,7 +45,7 @@ class ParcelGeocodeRequest(BaseModel):
     @model_validator(mode="after")
     def validate_busan_address(self) -> ParcelGeocodeRequest:
         if "부산" not in self.address or not any(
-            district in self.address for district in BUSAN_DISTRICTS
+            district in self.address for district in _BUSAN_DISTRICTS
         ):
             raise ValueError("a Busan district and city name are required")
         return self
