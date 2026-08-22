@@ -87,8 +87,8 @@ function renderMonthlyTrend(data) {
   [
     ["서부산 최신 방문수요", value(Math.round(latest.west.visitorDailyAverage)), latest.period.replace("-", ".")],
     ["동부산 최신 방문수요", value(Math.round(latest.east.visitorDailyAverage)), latest.period.replace("-", ".")],
-    ["서부산 12개월 신규 진입", value(westEntryTotal, "개소"), "현재 영업시설 기준"],
-    ["동부산 12개월 신규 진입", value(eastEntryTotal, "개소"), "현재 영업시설 기준"],
+    ["서부산 12개월 최초 인허가", value(westEntryTotal, "개소"), "현재 영업시설 기준"],
+    ["동부산 12개월 최초 인허가", value(eastEntryTotal, "개소"), "현재 영업시설 기준"],
   ].forEach(([label, main, note]) => {
     const item = node("article", "trend-stat");
     item.append(node("span", "", label), node("strong", "", main), node("small", "", note));
@@ -97,10 +97,11 @@ function renderMonthlyTrend(data) {
 
   clear(chart);
   const width = 1120;
-  const height = 360;
-  const plot = { left: 76, right: 66, top: 28, bottom: 56 };
-  const plotWidth = width - plot.left - plot.right;
-  const plotHeight = height - plot.top - plot.bottom;
+  const height = 470;
+  const frame = { left: 76, right: 36 };
+  const demandPlot = { top: 54, height: 190 };
+  const entryPlot = { top: 318, height: 90 };
+  const plotWidth = width - frame.left - frame.right;
   const visitors = series.flatMap((item) => [item.west.visitorDailyAverage, item.east.visitorDailyAverage]);
   const visitorMin = Math.min(...visitors);
   const visitorMax = Math.max(...visitors);
@@ -108,9 +109,9 @@ function renderMonthlyTrend(data) {
   const visitorFloor = Math.max(0, visitorMin - visitorPadding);
   const visitorCeiling = visitorMax + visitorPadding;
   const entryMax = Math.max(1, ...series.flatMap((item) => [item.west.newActiveFacilities, item.east.newActiveFacilities]));
-  const x = (index) => plot.left + (plotWidth * index) / (series.length - 1);
-  const demandY = (amount) => plot.top + plotHeight * (1 - ((amount - visitorFloor) / (visitorCeiling - visitorFloor)));
-  const entryY = (amount) => plot.top + plotHeight * (1 - amount / entryMax);
+  const x = (index) => frame.left + (plotWidth * index) / (series.length - 1);
+  const demandY = (amount) => demandPlot.top + demandPlot.height * (1 - ((amount - visitorFloor) / (visitorCeiling - visitorFloor)));
+  const entryY = (amount) => entryPlot.top + entryPlot.height * (1 - amount / entryMax);
 
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
@@ -121,18 +122,30 @@ function renderMonthlyTrend(data) {
     return element;
   };
 
-  for (let tick = 0; tick <= 4; tick += 1) {
-    const y = plot.top + (plotHeight * tick) / 4;
-    const amount = visitorCeiling - ((visitorCeiling - visitorFloor) * tick) / 4;
-    svg.append(svgNode("line", { x1: plot.left, x2: width - plot.right, y1: y, y2: y, class: "trend-grid" }));
-    const label = svgNode("text", { x: plot.left - 12, y: y + 4, class: "trend-axis-label", "text-anchor": "end" });
+  svg.append(
+    svgNode("rect", { x: frame.left, y: demandPlot.top, width: plotWidth, height: demandPlot.height, rx: 12, class: "trend-demand-panel" }),
+    svgNode("rect", { x: frame.left, y: entryPlot.top, width: plotWidth, height: entryPlot.height, rx: 12, class: "trend-entry-panel" }),
+  );
+  const demandLabel = svgNode("text", { x: frame.left, y: demandPlot.top - 17, class: "trend-panel-label" });
+  demandLabel.textContent = "방문수요(천 명)";
+  const entryLabel = svgNode("text", { x: frame.left, y: entryPlot.top - 17, class: "trend-panel-label" });
+  entryLabel.textContent = "최초 인허가 시설(개소)";
+  svg.append(demandLabel, entryLabel, svgNode("line", { x1: frame.left, x2: width - frame.right, y1: 280, y2: 280, class: "trend-panel-divider" }));
+
+  for (let tick = 0; tick <= 3; tick += 1) {
+    const y = demandPlot.top + (demandPlot.height * tick) / 3;
+    const amount = visitorCeiling - ((visitorCeiling - visitorFloor) * tick) / 3;
+    svg.append(svgNode("line", { x1: frame.left, x2: width - frame.right, y1: y, y2: y, class: "trend-grid" }));
+    const label = svgNode("text", { x: frame.left - 12, y: y + 4, class: "trend-axis-label", "text-anchor": "end" });
     label.textContent = fmt.format(Math.round(amount / 1000));
     svg.append(label);
   }
 
   [0, Math.ceil(entryMax / 2), entryMax].forEach((amount) => {
-    const label = svgNode("text", { x: width - plot.right + 12, y: entryY(amount) + 4, class: "trend-axis-label entry-axis", "text-anchor": "start" });
-    label.textContent = `${amount}개`;
+    const y = entryY(amount);
+    svg.append(svgNode("line", { x1: frame.left, x2: width - frame.right, y1: y, y2: y, class: "trend-grid entry-grid" }));
+    const label = svgNode("text", { x: frame.left - 12, y: y + 4, class: "trend-axis-label entry-axis", "text-anchor": "end" });
+    label.textContent = String(amount);
     svg.append(label);
   });
 
@@ -145,9 +158,9 @@ function renderMonthlyTrend(data) {
       const barClass = region === "west" ? "trend-bar west" : "trend-bar east";
       svg.append(svgNode("rect", {
         x: x(index) + offset,
-        y: amount === 0 ? plot.top + plotHeight - 2 : y,
+        y: amount === 0 ? entryPlot.top + entryPlot.height - 2 : y,
         width: barWidth,
-        height: amount === 0 ? 2 : plot.top + plotHeight - y,
+        height: amount === 0 ? 2 : entryPlot.top + entryPlot.height - y,
         rx: 4,
         class: amount === 0 ? `${barClass} zero` : barClass,
       }));
@@ -161,7 +174,7 @@ function renderMonthlyTrend(data) {
   series.forEach((item, index) => {
     svg.append(svgNode("circle", { cx: x(index), cy: demandY(item.west.visitorDailyAverage), r: 5, class: "trend-point west" }));
     svg.append(svgNode("circle", { cx: x(index), cy: demandY(item.east.visitorDailyAverage), r: 5, class: "trend-point east" }));
-    const label = svgNode("text", { x: x(index), y: height - 22, class: "trend-month", "text-anchor": "middle" });
+    const label = svgNode("text", { x: x(index), y: height - 24, class: "trend-month", "text-anchor": "middle" });
     label.textContent = item.period.slice(2).replace("-", ".");
     svg.append(label);
   });
@@ -174,8 +187,8 @@ function renderMonthlyTrend(data) {
       node("strong", "", item.period.replace("-", ".")),
       node("span", "west-demand", `서부산 방문수요 ${value(Math.round(item.west.visitorDailyAverage), "명")}`),
       node("span", "east-demand", `동부산 방문수요 ${value(Math.round(item.east.visitorDailyAverage), "명")}`),
-      node("span", "west-entry", `서부산 월별 신규 진입 ${value(item.west.newActiveFacilities, "개소")}`),
-      node("span", "east-entry", `동부산 월별 신규 진입 ${value(item.east.newActiveFacilities, "개소")}`),
+      node("span", "west-entry", `서부산 최초 인허가 시설 ${value(item.west.newActiveFacilities, "개소")}`),
+      node("span", "east-entry", `동부산 최초 인허가 시설 ${value(item.east.newActiveFacilities, "개소")}`),
     );
     const chartRect = chart.getBoundingClientRect();
     const proposed = clientX == null ? (x(index) / width) * chart.scrollWidth - chart.scrollLeft : clientX - chartRect.left;
@@ -184,11 +197,11 @@ function renderMonthlyTrend(data) {
   }
 
   series.forEach((item, index) => {
-    const previousX = index === 0 ? plot.left : (x(index - 1) + x(index)) / 2;
-    const nextX = index === series.length - 1 ? width - plot.right : (x(index) + x(index + 1)) / 2;
-    const target = svgNode("rect", { x: previousX, y: plot.top, width: nextX - previousX, height: plotHeight, class: "trend-hit" });
+    const previousX = index === 0 ? frame.left : (x(index - 1) + x(index)) / 2;
+    const nextX = index === series.length - 1 ? width - frame.right : (x(index) + x(index + 1)) / 2;
+    const target = svgNode("rect", { x: previousX, y: demandPlot.top, width: nextX - previousX, height: entryPlot.top + entryPlot.height - demandPlot.top, class: "trend-hit" });
     target.setAttribute("tabindex", "0");
-    target.setAttribute("aria-label", `${item.period}, 서부산 방문수요 ${Math.round(item.west.visitorDailyAverage)}명, 동부산 방문수요 ${Math.round(item.east.visitorDailyAverage)}명, 서부산 신규 ${item.west.newActiveFacilities}개소, 동부산 신규 ${item.east.newActiveFacilities}개소`);
+    target.setAttribute("aria-label", `${item.period}, 서부산 방문수요 ${Math.round(item.west.visitorDailyAverage)}명, 동부산 방문수요 ${Math.round(item.east.visitorDailyAverage)}명, 서부산 최초 인허가 ${item.west.newActiveFacilities}개소, 동부산 최초 인허가 ${item.east.newActiveFacilities}개소`);
     target.addEventListener("pointerenter", (event) => showTooltip(index, event.clientX));
     target.addEventListener("pointermove", (event) => showTooltip(index, event.clientX));
     target.addEventListener("focus", () => showTooltip(index));
@@ -197,7 +210,7 @@ function renderMonthlyTrend(data) {
     svg.append(target);
   });
   chart.append(svg);
-  chart.setAttribute("aria-label", "서부산과 동부산의 최근 12개월 일평균 방문수요 선과 현재 영업시설 신규 진입 병렬 막대 비교");
+  chart.setAttribute("aria-label", "서부산과 동부산의 최근 12개월 일평균 방문수요 선과 현재 영업시설 최초 인허가 병렬 막대 비교");
 }
 
 function renderDashboard(data) {
