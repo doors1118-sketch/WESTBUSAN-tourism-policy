@@ -46,8 +46,9 @@ function renderDashboard(data) {
   const east = data.regions.find((item) => item.id === "east");
 
   const overview = document.querySelector("[data-overview-kpis]");
+  const facilityMix = west.facilityMix.map((item) => `${item.name} ${value(item.facilities, "개소")}`).join(" · ");
   overview.append(
-    kpi("서부산 확인 객실", value(west.rooms, "실"), `객실 확인률 ${west.roomCoverageShare}%`, `동부산 확인치의 ${(west.rooms / east.rooms * 100).toFixed(1)}%`),
+    kpi("서부산 숙박업체", `${value(west.facilities, "개소")} (${value(west.rooms, "실")})`, facilityMix, `동부산 업체 수의 ${(west.facilities / east.facilities * 100).toFixed(1)}%`),
     kpi("객실 100실당 방문수요", value(west.demandPer100Rooms), "외지인+외국인 일평균 기준", `동부산의 ${(west.demandPer100Rooms / east.demandPer100Rooms).toFixed(2)}배`),
     kpi("관광숙박 등록", value(west.tourismFacilityShare, "%"), "시설 비율", `동부산 ${east.tourismFacilityShare}%`),
     kpi("2021년 이후 신규", value(west.recentLicenseShare, "%"), "시설 인허가 기준", `동부산 ${east.recentLicenseShare}%`)

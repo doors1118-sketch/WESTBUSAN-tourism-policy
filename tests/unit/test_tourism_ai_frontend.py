@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260821-ui-v5"' in html
-    assert 'src="app.js?v=20260821-ui-v5"' in html
+    assert 'href="app.css?v=20260822-facility-mix-v13"' in html
+    assert 'src="app.js?v=20260822-facility-mix-v13"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -129,13 +129,32 @@ def test_metric_document_preserves_units_coverage_and_missing_state() -> None:
     document = json.loads(_asset("data.json"))
     regions = {row["id"]: row for row in document["regions"]}
 
-    assert regions["west"]["roomCoverageShare"] == 90.5
+    assert regions["west"]["roomCoverageShare"] == 90.3
     assert regions["east"]["roomCoverageShare"] == 51.8
     assert regions["west"]["visitorDailyAverage"] == 371553
     assert regions["west"]["licenseAgeAverageYears"] == 28.0
     assert document["availability"]["transport"] == "preparing"
     assert document["availability"]["stayDuration"] == "preparing"
     assert document["metricNotes"]["consumptionIndex"].startswith("원천지표")
+
+
+def test_overview_leads_with_exclusive_facility_mix_not_room_coverage() -> None:
+    document = json.loads(_asset("data.json"))
+    script = _asset("app.js")
+    west = next(row for row in document["regions"] if row["id"] == "west")
+
+    assert west["facilities"] == 431
+    assert west["rooms"] == 10442
+    assert west["facilityMix"] == [
+        {"id": "tourism", "name": "관광숙박", "facilities": 3},
+        {"id": "general", "name": "일반숙박", "facilities": 389},
+        {"id": "other", "name": "기타", "facilities": 39},
+    ]
+    assert sum(item["facilities"] for item in west["facilityMix"]) == west["facilities"]
+    assert "서부산 숙박업체" in script
+    assert 'value(west.facilities, "개소")' in script
+    assert 'value(west.rooms, "실")' in script
+    assert "객실 확인률 ${west.roomCoverageShare}%" not in script
 
 
 def test_vacant_house_tab_does_not_embed_exact_locations() -> None:

@@ -1,7 +1,7 @@
 {
   "asOf": "2026-08-21",
   "coreAsOf": "2026-08-19",
-  "publishedRun": "6ca4fa4f-e413-53d8-a5bf-b5f28a776fae",
+  "publishedRun": "83aaecea-7650-5399-9b3e-d63f6ec858a0",
   "spatialRun": "e3efcf69-8fb3-576a-96b8-6f53abc499b7",
   "availability": {"transport": "preparing", "stayDuration": "preparing", "facilityPoints": "available"},
   "metricNotes": {
@@ -10,9 +10,9 @@
     "visitorDailyAverage": "2025-08-01~2026-07-21 외지인+외국인 방문자-인일 일평균"
   },
   "regions": [
-    {"id":"west","name":"서부산","facilities":430,"rooms":10442,"roomShare":15.4,"roomCoverageShare":90.5,"roomMedian":20.0,"buildingAgeAverageYears":30.3,"buildingAgeMedianYears":29.2,"buildingAgeCoverageShare":71.4,"old20Share":86.6,"old30Share":48.5,"licenseAgeAverageYears":28.0,"licenseAgeMedianYears":26.0,"recentLicenseShare":8.4,"rolling5YearNewShare":7.7,"tourismFacilityShare":0.7,"foreignCapableShare":2.3,"visitorDailyAverage":371553,"demandPer100Rooms":3558.3,"stay3Index":78.81,"consumptionIndex":80.44},
-    {"id":"east","name":"동부산","facilities":1377,"rooms":23163,"roomShare":34.1,"roomCoverageShare":51.8,"roomMedian":17.0,"buildingAgeAverageYears":28.9,"buildingAgeMedianYears":30.5,"buildingAgeCoverageShare":66.2,"old20Share":72.0,"old30Share":51.8,"licenseAgeAverageYears":8.3,"licenseAgeMedianYears":3.2,"recentLicenseShare":59.6,"rolling5YearNewShare":58.0,"tourismFacilityShare":11.3,"foreignCapableShare":38.3,"visitorDailyAverage":462650,"demandPer100Rooms":1997.4,"stay3Index":94.43,"consumptionIndex":81.61},
-    {"id":"other","name":"기타 부산","facilities":1296,"rooms":34339,"roomShare":50.5,"roomCoverageShare":87.3,"roomMedian":19.0,"buildingAgeAverageYears":33.0,"buildingAgeMedianYears":36.4,"buildingAgeCoverageShare":73.8,"old20Share":82.9,"old30Share":60.9,"licenseAgeAverageYears":24.2,"licenseAgeMedianYears":23.5,"recentLicenseShare":25.5,"rolling5YearNewShare":24.6,"tourismFacilityShare":3.7,"foreignCapableShare":12.7,"visitorDailyAverage":980112,"demandPer100Rooms":2854.2,"stay3Index":79.47,"consumptionIndex":65.05}
+    {"id":"west","name":"서부산","facilities":431,"rooms":10442,"facilityMix":[{"id":"tourism","name":"관광숙박","facilities":3},{"id":"general","name":"일반숙박","facilities":389},{"id":"other","name":"기타","facilities":39}],"roomShare":15.4,"roomCoverageShare":90.3,"roomMedian":20.0,"buildingAgeAverageYears":30.3,"buildingAgeMedianYears":29.2,"buildingAgeCoverageShare":71.4,"old20Share":86.6,"old30Share":48.5,"licenseAgeAverageYears":28.0,"licenseAgeMedianYears":26.0,"recentLicenseShare":8.4,"rolling5YearNewShare":7.7,"tourismFacilityShare":0.7,"foreignCapableShare":2.3,"visitorDailyAverage":371553,"demandPer100Rooms":3558.3,"stay3Index":78.81,"consumptionIndex":80.44},
+    {"id":"east","name":"동부산","facilities":1377,"rooms":23161,"roomShare":34.1,"roomCoverageShare":51.8,"roomMedian":17.0,"buildingAgeAverageYears":28.9,"buildingAgeMedianYears":30.5,"buildingAgeCoverageShare":66.2,"old20Share":72.0,"old30Share":51.8,"licenseAgeAverageYears":8.3,"licenseAgeMedianYears":3.2,"recentLicenseShare":59.6,"rolling5YearNewShare":58.0,"tourismFacilityShare":11.3,"foreignCapableShare":38.3,"visitorDailyAverage":462650,"demandPer100Rooms":1997.5,"stay3Index":94.43,"consumptionIndex":81.61},
+    {"id":"other","name":"기타 부산","facilities":1295,"rooms":34346,"roomShare":50.5,"roomCoverageShare":87.4,"roomMedian":19.0,"buildingAgeAverageYears":33.0,"buildingAgeMedianYears":36.4,"buildingAgeCoverageShare":73.8,"old20Share":82.9,"old30Share":60.9,"licenseAgeAverageYears":24.2,"licenseAgeMedianYears":23.5,"recentLicenseShare":25.5,"rolling5YearNewShare":24.6,"tourismFacilityShare":3.7,"foreignCapableShare":12.7,"visitorDailyAverage":980112,"demandPer100Rooms":2853.6,"stay3Index":79.47,"consumptionIndex":65.05}
   ],
   "westDistricts": [
     {"rank":1,"name":"강서구","rooms":1936,"roomCoverageShare":58.7,"demandPer100Rooms":7404.7,"stay3Index":77.33,"old20Share":52.2,"recentLicenseShare":28.0,"priority":"신규 공급·외국인 수용"},
