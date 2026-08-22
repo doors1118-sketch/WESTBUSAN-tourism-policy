@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="관광수요를 부산의 체류·숙박·소비로 연결하기 위한 정책 분석 대시보드">
   <title>부산 관광경제 활력 분석</title>
-  <link rel="stylesheet" href="app.css?v=20260822-east-west-supply-v32">
+  <link rel="stylesheet" href="app.css?v=20260822-registration-types-v34">
 </head>
 <body>
   <header class="topbar">
@@ -61,15 +61,15 @@
       </article>
       <div class="two-column">
         <article class="card"><div class="card-head"><h3>권역별 핵심지표 비교</h3><span>서부산 · 동부산 · 기타</span></div><div class="region-comparison"><div class="room-donut" data-room-donut aria-label="권역별 확인 객실 구성"><div><strong>확인 객실</strong><span>권역 구성</span></div></div><div class="region-summary" data-region-summary></div></div></article>
-        <article class="card diagnosis"><span class="label">핵심 진단</span><h3>관광객 부족보다<br>체류전환 구조의 부족</h3><p>서부산은 현재 확인 객실 대비 방문 압력이 높지만 관광숙박·외국인 수용 등록과 최근 신규 진입은 동부산보다 낮습니다.</p><div class="evidence-line" data-core-evidence></div></article>
+        <article class="card diagnosis"><span class="label">핵심 진단</span><h3>관광객 부족보다<br>체류전환 구조의 부족</h3><p>서부산은 현재 확인 객실 대비 방문 압력이 높지만 관광숙박·외국인 숙박 대응시설과 최근 숙박업 등록은 동부산보다 낮습니다.</p><div class="evidence-line" data-core-evidence></div></article>
       </div>
-      <div class="notice">객실·건축물 지표는 확인률을 함께 봐야 합니다. 특히 동부산 객실 총량은 확인률 51.8%로 실제 공급을 과소평가할 수 있습니다.</div>
+      <div class="notice">객실·건축물 지표는 자료 확보율을 함께 봐야 합니다. 특히 동부산 객실자료 확보율은 51.8%로, 확인 객실 총량이 실제 공급을 과소평가할 수 있습니다.</div>
     </section>
 
     <section class="tab-panel" data-tab-panel="tourism" id="tourism">
       <div class="section-head"><div><span>WEST BUSAN DISTRICTS</span><h2>서부산 자치구 상세현황</h2></div><p>해운대구를 동일 기준 비교값으로 사용합니다.</p></div>
       <div class="district-summary-grid" data-west-district-summary></div>
-      <div class="district-priority-note" data-district-priority-note><strong>우선순위 산정 기준</strong><span>객실 100실당 일평균 방문수요(최근 355일 외지인·외국인 일평균 방문수요 ÷ 확인 객실 × 100)가 높은 순서입니다. 노후도·관광숙박·외국인 수용·신규 진입은 지원유형 판단에 활용하며, 최종 투자 확정 순위가 아닙니다.</span></div>
+      <div class="district-priority-note" data-district-priority-note><strong>우선순위 산정 기준</strong><span>객실 100실당 일평균 방문수요(최근 355일 외지인·외국인 일평균 방문수요 ÷ 확인 객실 × 100)가 높은 순서입니다. 노후도·관광숙박·외국인 숙박 대응시설·최근 숙박업 등록은 지원유형 판단에 활용하며, 최종 투자 확정 순위가 아닙니다.</span></div>
       <article class="card district-chart-card">
         <div class="card-head"><h3>서부산 4개 구 분야별 비교</h3><span>괄호는 부산 전체 비중 · 합산 가능한 지표만 표시</span></div>
         <div class="district-chart-metrics" data-district-chart-metrics></div>
@@ -96,12 +96,20 @@
         <div class="visitor-demand-insight" data-visitor-demand-insight></div>
         <p class="visitor-demand-definition">관광데이터랩 외지인·외국인 분류의 일별 추정 방문인원입니다. 관광객 순인원·숙박객이 아닌 일별 추정 방문인원으로, 숙박수요의 직접 실적이 아니라 지역 방문압력을 비교하는 지표입니다.</p>
       </article>
+      <article class="card registration-type-card">
+        <div class="card-head"><h3>등록유형별 숙박업체 비교</h3><span>업체 수 기준 · 서부산·동부산·기타 부산</span></div>
+        <div class="registration-type-legend" aria-label="권역 색상 범례">
+          <span><i class="west"></i>서부산</span><span><i class="east"></i>동부산</span><span><i class="other"></i>기타 부산</span>
+        </div>
+        <div class="registration-type-chart" data-registration-type-bars aria-label="등록유형별 권역 숙박업체 수 막대그래프"></div>
+        <p class="registration-type-definition"><strong>업체 수 기준</strong>이며, 한 업체가 여러 등록유형에 해당하면 유형별로 중복 집계될 수 있습니다. 등록유형 기준·복수 등록 중복 가능.</p>
+      </article>
       <div class="region-donut-grid" data-supply-donuts aria-label="권역별 숙박시설 비중"></div>
-      <div class="metric-table-wrap card"><table class="metric-table"><thead><tr><th>권역</th><th>시설</th><th>확인 객실</th><th>객실 확인률</th><th>시설당 객실 중앙값</th><th>건물 평균연수</th><th>20년+</th><th>인허가 평균업력</th><th>2021년 이후 신규</th></tr></thead><tbody data-supply-table></tbody></table></div>
+      <div class="metric-table-wrap card"><table class="metric-table"><thead><tr><th>권역</th><th>시설</th><th>확인 객실</th><th>객실자료 확보율</th><th>시설당 객실 중앙값</th><th>건물 평균연수</th><th>20년+</th><th>인허가 평균업력</th><th>2021년 이후 숙박업 등록</th></tr></thead><tbody data-supply-table></tbody></table><p class="table-definition"><strong>객실자료 확보율</strong>은 전체 숙박시설 중 객실 수가 확인된 시설의 비율입니다. 동부산은 1,377개소 중 일반숙박 713개소의 객실 수가 확인됐으며, 관광숙박·도시민박 등은 현재 원천자료에 객실 수가 없어 확인 객실 합계에서 제외됩니다.</p></div>
       <div class="three-column compact-top">
         <article class="card mini-chart"><h3>관광숙박 등록 비율</h3><div data-tourism-bars></div></article>
-        <article class="card mini-chart"><h3>외국인 수용 등록 비율</h3><div data-foreign-bars></div></article>
-        <article class="card mini-chart"><h3>최근 신규 진입 비율</h3><div data-new-bars></div></article>
+        <article class="card mini-chart"><h3>외국인 숙박 대응시설 비율</h3><div data-foreign-bars></div></article>
+        <article class="card mini-chart"><h3>2021년 이후 숙박업 등록 비율</h3><div data-new-bars></div></article>
       </div>
     </section>
 
@@ -161,6 +169,6 @@
   </main>
 
   <footer><span>부산광역시 관광정책 내부 검토용</span><span>데이터 기준일 <strong data-as-of>—</strong></span></footer>
-  <script src="app.js?v=20260822-east-west-supply-v32"></script>
+  <script src="app.js?v=20260822-registration-types-v34"></script>
 </body>
 </html>

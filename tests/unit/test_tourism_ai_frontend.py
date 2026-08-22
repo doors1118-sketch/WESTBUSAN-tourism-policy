@@ -52,6 +52,9 @@ def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
     assert 'data-visitor-demand-bars' in html
     assert "외지인·외국인 방문수요" in html
     assert "관광객 순인원·숙박객이 아닌 일별 추정 방문인원" in html
+    assert "객실자료 확보율" in html
+    assert "전체 숙박시설 중 객실 수가 확인된 시설의 비율" in html
+    assert "객실 확인률" not in html
 
     regions = {region["id"]: region for region in document["regions"]}
     assert regions["west"]["nonlocalVisitorDailyAverage"] == 346768.6
@@ -70,7 +73,11 @@ def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
     assert '"외지인 방문수요"' in script
     assert '"외국인 방문수요"' in script
     assert "외국인 방문수요는 동부산의" in script
-    assert "외국인 수용 등록시설은 동부산의" in script
+    assert "외국인 숙박 대응시설은 동부산의" in script
+    assert 'label: "외국인 숙박 대응시설"' in script
+    assert "관광숙박업·외국인관광 도시민박업 등록시설 비율" in script
+    assert 'label: "2021년 이후 숙박업 등록"' in script
+    assert "현재 영업시설 중 최초 인허가일 2021.1.1 이후 비율" in script
     for selector in (
         ".supply-gap-summary",
         ".supply-gap-stat",
@@ -78,6 +85,54 @@ def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
         ".visitor-demand-row",
         ".visitor-demand-bar",
         ".visitor-demand-insight",
+    ):
+        assert selector in stylesheet
+
+
+def test_supply_gap_compares_registration_type_facilities_by_region() -> None:
+    """Keeps the separate registration-type chart facility based and source backed."""
+    html = _asset("index.html")
+    script = _asset("app.js")
+    stylesheet = _asset("app.css")
+    document = json.loads(_asset("data.json"))
+
+    assert "등록유형별 숙박업체 비교" in html
+    assert 'data-registration-type-bars' in html
+    assert "업체 수 기준" in html
+    assert "등록유형 기준·복수 등록 중복 가능" in html
+    assert "function renderRegistrationTypeComparison" in script
+
+    expected = {
+        "lodgings": ("일반숙박", {"west": 389, "east": 713, "other": 1132}),
+        "tourist_accommodations": (
+            "관광숙박",
+            {"west": 3, "east": 155, "other": 48},
+        ),
+        "foreigner_city_homestays": (
+            "외국인도시민박",
+            {"west": 8, "east": 372, "other": 115},
+        ),
+        "rural_homestays": (
+            "농어촌민박",
+            {"west": 31, "east": 132, "other": 0},
+        ),
+        "hanok_experience": (
+            "한옥체험",
+            {"west": 0, "east": 5, "other": 0},
+        ),
+    }
+    actual = {
+        item["id"]: (item["name"], item["regions"])
+        for item in document["registrationTypes"]
+    }
+    assert actual == expected
+
+    for selector in (
+        ".registration-type-card",
+        ".registration-type-chart",
+        ".registration-type-row",
+        ".registration-type-bar",
+        ".registration-type-legend",
     ):
         assert selector in stylesheet
 
@@ -108,8 +163,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-east-west-supply-v32"' in html
-    assert 'src="app.js?v=20260822-east-west-supply-v32"' in html
+    assert 'href="app.css?v=20260822-registration-types-v34"' in html
+    assert 'src="app.js?v=20260822-registration-types-v34"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -226,11 +281,11 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
         "서부산 숙박업체",
         "서부산 일평균 방문수요",
         "관광숙박업 등록시설 비율",
-        "2021년 이후 신규 인허가",
+        "2021년 이후 숙박업 등록",
         "방문량 대비 관광소비 원천지표",
         "건축연령 20년 이상 시설",
         "평균 인허가 경과연수",
-        "외국인 대상 관광등록",
+        "외국인 숙박 대응시설",
     ):
         assert label in script
 
@@ -239,14 +294,14 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     assert overview_block.count("kpi(") == 7
     assert overview_block.count("facilitySupplyKpi(west, east)") == 1
     assert "객실 비중이 아닙니다" in overview_block
-    assert "가장 이른 인허가일을 기준" in overview_block
+    assert "연결 인허가의 가장 이른 인허가일" in overview_block
     assert "지역 간 소비 수준 비교에만 사용" in overview_block
     assert "원화 금액·점유율로 해석하지 않습니다" in overview_block
     assert "내부 리모델링 상태를 뜻하지 않습니다" in overview_block
     assert "동일 사업자의 영업기간과 다릅니다" in overview_block
     for note in (
         "전체 숙박시설 대비 · 시설 수 기준",
-        "최초 인허가일 2021.1.1 이후",
+        "현재 영업시설 · 최초 인허가일 기준",
         "방문량 대비 방문소비 수준 · 2026.07",
         "건축물대장 사용승인일부터 산정",
         "최초 인허가일~기준일 평균",
@@ -257,7 +312,7 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     assert "metric-definition" in _asset("app.css")
     assert "white-space:nowrap" in _asset("app.css")
     assert "text-overflow:ellipsis" in _asset("app.css")
-    assert "관광숙박·외국인관광 도시민박" in overview_block
+    assert "관광숙박업·외국인관광 도시민박업" in overview_block
 
 
 def test_tourism_tab_is_west_district_detail_with_haeundae_benchmark() -> None:

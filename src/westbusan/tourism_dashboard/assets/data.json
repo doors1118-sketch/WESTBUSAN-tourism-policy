@@ -11,6 +11,13 @@
     "visitorTypeDailyAverage": "관광데이터랩 touDivCd 2(외지인)·3(외국인), 355일·16개 구군 완전 관측",
     "monthlyNewActiveFacilities": "현재 영업 중인 시설을 대상으로 시설별 최초 인허가월에 집계한 수치이며 전체 과거 시장 진입 건수는 아님"
   },
+  "registrationTypes": [
+    {"id":"lodgings","name":"일반숙박","regions":{"west":389,"east":713,"other":1132}},
+    {"id":"tourist_accommodations","name":"관광숙박","regions":{"west":3,"east":155,"other":48}},
+    {"id":"foreigner_city_homestays","name":"외국인도시민박","regions":{"west":8,"east":372,"other":115}},
+    {"id":"rural_homestays","name":"농어촌민박","regions":{"west":31,"east":132,"other":0}},
+    {"id":"hanok_experience","name":"한옥체험","regions":{"west":0,"east":5,"other":0}}
+  ],
   "monthlyTrends": [
     {"period":"2025-07","west":{"visitorDailyAverage":367179.6,"newActiveFacilities":1},"east":{"visitorDailyAverage":471945.7,"newActiveFacilities":19},"other":{"visitorDailyAverage":977605.5,"newActiveFacilities":4}},
     {"period":"2025-08","west":{"visitorDailyAverage":364033.5,"newActiveFacilities":0},"east":{"visitorDailyAverage":503318.9,"newActiveFacilities":22},"other":{"visitorDailyAverage":977048.8,"newActiveFacilities":5}},
@@ -31,7 +38,7 @@
     {"id":"other","name":"기타 부산","facilities":1295,"rooms":34346,"roomShare":50.5,"roomCoverageShare":87.4,"roomMedian":19.0,"buildingAgeAverageYears":33.0,"buildingAgeMedianYears":36.4,"buildingAgeCoverageShare":73.8,"old20Share":82.9,"old30Share":60.9,"licenseAgeAverageYears":24.2,"licenseAgeMedianYears":23.5,"recentLicenseShare":25.5,"rolling5YearNewShare":24.6,"tourismFacilityShare":3.7,"foreignCapableShare":12.7,"nonlocalVisitorDailyAverage":927856.7,"foreignVisitorDailyAverage":52255.0,"visitorDailyAverage":980112,"demandPer100Rooms":2853.6,"stay3Index":79.47,"consumptionIndex":65.05}
   ],
   "westDistricts": [
-    {"id":"gangseo","rank":1,"name":"강서구","facilities":75,"rooms":1936,"roomCoverageShare":58.7,"roomMedian":35.5,"buildingAgeAverageYears":16.3,"old20Share":52.2,"licenseAgeAverageYears":11.8,"recentLicenseShare":28.0,"tourismFacilityShare":0.0,"foreignCapableShare":0.0,"visitorDailyAverage":143355,"demandPer100Rooms":7404.7,"consumptionIndex":93.29,"stay3Index":77.33,"priority":"신규 공급·외국인 수용"},
+    {"id":"gangseo","rank":1,"name":"강서구","facilities":75,"rooms":1936,"roomCoverageShare":58.7,"roomMedian":35.5,"buildingAgeAverageYears":16.3,"old20Share":52.2,"licenseAgeAverageYears":11.8,"recentLicenseShare":28.0,"tourismFacilityShare":0.0,"foreignCapableShare":0.0,"visitorDailyAverage":143355,"demandPer100Rooms":7404.7,"consumptionIndex":93.29,"stay3Index":77.33,"priority":"신규 공급·외국인 숙박 대응"},
     {"id":"saha","rank":2,"name":"사하구","facilities":86,"rooms":2091,"roomCoverageShare":91.9,"roomMedian":20.0,"buildingAgeAverageYears":35.1,"old20Share":94.7,"licenseAgeAverageYears":30.4,"recentLicenseShare":5.8,"tourismFacilityShare":1.2,"foreignCapableShare":8.1,"visitorDailyAverage":73562,"demandPer100Rooms":3518.0,"consumptionIndex":58.25,"stay3Index":82.37,"priority":"노후시설 개선·체류상품"},
     {"id":"buk","rank":3,"name":"북구","facilities":99,"rooms":2399,"roomCoverageShare":99.0,"roomMedian":19.0,"buildingAgeAverageYears":30.7,"old20Share":89.8,"licenseAgeAverageYears":30.1,"recentLicenseShare":3.0,"tourismFacilityShare":1.0,"foreignCapableShare":1.0,"visitorDailyAverage":70498,"demandPer100Rooms":2938.6,"consumptionIndex":100.05,"stay3Index":80.03,"priority":"교통수요 연계·품질개선"},
     {"id":"sasang","rank":4,"name":"사상구","facilities":170,"rooms":4016,"roomCoverageShare":98.8,"roomMedian":18.0,"buildingAgeAverageYears":32.3,"old20Share":92.9,"licenseAgeAverageYears":32.8,"recentLicenseShare":4.1,"tourismFacilityShare":0.6,"foreignCapableShare":1.2,"visitorDailyAverage":84138,"demandPer100Rooms":2095.1,"consumptionIndex":70.16,"stay3Index":75.50,"priority":"리모델링·관광상품화"}

@@ -82,24 +82,28 @@ function renderSupplyGapSummary(target, west, east) {
       west: value(west.demandPer100Rooms),
       east: value(east.demandPer100Rooms),
       comparison: `서부산이 동부산의 ${value(west.demandPer100Rooms / east.demandPer100Rooms, "배")}`,
+      definition: "외지인+외국인 일평균 방문수요 ÷ 확인 객실 × 100",
     },
     {
       label: "관광숙박 등록",
       west: value(west.tourismFacilityShare, "%"),
       east: value(east.tourismFacilityShare, "%"),
       comparison: `서부산이 ${value(east.tourismFacilityShare - west.tourismFacilityShare, "%p 낮음")}`,
+      definition: "전체 숙박시설 중 관광숙박업 등록시설 비율",
     },
     {
-      label: "외국인 수용 등록",
+      label: "외국인 숙박 대응시설",
       west: value(west.foreignCapableShare, "%"),
       east: value(east.foreignCapableShare, "%"),
       comparison: `서부산이 ${value(east.foreignCapableShare - west.foreignCapableShare, "%p 낮음")}`,
+      definition: "관광숙박업·외국인관광 도시민박업 등록시설 비율",
     },
     {
-      label: "2021년 이후 신규 진입",
+      label: "2021년 이후 숙박업 등록",
       west: value(west.recentLicenseShare, "%"),
       east: value(east.recentLicenseShare, "%"),
       comparison: `서부산이 ${value(east.recentLicenseShare - west.recentLicenseShare, "%p 낮음")}`,
+      definition: "현재 영업시설 중 최초 인허가일 2021.1.1 이후 비율",
     },
   ];
   metrics.forEach((metric) => {
@@ -109,7 +113,12 @@ function renderSupplyGapSummary(target, west, east) {
       node("span", "west", `서부산 ${metric.west}`),
       node("span", "east", `동부산 ${metric.east}`),
     );
-    card.append(node("h3", "", metric.label), values, node("p", "", metric.comparison));
+    card.append(
+      node("h3", "", metric.label),
+      node("small", "supply-gap-definition", metric.definition),
+      values,
+      node("p", "", metric.comparison),
+    );
     target.append(card);
   });
 }
@@ -143,20 +152,55 @@ function renderVisitorDemandComparison(target, west, east) {
   const foreignDemandRatio = (west.foreignVisitorDailyAverage / east.foreignVisitorDailyAverage) * 100;
   const foreignCapacityRatio = (west.foreignCapableShare / east.foreignCapableShare) * 100;
   const insight = document.querySelector("[data-visitor-demand-insight]");
-  insight.textContent = `외국인 방문수요는 동부산의 ${value(foreignDemandRatio, "%")}인 반면, 외국인 수용 등록시설은 동부산의 ${value(foreignCapacityRatio, "%")} 수준입니다. 서부산은 방문수요 유입에 비해 관광숙박·외국인 대응 공급기반이 약해 신규 공급과 기존시설 전환을 함께 검토할 필요가 있습니다.`;
+  insight.textContent = `외국인 방문수요는 동부산의 ${value(foreignDemandRatio, "%")}인 반면, 외국인 숙박 대응시설은 동부산의 ${value(foreignCapacityRatio, "%")} 수준입니다. 서부산은 방문수요 유입에 비해 관광숙박·외국인 대응 공급기반이 약해 신규 공급과 기존시설 전환을 함께 검토할 필요가 있습니다.`;
+}
+
+function renderRegistrationTypeComparison(target, registrationTypes) {
+  clear(target);
+  const regionOrder = [
+    { id: "west", name: "서부산" },
+    { id: "east", name: "동부산" },
+    { id: "other", name: "기타 부산" },
+  ];
+  const maximum = Math.max(
+    1,
+    ...registrationTypes.flatMap((type) => regionOrder.map((region) => type.regions[region.id] || 0)),
+  );
+
+  registrationTypes.forEach((type) => {
+    const group = node("section", "registration-type-row");
+    group.append(node("h4", "", type.name));
+    const bars = node("div", "registration-type-bars");
+    regionOrder.forEach((region) => {
+      const count = type.regions[region.id] || 0;
+      const row = node("div", "registration-type-series");
+      const track = node("div", "registration-type-track");
+      const fill = node("span", `registration-type-bar ${region.id}`);
+      fill.style.width = count === 0 ? "0" : `${Math.max(1.2, (count / maximum) * 100)}%`;
+      track.append(fill);
+      row.append(
+        node("strong", "", region.name),
+        track,
+        node("b", "", value(count, "개소")),
+      );
+      bars.append(row);
+    });
+    group.append(bars);
+    target.append(group);
+  });
 }
 
 const districtMetricDefinitions = [
   { label: "숙박업체", key: "facilities", suffix: "개소", note: "영업 중 시설 수" },
   { label: "확인 객실", key: "rooms", suffix: "실", note: "객실 수 확인 시설 기준" },
-  { label: "객실 자료 확인률", key: "roomCoverageShare", suffix: "%", note: "전체 시설 중 객실 수 확인 비율" },
+  { label: "객실자료 확보율", key: "roomCoverageShare", suffix: "%", note: "전체 시설 중 객실 수가 확인된 시설 비율" },
   { label: "시설당 객실 중앙값", key: "roomMedian", suffix: "실", note: "시설 규모의 중앙 수준" },
   { label: "일평균 방문수요", key: "visitorDailyAverage", suffix: "명", note: "외지인+외국인 최근 355일 평균" },
   { label: "객실 100실당 방문 압력", key: "demandPer100Rooms", suffix: "", note: "숙박객·점유율이 아닌 공급 검토용 지표" },
   { label: "관광숙박업 등록시설", key: "tourismFacilityShare", suffix: "%", note: "전체 숙박시설 대비 시설 수 비율" },
-  { label: "외국인 수용 등록", key: "foreignCapableShare", suffix: "%", note: "관광숙박·외국인관광 도시민박" },
+  { label: "외국인 숙박 대응시설", key: "foreignCapableShare", suffix: "%", note: "관광숙박업·외국인관광 도시민박업 등록" },
   { label: "건축연령 20년 이상", key: "old20Share", suffix: "%", note: "건축물대장 사용승인일부터 산정" },
-  { label: "2021년 이후 신규 진입", key: "recentLicenseShare", suffix: "%", note: "시설별 최초 인허가일 기준" },
+  { label: "2021년 이후 숙박업 등록", key: "recentLicenseShare", suffix: "%", note: "현재 영업시설의 최초 인허가일 기준" },
   { label: "관광소비 원천지표", key: "consumptionIndex", suffix: "", note: "2026.07 지역 비교용·원화 아님" },
   { label: "3박 방문 원천지표", key: "stay3Index", suffix: "", note: "2026.07 지역 비교용·실제 명수 아님" },
 ];
@@ -316,7 +360,7 @@ function renderDistrictPolicyFallback(selected, benchmark) {
   policy.append(
     node("span", "district-policy-label", "정책검토 포인트"),
     node("h3", "", `${selected.name} · ${selected.priority}`),
-    node("p", "", `${selected.name}의 객실 100실당 방문 압력은 해운대구의 ${value(pressureRatio, "배")}입니다. 관광숙박업 등록 ${value(selected.tourismFacilityShare, "%")}, 외국인 수용 등록 ${value(selected.foreignCapableShare, "%")}, 2021년 이후 신규 진입 ${value(selected.recentLicenseShare, "%")}를 함께 고려해 ${selected.priority}을 우선 검토할 수 있습니다.`),
+    node("p", "", `${selected.name}의 객실 100실당 방문 압력은 해운대구의 ${value(pressureRatio, "배")}입니다. 관광숙박업 등록 ${value(selected.tourismFacilityShare, "%")}, 외국인 숙박 대응시설 ${value(selected.foreignCapableShare, "%")}, 2021년 이후 숙박업 등록 ${value(selected.recentLicenseShare, "%")}를 함께 고려해 ${selected.priority}을 우선 검토할 수 있습니다.`),
     node("small", "", "AI 분석을 불러오지 못해 검증된 지표의 기본 해석을 표시합니다."),
   );
 }
@@ -547,11 +591,11 @@ function renderDashboard(data) {
     facilitySupplyKpi(west, east),
     kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "외지인+외국인 · 일별 방문인원 평균", relativeToEast(west.visitorDailyAverage, east.visitorDailyAverage)),
     kpi("관광숙박업 등록시설 비율", value(west.tourismFacilityShare, "%"), "전체 숙박시설 대비 · 시설 수 기준", relativeToEast(west.tourismFacilityShare, east.tourismFacilityShare), "전체 숙박시설 중 관광진흥법상 관광숙박업 등록을 보유한 시설 수의 비율입니다. 객실 비중이 아닙니다."),
-    kpi("2021년 이후 신규 인허가", value(west.recentLicenseShare, "%"), "최초 인허가일 2021.1.1 이후", relativeToEast(west.recentLicenseShare, east.recentLicenseShare), "시설별 연결 인허가 가운데 가장 이른 인허가일을 기준으로, 2021.1.1 이후인 시설이 전체 시설에서 차지하는 비율입니다."),
+    kpi("2021년 이후 숙박업 등록", value(west.recentLicenseShare, "%"), "현재 영업시설 · 최초 인허가일 기준", relativeToEast(west.recentLicenseShare, east.recentLicenseShare), "현재 영업 중인 시설 가운데 연결 인허가의 가장 이른 인허가일이 2021.1.1 이후인 시설의 비율입니다. 전체 과거 신규등록 건수는 아닙니다."),
     kpi("방문량 대비 관광소비 원천지표", value(west.consumptionIndex), "방문량 대비 방문소비 수준 · 2026.07", relativeToEast(west.consumptionIndex, east.consumptionIndex), "한국관광공사 관광데이터랩의 ‘방문량 대비 방문 소비액’ 원천값을 2026.07 권역 내 구 단위로 평균한 값입니다. 지역 간 소비 수준 비교에만 사용하며, 현재 원천 단위 계약을 검토 중이므로 원화 금액·점유율로 해석하지 않습니다."),
     kpi("건축연령 20년 이상 시설", value(west.old20Share, "%"), "건축물대장 사용승인일부터 산정", relativeToEast(west.old20Share, east.old20Share), "건축물대장 사용승인일이 확인된 시설만 분모로 하여 기준일 현재 20년 이상인 시설 비율입니다. 내부 리모델링 상태를 뜻하지 않습니다."),
     kpi("평균 인허가 경과연수", value(west.licenseAgeAverageYears, "년"), "최초 인허가일~기준일 평균", relativeToEast(west.licenseAgeAverageYears, east.licenseAgeAverageYears), "시설별 연결 인허가 중 가장 이른 인허가일부터 기준일까지의 평균 경과연수입니다. 건축물 연령이나 동일 사업자의 영업기간과 다릅니다."),
-    kpi("외국인 대상 관광등록", value(west.foreignCapableShare, "%"), "관광숙박·외국인관광 도시민박", relativeToEast(west.foreignCapableShare, east.foreignCapableShare))
+    kpi("외국인 숙박 대응시설", value(west.foreignCapableShare, "%"), "관광숙박업·외국인관광 도시민박업", relativeToEast(west.foreignCapableShare, east.foreignCapableShare), "전체 숙박시설 중 관광숙박업 또는 외국인관광 도시민박업으로 등록된 시설 비율입니다. 실제 외국인 투숙실적이나 모든 외국인 수용 가능 시설을 뜻하지 않습니다.")
   );
   renderMonthlyTrend(data);
 
@@ -573,12 +617,16 @@ function renderDashboard(data) {
     row.append(name, node("span", "", `객실 비중 ${value(region.roomShare, "%")}`), node("span", "", `객실 ${value(region.rooms, "실")}`), node("span", "", `수요압력 ${value(region.demandPer100Rooms)}`));
     summary.append(row);
   });
-  document.querySelector("[data-core-evidence]").textContent = `관광숙박 ${west.tourismFacilityShare}% · 외국인수용 ${west.foreignCapableShare}% · 신규 ${west.recentLicenseShare}%`;
+  document.querySelector("[data-core-evidence]").textContent = `관광숙박 ${west.tourismFacilityShare}% · 외국인 숙박 대응시설 ${west.foreignCapableShare}% · 2021년 이후 숙박업 등록 ${west.recentLicenseShare}%`;
 
   initializeDistrictDetail(data);
 
   renderSupplyGapSummary(document.querySelector("[data-supply-gap-summary]"), west, east);
   renderVisitorDemandComparison(document.querySelector("[data-visitor-demand-bars]"), west, east);
+  renderRegistrationTypeComparison(
+    document.querySelector("[data-registration-type-bars]"),
+    data.registrationTypes,
+  );
 
   const supplyDonuts = document.querySelector("[data-supply-donuts]");
   const facilityTotal = data.regions.reduce((sum, region) => sum + region.facilities, 0);
@@ -593,7 +641,7 @@ function renderDashboard(data) {
     details.append(
       node("h3", "", region.name),
       node("p", "", `숙박시설 ${value(region.facilities, "개")} · 확인 객실 ${value(region.rooms, "실")}`),
-      node("p", "", `2021년 이후 신규 ${value(region.recentLicenseShare, "%")} · 20년+ ${value(region.old20Share, "%")}`),
+      node("p", "", `2021년 이후 숙박업 등록 ${value(region.recentLicenseShare, "%")} · 20년+ ${value(region.old20Share, "%")}`),
     );
     card.append(chart, details);
     supplyDonuts.append(card);
