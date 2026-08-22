@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 
@@ -32,6 +32,7 @@ class VWorldGeocodeResult:
     latitude: float | None
     district: str | None
     crs: str | None
+    pnu: str | None = field(default=None, repr=False)
 
 
 class VWorldGeocodeProxy:
@@ -86,6 +87,12 @@ class VWorldGeocodeProxy:
                 for district in sorted(_BUSAN_DISTRICTS, key=len, reverse=True)
                 if district in address_text
             )
+            candidate_pnu = str(item.get("id") or "")
+            pnu = (
+                candidate_pnu
+                if len(candidate_pnu) == 19 and candidate_pnu.isdigit()
+                else None
+            )
         except (json.JSONDecodeError, IndexError, KeyError, StopIteration, TypeError, ValueError):
             return VWorldGeocodeResult("invalid_response", None, None, None, None)
         west, south, east, north = _BUSAN_BOUNDS
@@ -97,7 +104,7 @@ class VWorldGeocodeProxy:
         ):
             return VWorldGeocodeResult("invalid_response", None, None, None, None)
         return VWorldGeocodeResult(
-            "matched", longitude, latitude, district, crs
+            "matched", longitude, latitude, district, crs, pnu
         )
 
 

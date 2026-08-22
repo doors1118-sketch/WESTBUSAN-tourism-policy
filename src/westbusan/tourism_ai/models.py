@@ -63,6 +63,45 @@ class ParcelGeocodeResponse(BaseModel):
     crs: str | None
 
 
+class VacantAddressAnalysisRequest(BaseModel):
+    """One bounded exact-address request with no browser-owned coordinates."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    address: str = Field(min_length=8, max_length=160)
+
+    @model_validator(mode="after")
+    def validate_busan_address(self) -> VacantAddressAnalysisRequest:
+        if "부산" not in self.address or not any(
+            district in self.address for district in _BUSAN_DISTRICTS
+        ):
+            raise ValueError("a Busan district and city name are required")
+        return self
+
+
+class VacantAddressAnalysisResponse(BaseModel):
+    """Evidence-only hub membership result without raw provider material."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    address: str
+    status: Literal[
+        "in_contiguous_hub",
+        "adjacent_to_contiguous_hub",
+        "vacant_but_isolated",
+        "not_a_published_vacant_parcel",
+        "insufficient_geometry_evidence",
+    ]
+    hub_id: str | None
+    hub_rank: StrictInt | None = Field(default=None, ge=1, le=10)
+    hub_parcel_count: StrictInt | None = Field(default=None, ge=3)
+    inventory_run_id: UUID
+    hub_run_id: UUID
+    source_date: date
+    interpretation: str
+    limitation: str
+
+
 class MapSelection(BaseModel):
     """One published 500 m map cell selected by the browser."""
 

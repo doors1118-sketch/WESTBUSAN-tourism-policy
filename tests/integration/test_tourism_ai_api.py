@@ -16,6 +16,7 @@ from tests.unit.test_tourism_ai_service import _model_document
 from westbusan.tourism_ai.api import create_app
 from westbusan.tourism_ai.config import TourismAISettings
 from westbusan.tourism_ai.models import EvidenceMetric, ModelInsight
+from westbusan.vacant_house.address_analysis import AddressAnalysisCatalogue
 
 
 class _CountingGenerator:
@@ -392,3 +393,90 @@ def test_vworld_parcel_geocode_rejects_non_busan_or_missing_key(tmp_path: Path) 
     )
     assert response.status_code == 503
     assert response.json() == {"detail": "vworld_unavailable"}
+
+
+def test_vacant_address_analysis_is_post_only_and_evidence_bound(
+    tmp_path: Path,
+) -> None:
+    """Catches browser coordinates or a raw address-only AI answer bypassing PNU evidence."""
+    from datetime import date
+    from uuid import uuid4
+
+    from shapely.geometry import box, mapping
+
+    pnu = "2632010100100010000"
+    inventory_run_id, hub_run_id = uuid4(), uuid4()
+    geometry = box(129.00, 35.20, 129.02, 35.22)
+    catalogue = AddressAnalysisCatalogue(
+        inventory_run_id=inventory_run_id,
+        hub_run_id=hub_run_id,
+        source_date=date(2026, 8, 21),
+        vacant_geometries={pnu: geometry},
+        hub_members={pnu: "vh-reviewed"},
+        hub_geometries={"vh-reviewed": geometry},
+        hub_ranks={"vh-reviewed": 1},
+        hub_parcel_counts={"vh-reviewed": 3},
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/req/search":
+            document = json.loads(
+                (Path("tests/fixtures/spatial") / "vworld_address_success.json")
+                .read_text(encoding="utf-8")
+            )
+            document["response"]["result"]["items"][0]["id"] = pnu
+            return httpx.Response(200, json=document)
+        assert request.url.path == "/req/data"
+        return httpx.Response(
+            200,
+            json={
+                "response": {
+                    "status": "OK",
+                    "result": {
+                        "featureCollection": {
+                            "features": [
+                                {
+                                    "properties": {"pnu": pnu, "sourceDate": "2026-08-21"},
+                                    "geometry": mapping(geometry),
+                                }
+                            ]
+                        }
+                    },
+                }
+            },
+        )
+
+    client = TestClient(
+        create_app(
+            _settings(tmp_path),
+            generator=_CountingGenerator(_model_document()),
+            vworld_client=httpx.Client(transport=httpx.MockTransport(respond)),
+            vacant_catalogue=catalogue,
+        )
+    )
+    response = client.post(
+        "/vacant/address-analysis",
+        json={"address": "부산광역시 북구 시험동 1-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "address": "부산광역시 북구 시험동 1-1",
+        "status": "in_contiguous_hub",
+        "hub_id": "vh-reviewed",
+        "hub_rank": 1,
+        "hub_parcel_count": 3,
+        "inventory_run_id": str(inventory_run_id),
+        "hub_run_id": str(hub_run_id),
+        "source_date": "2026-08-21",
+        "interpretation": "연속 필지군 내부의 게시 빈집 필지입니다.",
+        "limitation": "관광숙박 전환 가능 여부는 토지이용·건축·소방·위생 등 별도 행정검토가 필요합니다.",
+    }
+    assert client.get("/vacant/address-analysis").status_code == 405
+    assert client.post(
+        "/vacant/address-analysis",
+        json={
+            "address": "부산광역시 북구 시험동 1-1",
+            "longitude": 129.01,
+        },
+    ).status_code == 422

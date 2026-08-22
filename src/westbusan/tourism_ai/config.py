@@ -15,6 +15,10 @@ class TourismAISettings(BaseSettings):
 
     openai_api_key: SecretStr | None = None
     vworld_api_key: SecretStr | None = None
+    tourism_ai_vacant_db_path: Path | None = None
+    tourism_ai_vworld_domain: str = Field(
+        default="tourism.busanproduct.co.kr", min_length=4, max_length=120
+    )
     tourism_ai_data_path: Path
     tourism_ai_cache_dir: Path
     tourism_ai_model: str = Field(default="gpt-5.4-mini", min_length=1, max_length=80)

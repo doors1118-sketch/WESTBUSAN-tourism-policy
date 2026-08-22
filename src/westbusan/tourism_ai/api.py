@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
+import duckdb
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
@@ -21,6 +23,8 @@ from westbusan.tourism_ai.models import (
     ModelInsight,
     ParcelGeocodeRequest,
     ParcelGeocodeResponse,
+    VacantAddressAnalysisRequest,
+    VacantAddressAnalysisResponse,
 )
 from westbusan.tourism_ai.openai_client import OpenAIResponsesClient
 from westbusan.tourism_ai.service import InsightGenerator, InsightService
@@ -30,6 +34,13 @@ from westbusan.tourism_ai.vworld_proxy import (
     VWorldGeocodeProxy,
     VWorldTileProxy,
 )
+from westbusan.vacant_house.address_analysis import (
+    AddressAnalysisCatalogue,
+    ResolvedParcel,
+    analyse_address,
+    load_address_catalogue,
+)
+from westbusan.vacant_house.cadastral import VWorldCadastralClient
 
 
 class _Generator(InsightGenerator):
@@ -48,6 +59,7 @@ def create_app(
     *,
     generator: InsightGenerator | None = None,
     vworld_client: httpx.Client | None = None,
+    vacant_catalogue: AddressAnalysisCatalogue | None = None,
 ) -> FastAPI:
     """Create the isolated application with explicit dependencies."""
 
@@ -80,6 +92,12 @@ def create_app(
     vworld: VWorldBasemapProxy | None = None
     vworld_tiles: VWorldTileProxy | None = None
     vworld_geocoder: VWorldGeocodeProxy | None = None
+    cadastral: VWorldCadastralClient | None = None
+    if vacant_catalogue is None and settings.tourism_ai_vacant_db_path is not None:
+        with duckdb.connect(
+            str(settings.tourism_ai_vacant_db_path), read_only=True
+        ) as connection:
+            vacant_catalogue = load_address_catalogue(connection)
     if settings.vworld_api_key is not None:
         upstream = vworld_client or httpx.Client(timeout=15.0)
         vworld = VWorldBasemapProxy(
@@ -94,10 +112,19 @@ def create_app(
             api_key=settings.vworld_api_key.get_secret_value(),
             client=upstream,
         )
+        cadastral = VWorldCadastralClient(
+            api_key=settings.vworld_api_key.get_secret_value(),
+            domain=settings.tourism_ai_vworld_domain,
+            client=upstream,
+        )
 
     @app.middleware("http")
     async def enforce_request_boundary(request: Request, call_next: Any) -> Any:
-        if request.url.path in {"/insights", "/vworld/geocode"}:
+        if request.method == "POST" and request.url.path in {
+            "/insights",
+            "/vworld/geocode",
+            "/vacant/address-analysis",
+        }:
             if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
                 return JSONResponse(status_code=415, content={"detail": "json_required"})
             body = await request.body()
@@ -116,6 +143,29 @@ def create_app(
             latitude=result.latitude,
             district=result.district,
             crs=result.crs,
+        ).model_dump(mode="json")
+
+    @app.post("/vacant/address-analysis")
+    def vacant_address_analysis(
+        payload: VacantAddressAnalysisRequest,
+    ) -> dict[str, object]:
+        if vacant_catalogue is None:
+            raise HTTPException(status_code=503, detail="vacant_catalogue_unavailable")
+        if vworld_geocoder is None or cadastral is None:
+            raise HTTPException(status_code=503, detail="vworld_unavailable")
+        geocode = vworld_geocoder.resolve(payload.address)
+        parcel: ResolvedParcel | None = None
+        if geocode.status == "matched" and geocode.pnu is not None:
+            evidence = cadastral.fetch(geocode.pnu)
+            if evidence.status == "matched" and evidence.geometry is not None:
+                parcel = ResolvedParcel(geocode.pnu, evidence.geometry)
+        result = analyse_address(
+            vacant_catalogue,
+            address=payload.address,
+            parcel=parcel,
+        )
+        return VacantAddressAnalysisResponse(
+            **asdict(result),
         ).model_dump(mode="json")
 
     @app.get("/healthz")
