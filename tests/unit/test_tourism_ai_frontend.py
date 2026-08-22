@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-overview-eight-v15"' in html
-    assert 'src="app.js?v=20260822-overview-eight-v15"' in html
+    assert 'href="app.css?v=20260822-equal-cards-v16"' in html
+    assert 'src="app.js?v=20260822-equal-cards-v16"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -207,6 +207,40 @@ def test_facility_mix_wraps_only_between_complete_category_chips() -> None:
     assert 'node("span", "facility-mix-item"' in script
     assert ".facility-mix-item" in stylesheet
     assert "white-space:nowrap" in stylesheet
+
+
+def test_overview_cards_use_equal_height_grid_tracks() -> None:
+    stylesheet = _asset("app.css")
+
+    assert "[data-overview-kpis]{grid-auto-rows:1fr}" in stylesheet
+    assert "[data-overview-kpis] .kpi{height:100%}" in stylesheet
+
+
+def test_overview_comparison_badges_are_all_percent_of_east_busan() -> None:
+    script = _asset("app.js")
+    overview_block = script.split('const overview = document.querySelector("[data-overview-kpis]");', 1)[1]
+    overview_block = overview_block.split('const summary = document.querySelector("[data-region-summary]");', 1)[0]
+
+    assert "function relativeToEast" in script
+    assert 'relativeToEast(west.facilities, east.facilities)' in script
+    assert overview_block.count("relativeToEast(") == 7
+    assert "`동부산 ${" not in overview_block
+
+
+def test_visitor_demand_uses_plain_language_in_the_ui() -> None:
+    script = _asset("app.js")
+
+    assert "외지인+외국인 · 일별 방문인원 평균" in script
+    assert '"방문자-인일/일' not in script
+
+
+def test_hero_copy_omits_internal_publication_and_grid_details() -> None:
+    html = _asset("index.html")
+
+    assert "민간투자 검토지역을 데이터로 비교합니다" in html
+    assert "하나의 발행" not in html
+    assert "500m 공간격자" not in html
+    assert "방문수요 355일" not in html
 
 
 def test_vacant_house_tab_does_not_embed_exact_locations() -> None:

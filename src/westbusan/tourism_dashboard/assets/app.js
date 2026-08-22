@@ -13,6 +13,11 @@ function value(value, suffix = "") {
   return value == null ? "자료 준비 중" : `${fmt.format(value)}${suffix}`;
 }
 
+function relativeToEast(westValue, eastValue) {
+  if (westValue == null || eastValue == null || eastValue === 0) return "동부산 대비 자료 준비 중";
+  return `동부산 대비 ${value((westValue / eastValue) * 100, "%")}`;
+}
+
 function clear(target) {
   while (target.firstChild) target.removeChild(target.firstChild);
 }
@@ -40,7 +45,7 @@ function facilitySupplyKpi(west, east) {
     node("span", "label", "서부산 숙박업체"),
     main,
     facilityMix,
-    node("span", "delta", `동부산 업체 수의 ${(west.facilities / east.facilities * 100).toFixed(1)}%`),
+    node("span", "delta", relativeToEast(west.facilities, east.facilities)),
   );
   return card;
 }
@@ -69,13 +74,13 @@ function renderDashboard(data) {
   const overview = document.querySelector("[data-overview-kpis]");
   overview.append(
     facilitySupplyKpi(west, east),
-    kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "외지인+외국인 · 방문자-인일/일", `동부산 ${value(east.visitorDailyAverage)}`),
-    kpi("관광숙박 등록", value(west.tourismFacilityShare, "%"), "시설 비율", `동부산 ${east.tourismFacilityShare}%`),
-    kpi("2021년 이후 신규", value(west.recentLicenseShare, "%"), "시설 인허가 기준", `동부산 ${east.recentLicenseShare}%`),
-    kpi("관광소비 지표", value(west.consumptionIndex), "통화금액이 아닌 원천지표", `동부산 ${value(east.consumptionIndex)}`),
-    kpi("20년 이상 노후시설", value(west.old20Share, "%"), `건축물 연령 확인 ${west.buildingAgeCoverageShare}%`, `동부산 ${east.old20Share}%`),
-    kpi("인허가 평균업력", value(west.licenseAgeAverageYears, "년"), "시설 인허가 연혁 기준", `동부산 ${value(east.licenseAgeAverageYears, "년")}`),
-    kpi("외국인 대상 관광등록", value(west.foreignCapableShare, "%"), "관광숙박·외국인관광 도시민박", `동부산 ${east.foreignCapableShare}%`)
+    kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "외지인+외국인 · 일별 방문인원 평균", relativeToEast(west.visitorDailyAverage, east.visitorDailyAverage)),
+    kpi("관광숙박 등록", value(west.tourismFacilityShare, "%"), "시설 비율", relativeToEast(west.tourismFacilityShare, east.tourismFacilityShare)),
+    kpi("2021년 이후 신규", value(west.recentLicenseShare, "%"), "시설 인허가 기준", relativeToEast(west.recentLicenseShare, east.recentLicenseShare)),
+    kpi("관광소비 지표", value(west.consumptionIndex), "통화금액이 아닌 원천지표", relativeToEast(west.consumptionIndex, east.consumptionIndex)),
+    kpi("20년 이상 노후시설", value(west.old20Share, "%"), `건축물 연령 확인 ${west.buildingAgeCoverageShare}%`, relativeToEast(west.old20Share, east.old20Share)),
+    kpi("인허가 평균업력", value(west.licenseAgeAverageYears, "년"), "시설 인허가 연혁 기준", relativeToEast(west.licenseAgeAverageYears, east.licenseAgeAverageYears)),
+    kpi("외국인 대상 관광등록", value(west.foreignCapableShare, "%"), "관광숙박·외국인관광 도시민박", relativeToEast(west.foreignCapableShare, east.foreignCapableShare))
   );
 
   const summary = document.querySelector("[data-region-summary]");
@@ -100,7 +105,7 @@ function renderDashboard(data) {
 
   const tourism = document.querySelector("[data-tourism-kpis]");
   tourism.append(
-    kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "방문자-인일/일 · 최근 355일"),
+    kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "일별 방문인원 평균 · 최근 355일"),
     kpi("방문수요 대비 객실공급 압력", value(west.demandPer100Rooms), "숙박객·객실점유율이 아닌 정책 검토용 파생지표"),
     kpi("소비효율 원천지표", value(west.consumptionIndex), "2026-07 · 통화금액 아님"),
     kpi("3박 방문 원천지표", value(west.stay3Index), "2026-07 · 실제 명수 아님")
