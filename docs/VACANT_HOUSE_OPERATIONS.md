@@ -66,6 +66,25 @@ must obtain the password or a decrypted workbook from the source owner, then:
 6. profile and stage only the correction ZIP. Approval still requires 16
    readable workbooks and all 16 district codes.
 
+The reviewed correction builder performs steps 4-6 without modifying either
+input. It accepts only a standard decrypted XLSX, replaces exactly one encrypted
+Office member, canonicalises ZIP metadata for reproducibility, and returns only
+aggregate hashes/counts. Use access-controlled paths in the private area:
+
+```python
+from pathlib import Path
+from westbusan.vacant_house import build_corrected_archive
+
+result = build_corrected_archive(
+    Path("<received-archive.zip>"),
+    Path("<source-owner-decrypted-seo-gu.xlsx>"),
+    Path("<private-correction-archive.zip>"),
+)
+```
+
+If the destination already contains different bytes, the builder fails with
+`correction_output_conflict`; it never silently overwrites custody evidence.
+
 Never include the password in a command line, shell history, environment dump,
 ticket, chat, repository, or operations report. Delete temporary decrypted
 copies only under the approved retention policy after the correction archive
