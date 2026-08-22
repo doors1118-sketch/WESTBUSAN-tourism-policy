@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-chart-inset-v28"' in html
-    assert 'src="app.js?v=20260822-chart-inset-v28"' in html
+    assert 'href="app.css?v=20260822-metric-explain-v29"' in html
+    assert 'src="app.js?v=20260822-metric-explain-v29"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -197,17 +197,19 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     assert overview_block.count("facilitySupplyKpi(west, east)") == 1
     assert "객실 비중이 아닙니다" in overview_block
     assert "가장 이른 인허가일을 기준" in overview_block
-    assert "한국관광공사 ‘방문량 대비 방문 소비액’ 원천지표" in overview_block
+    assert "지역 간 소비 수준 비교에만 사용" in overview_block
+    assert "원화 금액·점유율로 해석하지 않습니다" in overview_block
     assert "내부 리모델링 상태를 뜻하지 않습니다" in overview_block
     assert "동일 사업자의 영업기간과 다릅니다" in overview_block
     for note in (
         "전체 숙박시설 대비 · 시설 수 기준",
         "최초 인허가일 2021.1.1 이후",
-        "관광공사 원천지표 · 2026.07 구 평균",
-        "사용승인일 기준 · 자료 확인률",
+        "방문량 대비 방문소비 수준 · 2026.07",
+        "건축물대장 사용승인일부터 산정",
         "최초 인허가일~기준일 평균",
     ):
         assert note in overview_block
+    assert "자료 확인률" not in overview_block
     assert 'noteElement.classList.add("metric-definition")' in script
     assert "metric-definition" in _asset("app.css")
     assert "white-space:nowrap" in _asset("app.css")
@@ -321,7 +323,7 @@ def test_overview_contains_readable_demand_and_entry_combo_chart() -> None:
     ):
         assert marker in html
     assert "data-trend-region" not in html
-    assert "월별 방문수요·최초 인허가 시설 추이" in html
+    assert "월별 방문수요·신규 숙박업체 진입 추이" in html
     assert "최근 12개 완결월" not in html
     assert "현재 영업시설의 최초 인허가 월" in html
     assert "서부산·동부산을 같은 축에서 직접 비교" not in html
@@ -343,10 +345,14 @@ def test_overview_contains_readable_demand_and_entry_combo_chart() -> None:
     assert "const height = 390;" in script
     assert "const xInset = 32;" in script
     assert 'data-trend-region' not in script
+    assert "월별 방문수요·신규 숙박업체 진입 추이" in _asset("index.html")
+    assert '"신규 숙박업체 진입(개소)"' in script
+    assert "12개월 신규 진입" in script
+    assert "최초 인허가 시설(개소)" not in script
     assert "visitorDailyAverage" in script
     assert "newActiveFacilities" in script
     assert "Math.round(amount / 1000)" in script
-    assert "최초 인허가 시설" in script
+    assert "현재 영업시설의 최초 인허가 월 기준" in script
 
     for selector in (
         ".trend-card",
