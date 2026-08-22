@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-fixed-sidebar-v20"' in html
-    assert 'src="app.js?v=20260822-fixed-sidebar-v20"' in html
+    assert 'href="app.css?v=20260822-top-tabs-v21"' in html
+    assert 'src="app.js?v=20260822-top-tabs-v21"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -243,24 +243,19 @@ def test_hero_copy_omits_internal_publication_and_grid_details() -> None:
     assert "방문수요 355일" not in html
 
 
-def test_desktop_navigation_is_grouped_vertically_and_mobile_stays_horizontal() -> None:
+def test_navigation_is_horizontal_and_placed_before_the_hero() -> None:
     html = _asset("index.html")
     script = _asset("app.js")
     stylesheet = _asset("app.css")
 
-    assert 'class="dashboard-shell" data-dashboard-shell' in html
-    assert 'class="sidebar"' in html
-    assert 'class="sidebar-brand"' in html
     assert 'class="dashboard-content"' in html
-    for group in ("현황", "정책분석", "공간분석"):
-        assert f'<span class="tabs-group-title">{group}</span>' in html
-    assert ".sidebar{position:fixed;inset:0 auto 0 0;width:250px" in stylesheet
-    assert "body{padding-left:250px}" in stylesheet
-    assert ".topbar .brand{display:none}" in stylesheet
-    assert "flex-direction:column" in stylesheet
-    assert "@media(max-width:1180px){body{padding-left:0}" in stylesheet
-    assert ".sidebar{position:static;width:auto;height:auto" in stylesheet
-    assert ".tabs-group{display:contents}" in stylesheet
+    assert '<main>\n    <nav class="tabs"' in html
+    assert html.index('<nav class="tabs"') < html.index('<section class="hero">')
+    assert 'class="sidebar"' not in html
+    assert 'class="tab-index"' not in html
+    assert "body{padding-left:0!important}" in stylesheet
+    assert ".topbar .brand{display:flex!important}" in stylesheet
+    assert "main>.tabs{display:flex;flex-direction:row" in stylesheet
     assert 'shell.classList.toggle("map-mode", target === "map")' not in script
     assert 'item.dataset.tabTarget === initialTarget' in script
 
