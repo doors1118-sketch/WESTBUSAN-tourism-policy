@@ -1,5 +1,9 @@
 """Private vacant-house source ingestion interfaces."""
 
+from westbusan.vacant_house.cadastral import (
+    CadastralFetch,
+    VWorldCadastralClient,
+)
 from westbusan.vacant_house.correction import (
     CorrectedArchive,
     build_corrected_archive,
@@ -20,9 +24,11 @@ from westbusan.vacant_house.source import iter_archive_rows, profile_archive
 
 __all__ = [
     "ArchiveProfile",
+    "CadastralFetch",
     "CadastralParcel",
     "CorrectedArchive",
     "HubCandidate",
+    "VWorldCadastralClient",
     "VacantHouseSourceError",
     "VacantHouseSourceRow",
     "VacantHub",

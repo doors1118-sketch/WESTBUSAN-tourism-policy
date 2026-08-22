@@ -1,0 +1,41 @@
+{
+  "response": {
+    "service": {
+      "name": "data",
+      "version": "2.0",
+      "operation": "GetFeature"
+    },
+    "status": "OK",
+    "record": {
+      "total": "1",
+      "current": "1"
+    },
+    "result": {
+      "featureCollection": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "id": "LP_PA_CBND_BUBUN.2632010100100230004",
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [129.0098, 35.2058],
+                  [129.0102, 35.2058],
+                  [129.0102, 35.2062],
+                  [129.0098, 35.2062],
+                  [129.0098, 35.2058]
+                ]
+              ]
+            },
+            "properties": {
+              "pnu": "2632010100100230004",
+              "sourceDate": "2026-08-21"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
