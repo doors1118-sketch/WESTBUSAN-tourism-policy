@@ -74,9 +74,20 @@ function renderBarGroup(target, regions, key, suffix, ceiling) {
   });
 }
 
-function renderSupplyGapSummary(target, west, east) {
+function renderSupplyGapSummary(target, west, east, registrationTypes) {
   clear(target);
+  const generalRegistrations = registrationTypes.find((item) => item.id === "lodgings");
+  const westGeneralShare = generalRegistrations.regions.west / west.facilities * 100;
+  const eastGeneralShare = generalRegistrations.regions.east / east.facilities * 100;
   const metrics = [
+    {
+      label: "전체 숙박업체·일반숙박",
+      west: `${value(west.facilities, "개소")} 중 일반숙박 ${value(generalRegistrations.regions.west, "개소")} (${value(westGeneralShare, "%")})`,
+      east: `${value(east.facilities, "개소")} 중 일반숙박 ${value(generalRegistrations.regions.east, "개소")} (${value(eastGeneralShare, "%")})`,
+      comparison: `서부산의 일반숙박 비중이 동부산보다 ${value(westGeneralShare - eastGeneralShare, "%p 높음")}`,
+      definition: "현재 영업 중인 전체 숙박업체 대비 일반숙박업 등록 업체 수·비율",
+      featured: true,
+    },
     {
       label: "객실 100실당 방문수요",
       west: value(west.demandPer100Rooms),
@@ -108,6 +119,7 @@ function renderSupplyGapSummary(target, west, east) {
   ];
   metrics.forEach((metric) => {
     const card = node("article", "supply-gap-stat");
+    if (metric.featured) card.classList.add("featured");
     const values = node("div", "supply-gap-values");
     values.append(
       node("span", "west", `서부산 ${metric.west}`),
@@ -621,7 +633,12 @@ function renderDashboard(data) {
 
   initializeDistrictDetail(data);
 
-  renderSupplyGapSummary(document.querySelector("[data-supply-gap-summary]"), west, east);
+  renderSupplyGapSummary(
+    document.querySelector("[data-supply-gap-summary]"),
+    west,
+    east,
+    data.registrationTypes,
+  );
   renderVisitorDemandComparison(document.querySelector("[data-visitor-demand-bars]"), west, east);
   renderRegistrationTypeComparison(
     document.querySelector("[data-registration-type-bars]"),

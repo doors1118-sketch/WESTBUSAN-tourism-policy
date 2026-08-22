@@ -78,9 +78,15 @@ def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
     assert "관광숙박업·외국인관광 도시민박업 등록시설 비율" in script
     assert 'label: "2021년 이후 숙박업 등록"' in script
     assert "현재 영업시설 중 최초 인허가일 2021.1.1 이후 비율" in script
+    assert 'label: "전체 숙박업체·일반숙박"' in script
+    assert "현재 영업 중인 전체 숙박업체 대비 일반숙박업 등록 업체 수·비율" in script
+    assert "서부산의 일반숙박 비중이 동부산보다" in script
+    assert "generalRegistrations.regions.west" in script
+    assert "generalRegistrations.regions.east" in script
     for selector in (
         ".supply-gap-summary",
         ".supply-gap-stat",
+        ".supply-gap-stat.featured",
         ".visitor-demand-card",
         ".visitor-demand-row",
         ".visitor-demand-bar",
@@ -163,8 +169,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-registration-types-v34"' in html
-    assert 'src="app.js?v=20260822-registration-types-v34"' in html
+    assert 'href="app.css?v=20260822-general-lodging-v35"' in html
+    assert 'src="app.js?v=20260822-general-lodging-v35"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
