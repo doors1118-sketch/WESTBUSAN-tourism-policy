@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="관광수요를 부산의 체류·숙박·소비로 연결하기 위한 정책 분석 대시보드">
   <title>부산 관광경제 활력 분석</title>
-  <link rel="stylesheet" href="app.css?v=20260822-demand-entry-trend-v24">
+  <link rel="stylesheet" href="app.css?v=20260822-east-west-trend-v25">
 </head>
 <body>
   <header class="topbar">
@@ -48,16 +48,12 @@
       <div class="kpi-grid" data-overview-kpis></div>
       <article class="card trend-card" data-monthly-trend>
         <header class="trend-header">
-          <div><span class="trend-eyebrow">12 MONTH TREND</span><h3>월별 방문수요·신규 숙박업체 진입 추이</h3><p>최근 12개 완결월 · 외지인+외국인 일평균 방문수요와 현재 영업시설의 최초 인허가 월</p></div>
-          <div class="trend-controls" role="group" aria-label="권역 선택">
-            <button type="button" class="active" aria-pressed="true" data-trend-region="west">서부산</button>
-            <button type="button" aria-pressed="false" data-trend-region="east">동부산</button>
-            <button type="button" aria-pressed="false" data-trend-region="other">기타 부산</button>
-          </div>
+          <div><span class="trend-eyebrow">12 MONTH TREND</span><h3>월별 방문수요·신규 숙박업체 진입 추이</h3><p>최근 12개 완결월 · 서부산·동부산을 같은 축에서 직접 비교 · 현재 영업시설의 최초 인허가 월</p></div>
+          <strong class="trend-unit">방문수요(천 명) · 신규 진입(개소)</strong>
         </header>
         <div class="trend-summary" data-trend-summary></div>
         <div class="trend-chart-shell">
-          <div class="trend-legend"><span class="demand">일평균 방문수요</span><span class="entry">월별 신규 진입</span></div>
+          <div class="trend-legend"><span class="line west">서부산 방문수요</span><span class="line east">동부산 방문수요</span><span class="bar west">서부산 신규</span><span class="bar east">동부산 신규</span></div>
           <div class="trend-chart" data-trend-chart role="img" aria-label="월별 일평균 방문수요 선과 신규 숙박업체 진입 막대 비교"></div>
           <div class="trend-tooltip" data-trend-tooltip hidden></div>
         </div>
@@ -144,6 +140,6 @@
   </main>
 
   <footer><span>부산광역시 관광정책 내부 검토용</span><span>데이터 기준일 <strong data-as-of>—</strong></span></footer>
-  <script src="app.js?v=20260822-demand-entry-trend-v24"></script>
+  <script src="app.js?v=20260822-east-west-trend-v25"></script>
 </body>
 </html>

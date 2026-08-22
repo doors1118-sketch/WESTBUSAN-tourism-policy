@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-demand-entry-trend-v24"' in html
-    assert 'src="app.js?v=20260822-demand-entry-trend-v24"' in html
+    assert 'href="app.css?v=20260822-east-west-trend-v25"' in html
+    assert 'src="app.js?v=20260822-east-west-trend-v25"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -320,31 +320,37 @@ def test_overview_contains_readable_demand_and_entry_combo_chart() -> None:
         "data-trend-tooltip",
     ):
         assert marker in html
-    for region in ("west", "east", "other"):
-        assert f'data-trend-region="{region}"' in html
+    assert "data-trend-region" not in html
     assert "월별 방문수요·신규 숙박업체 진입 추이" in html
     assert "최근 12개 완결월" in html
     assert "현재 영업시설의 최초 인허가 월" in html
+    assert "서부산·동부산을 같은 축에서 직접 비교" in html
+    assert "방문수요(천 명)" in html
 
     assert "function renderMonthlyTrend" in script
+    assert "function renderMonthlyTrend(data)" in script
     assert 'createElementNS("http://www.w3.org/2000/svg", "svg")' in script
-    assert '"trend-line"' in script
-    assert '"trend-bar"' in script
-    assert 'data-trend-region' in script
+    assert '"trend-line west"' in script
+    assert '"trend-line east"' in script
+    assert '"trend-bar west"' in script
+    assert '"trend-bar east"' in script
+    assert 'data-trend-region' not in script
     assert "visitorDailyAverage" in script
     assert "newActiveFacilities" in script
+    assert "Math.round(amount / 1000)" in script
     assert "월별 신규 진입" in script
 
     for selector in (
         ".trend-card",
         ".trend-summary",
-        ".trend-controls",
         ".trend-chart",
         ".trend-line",
         ".trend-bar",
         ".trend-tooltip",
     ):
         assert selector in stylesheet
+    assert ".trend-line.east" in stylesheet
+    assert ".trend-bar.east" in stylesheet
     assert "@media(max-width:760px)" in stylesheet
 
 
