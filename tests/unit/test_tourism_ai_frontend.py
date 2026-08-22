@@ -28,10 +28,9 @@ def test_dashboard_exposes_three_decision_questions_and_required_tabs() -> None:
         "종합현황",
         "관광 종합현황",
         "동서 공급 격차",
-        "민간투자 유도",
-        "정책 인사이트 도출",
-        "공간지도",
-        "빈집",
+        "투자정보 제공",
+        "빈집 정보 제공",
+        "AI 종합 분석",
     ):
         assert label in html
 
@@ -198,13 +197,13 @@ def test_dashboard_omits_unavailable_stay_duration_and_builds_region_donuts() ->
     assert "facilityShare" in script
 
 
-def test_large_spatial_map_is_loaded_only_after_map_tab_is_selected() -> None:
+def test_large_spatial_map_is_loaded_only_after_investment_tab_is_selected() -> None:
     html = _asset("index.html")
     script = _asset("app.js")
 
     assert 'data-map-src="map/index.html?v=20260821-west-coverage-v12"' in html
     assert '<iframe src="map/index.html"' not in html
-    assert 'target === "map"' in script
+    assert 'target === "investment"' in script
     assert "방문·체류·소비·교통수요가 어디에서 얼마나 발생하는가" in html
     assert "숙박 객실·관광숙박 비중·시설 규모·노후도·신규 진입" in html
     assert "신규 공급·리모델링·빈집 전환·콘텐츠 투자" in html
@@ -214,23 +213,23 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-supply-card-v37"' in html
-    assert 'src="app.js?v=20260822-supply-card-v37"' in html
+    assert 'href="app.css?v=20260822-investment-info-v38"' in html
+    assert 'src="app.js?v=20260822-investment-info-v38"' in html
 
 
-def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
+def test_investment_information_can_request_ai_explanation_for_priority_map() -> None:
     """Catches the map losing its explicit, user-triggered AI explanation surface."""
     html = _asset("index.html")
     script = _asset("app.js")
 
     assert 'data-map-insight-button' in html
     assert 'data-map-insight-result' in html
-    assert "AI로 지도 설명" in html
+    assert "AI 투자정보 해석" in html
     assert 'requestInsight("west")' in script
     assert 'data-map-insight-button' in script
 
 
-def test_map_tab_explains_the_policy_decisions_before_interaction() -> None:
+def test_investment_information_explains_policy_decisions_before_interaction() -> None:
     """Catches the spatial tab reverting to an unexplained technical grid."""
     html = _asset("index.html")
 
@@ -246,6 +245,53 @@ def test_map_tab_explains_the_policy_decisions_before_interaction() -> None:
         assert label in html
     assert "시설 좌표 확인률이 0%" not in html
     assert "관광 숙박 투자기회 AI 해석" in html
+
+
+def test_investment_information_combines_actions_map_ai_and_district_summary() -> None:
+    """Catches investment actions and the practical map drifting into separate tabs."""
+    html = _asset("index.html")
+
+    assert 'data-tab-target="investment">투자정보 제공<' in html
+    assert 'data-tab-target="map"' not in html
+    assert 'data-tab-panel="map"' not in html
+
+    investment = html.split('data-tab-panel="investment"', 1)[1].split(
+        'data-tab-panel="insights"', 1
+    )[0]
+    actions = investment.index('class="action-grid"')
+    workflow = investment.index('class="investment-use-flow"')
+    map_frame = investment.index('data-map-src=')
+    ai = investment.index('data-map-insight-button')
+    district_summary = investment.index('data-district-table')
+    assert actions < workflow < map_frame < ai < district_summary
+    assert "지역·번호 선택" in investment
+    assert "수요·공급·노후도 비교" in investment
+    assert "AI 투자해석 확인" in investment
+    assert "구별 검토순위 요약" in investment
+
+
+def test_navigation_orders_decision_tabs_and_places_ai_analysis_last() -> None:
+    """Catches the task flow becoming scattered across the top navigation."""
+    html = _asset("index.html")
+    nav = html.split('<nav class="tabs"', 1)[1].split("</nav>", 1)[0]
+
+    expected = (
+        'data-tab-target="supply">동서 공급 격차<',
+        'data-tab-target="investment">투자정보 제공<',
+        'data-tab-target="vacant">빈집 정보 제공<',
+        'data-tab-target="insights">AI 종합 분석<',
+    )
+    positions = [nav.index(item) for item in expected]
+    assert positions == sorted(positions)
+
+
+def test_legacy_map_hash_opens_investment_information() -> None:
+    """Catches old bookmarked map URLs becoming dead links after tab consolidation."""
+    script = _asset("app.js")
+
+    assert 'function resolveTabTarget(target)' in script
+    assert 'return target === "map" ? "investment" : target;' in script
+    assert 'const initialTarget = resolveTabTarget(location.hash.slice(1));' in script
 
 
 def test_page_load_does_not_generate_insights() -> None:

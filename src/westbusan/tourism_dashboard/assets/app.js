@@ -682,10 +682,14 @@ function renderDashboard(data) {
   });
 }
 
+function resolveTabTarget(target) {
+  return target === "map" ? "investment" : target;
+}
+
 document.querySelectorAll("[data-tab-target]").forEach((button) => {
   button.addEventListener("click", () => {
     const target = button.dataset.tabTarget;
-    if (target === "map") {
+    if (target === "investment") {
       const mapFrame = document.querySelector("[data-map-src]");
       if (mapFrame && !mapFrame.getAttribute("src")) {
         mapFrame.setAttribute("src", mapFrame.dataset.mapSrc);
@@ -701,7 +705,7 @@ document.querySelectorAll("[data-tab-target]").forEach((button) => {
   });
 });
 
-const initialTarget = location.hash.slice(1);
+const initialTarget = resolveTabTarget(location.hash.slice(1));
 const initialButton = [...document.querySelectorAll("[data-tab-target]")]
   .find((item) => item.dataset.tabTarget === initialTarget);
 if (initialButton && !initialButton.classList.contains("active")) initialButton.click();
@@ -833,7 +837,7 @@ function renderInsight(insight) {
   clear(findings);
   insight.findings.forEach((finding) => {
     const card = node("article", "card finding");
-    const area = { tourism_overview: "관광 종합현황", supply_gap: "공급 격차", private_investment: "민간투자 유도" }[finding.decision_area];
+    const area = { tourism_overview: "관광 종합현황", supply_gap: "동서 공급 격차", private_investment: "투자정보 제공" }[finding.decision_area];
     card.append(node("span", "area", area), node("h3", "", finding.title), node("p", "", finding.claim), node("small", "", `한계: ${finding.limitations}`));
     const chips = node("div", "metric-chips");
     finding.metric_ids.forEach((id) => {
