@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-visitor-demand-v14"' in html
-    assert 'src="app.js?v=20260822-visitor-demand-v14"' in html
+    assert 'href="app.css?v=20260822-overview-eight-v15"' in html
+    assert 'src="app.js?v=20260822-overview-eight-v15"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -174,6 +174,39 @@ def test_facility_card_renders_rooms_as_a_smaller_secondary_value() -> None:
     assert 'node("span", "secondary-value"' in script
     assert ".secondary-value" in stylesheet
     assert "font-size:.68em" in stylesheet
+
+
+def test_overview_has_eight_distinct_policy_cards() -> None:
+    script = _asset("app.js")
+
+    for label in (
+        "서부산 숙박업체",
+        "서부산 일평균 방문수요",
+        "관광숙박 등록",
+        "2021년 이후 신규",
+        "관광소비 지표",
+        "20년 이상 노후시설",
+        "인허가 평균업력",
+        "외국인 대상 관광등록",
+    ):
+        assert label in script
+
+    overview_block = script.split('const overview = document.querySelector("[data-overview-kpis]");', 1)[1]
+    overview_block = overview_block.split('const summary = document.querySelector("[data-region-summary]");', 1)[0]
+    assert overview_block.count("kpi(") == 7
+    assert overview_block.count("facilitySupplyKpi(west, east)") == 1
+    assert "통화금액이 아닌 원천지표" in overview_block
+    assert "관광숙박·외국인관광 도시민박" in overview_block
+
+
+def test_facility_mix_wraps_only_between_complete_category_chips() -> None:
+    script = _asset("app.js")
+    stylesheet = _asset("app.css")
+
+    assert 'node("small", "facility-mix")' in script
+    assert 'node("span", "facility-mix-item"' in script
+    assert ".facility-mix-item" in stylesheet
+    assert "white-space:nowrap" in stylesheet
 
 
 def test_vacant_house_tab_does_not_embed_exact_locations() -> None:
