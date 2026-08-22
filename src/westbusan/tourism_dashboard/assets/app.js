@@ -716,21 +716,24 @@ const initialButton = [...document.querySelectorAll("[data-tab-target]")]
   .find((item) => item.dataset.tabTarget === initialTarget);
 if (initialButton && !initialButton.classList.contains("active")) initialButton.click();
 
-const insightButton = document.querySelector("[data-insight-button]");
-insightButton.addEventListener("click", async () => {
+const reportButton = document.querySelector("[data-report-button]");
+const reportPrintButton = document.querySelector("[data-report-print]");
+reportButton.addEventListener("click", async () => {
   if (!dashboardData) return;
-  const state = document.querySelector("[data-insight-state]");
-  insightButton.disabled = true;
-  state.textContent = "검증된 발행지표를 해석하고 있습니다.";
+  const state = document.querySelector("[data-report-state]");
+  reportButton.disabled = true;
+  state.textContent = "현재 발행본의 관광·숙박·공간·빈집 근거를 종합하고 있습니다.";
   try {
-    renderInsight(await requestInsight(document.querySelector("#insight-region").value));
-    state.textContent = "현재 발행본을 기준으로 정책해석을 생성했습니다.";
+    renderReport(await requestReport());
+    state.textContent = "현재 발행본에 묶인 8개 섹션 종합보고서를 생성했습니다.";
+    reportPrintButton.disabled = false;
   } catch (_) {
-    state.textContent = "정책해석을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+    state.textContent = "종합보고서를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
   } finally {
-    insightButton.disabled = false;
+    reportButton.disabled = false;
   }
 });
+reportPrintButton.addEventListener("click", () => window.print());
 
 const mapInsightButton = document.querySelector("[data-map-insight-button]");
 mapInsightButton.addEventListener("click", async () => {
@@ -786,6 +789,70 @@ async function requestInsight(region, district = null) {
   });
   if (!response.ok) throw new Error("request_failed");
   return response.json();
+}
+
+async function requestReport() {
+  const response = await fetch("api/report", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ scope: "west" })
+  });
+  if (!response.ok) throw new Error("report_request_failed");
+  return response.json();
+}
+
+function renderReport(report) {
+  const result = document.querySelector("[data-report-result]");
+  result.hidden = false;
+  document.querySelector("[data-report-source]").textContent = report.source === "openai" ? "OpenAI 근거기반 보고서" : "검증 규칙 기반 보고서";
+  document.querySelector("[data-report-date]").textContent = `자료 ${report.data_as_of}`;
+  document.querySelector("[data-report-cache]").textContent = report.cached ? "저장 보고서" : "새 보고서";
+  document.querySelector("[data-report-headline]").textContent = report.headline;
+  document.querySelector("[data-report-summary]").textContent = report.executive_summary;
+  const evidenceById = new Map(report.evidence.map((metric) => [metric.metric_id, metric]));
+  report.sections.forEach((section) => {
+    const card = document.querySelector(`[data-report-section="${section.section_id}"]`);
+    if (!card) return;
+    card.querySelector("[data-report-title]").textContent = section.title;
+    card.querySelector("[data-report-narrative]").textContent = section.narrative;
+    const findings = card.querySelector("[data-report-findings]");
+    clear(findings);
+    section.findings.forEach((finding) => {
+      const item = node("article", "report-finding");
+      item.append(node("strong", "", finding.title), node("p", "", finding.claim));
+      const chips = node("div", "report-metric-chips");
+      finding.metric_ids.forEach((metricId) => {
+        const metric = evidenceById.get(metricId);
+        chips.append(node("span", "", metric ? `${metric.label} ${value(metric.value, metric.unit)}` : metricId));
+      });
+      item.append(chips, node("small", "", `해석 한계 · ${finding.limitations}`));
+      findings.append(item);
+    });
+    const actions = card.querySelector("[data-report-actions]");
+    clear(actions);
+    section.actions.forEach((action) => {
+      const item = node("article", "report-action");
+      item.append(
+        node("span", "", `${action.priority_rank}순위`),
+        node("strong", "", action.action),
+        node("p", "", `${action.target_area} · ${action.rationale}`),
+        node("small", "", `검토조건 · ${action.caveat}`)
+      );
+      actions.append(item);
+    });
+  });
+  const evidence = document.querySelector("[data-report-evidence]");
+  clear(evidence);
+  report.evidence.forEach((metric) => {
+    const row = node("div", "report-evidence-row");
+    row.append(
+      node("strong", "", metric.label),
+      node("span", "", value(metric.value, metric.unit)),
+      node("span", "", metric.period),
+      node("small", "", metric.quality_note)
+    );
+    evidence.append(row);
+  });
 }
 
 function renderMapInsight(insight) {

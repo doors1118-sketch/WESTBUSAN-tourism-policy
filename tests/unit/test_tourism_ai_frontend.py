@@ -213,8 +213,33 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-vacant-hubs-v40"' in html
-    assert 'src="app.js?v=20260822-vacant-hubs-v40"' in html
+    assert 'href="app.css?v=20260822-ai-report-v41"' in html
+    assert 'src="app.js?v=20260822-ai-report-v41"' in html
+
+
+def test_comprehensive_tab_has_all_report_sections_and_print_action() -> None:
+    html = _asset("index.html")
+    script = _asset("app.js")
+    stylesheet = _asset("app.css")
+
+    assert 'data-report-button' in html
+    assert 'data-report-print' in html
+    assert html.count('data-report-section=') == 8
+    for section_id in (
+        "executive_summary",
+        "tourism_supply",
+        "east_west_gap",
+        "west_districts",
+        "accommodation_investment",
+        "vacant_hubs",
+        "policy_programmes",
+        "limitations",
+    ):
+        assert f'data-report-section="{section_id}"' in html
+    assert 'fetch("api/report"' in script
+    assert 'body: JSON.stringify({ scope: "west" })' in script
+    assert 'window.print()' in script
+    assert "@media print" in stylesheet
 
 
 def test_investment_information_can_request_ai_explanation_for_priority_map() -> None:

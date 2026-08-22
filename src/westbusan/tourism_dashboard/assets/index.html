@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="관광수요를 부산의 체류·숙박·소비로 연결하기 위한 정책 분석 대시보드">
   <title>부산 관광경제 활력 분석</title>
-  <link rel="stylesheet" href="app.css?v=20260822-vacant-hubs-v40">
+  <link rel="stylesheet" href="app.css?v=20260822-ai-report-v41">
 </head>
 <body>
   <header class="topbar">
@@ -171,19 +171,26 @@
     </section>
 
     <section class="tab-panel" data-tab-panel="insights" id="insights">
-      <div class="section-head"><div><span>AI POLICY INSIGHT</span><h2>AI 종합 분석</h2></div><p>동서 공급 격차와 투자 검토지표를 동일 기준으로 해석합니다.</p></div>
-      <article class="card insight-control">
-        <div><label for="insight-region">분석 범위</label><select id="insight-region"><option value="west">서부산</option><option value="all">부산 전체 권역 비교</option><option value="east">동부산</option><option value="other">기타 부산</option></select></div>
-        <button type="button" data-insight-button>AI 정책해석 생성</button>
-        <p data-insight-state>버튼을 누르면 현재 발행본을 기준으로 해석합니다. 페이지를 여는 것만으로는 API를 호출하지 않습니다.</p>
+      <div class="section-head"><div><span>AI COMPREHENSIVE REPORT</span><h2>AI 종합 분석</h2></div><p>관광수요·숙박공급·민간투자·연속 빈집 필지군을 하나의 정책보고서로 해석합니다.</p></div>
+      <article class="card report-control">
+        <div><span>PUBLICATION-BOUND REPORT</span><h3>서부산 관광경제 활력 제고 종합보고서</h3><p>현재 승인된 관광·공간·빈집 발행본의 근거지표만 사용합니다. 동일 발행본은 저장된 분석을 재사용합니다.</p></div>
+        <div class="report-actions"><button type="button" data-report-button>AI 종합보고서 생성</button><button type="button" class="secondary" data-report-print disabled>보고서 인쇄</button></div>
+        <p data-report-state>버튼을 누를 때만 AI를 호출합니다. 호출 실패 시에도 동일한 8개 섹션의 근거 기반 기본보고서를 제공합니다.</p>
       </article>
-      <section class="insight-result" data-insight-result hidden aria-live="polite">
-        <div class="insight-meta"><span data-insight-source></span><span data-insight-date></span><span data-insight-cache></span></div>
-        <article class="card insight-lead"><span>정책 진단</span><h3 data-insight-headline></h3><p data-insight-summary></p></article>
-        <div class="insight-grid" data-insight-findings></div>
-        <div class="section-head small"><div><span>ACTION</span><h2>정책·투자 검토순위</h2></div></div>
-        <div class="policy-list" data-insight-options></div>
-        <details class="card evidence"><summary>근거지표와 데이터 한계 보기</summary><div data-insight-evidence></div></details>
+      <section class="report-result" data-report-result hidden aria-live="polite">
+        <div class="report-meta"><span data-report-source></span><span data-report-date></span><span data-report-cache></span></div>
+        <article class="report-cover"><span>WEST BUSAN TOURISM POLICY REPORT</span><h3 data-report-headline></h3><p data-report-summary></p></article>
+        <div class="report-section-grid" data-report-root>
+          <article class="card report-section" data-report-section="executive_summary"><span>01</span><h3 data-report-title></h3><p data-report-narrative></p><div data-report-findings></div><div data-report-actions></div></article>
+          <article class="card report-section" data-report-section="tourism_supply"><span>02</span><h3 data-report-title></h3><p data-report-narrative></p><div data-report-findings></div><div data-report-actions></div></article>
+          <article class="card report-section" data-report-section="east_west_gap"><span>03</span><h3 data-report-title></h3><p data-report-narrative></p><div data-report-findings></div><div data-report-actions></div></article>
+          <article class="card report-section" data-report-section="west_districts"><span>04</span><h3 data-report-title></h3><p data-report-narrative></p><div data-report-findings></div><div data-report-actions></div></article>
+          <article class="card report-section" data-report-section="accommodation_investment"><span>05</span><h3 data-report-title></h3><p data-report-narrative></p><div data-report-findings></div><div data-report-actions></div></article>
+          <article class="card report-section" data-report-section="vacant_hubs"><span>06</span><h3 data-report-title></h3><p data-report-narrative></p><div data-report-findings></div><div data-report-actions></div></article>
+          <article class="card report-section" data-report-section="policy_programmes"><span>07</span><h3 data-report-title></h3><p data-report-narrative></p><div data-report-findings></div><div data-report-actions></div></article>
+          <article class="card report-section" data-report-section="limitations"><span>08</span><h3 data-report-title></h3><p data-report-narrative></p><div data-report-findings></div><div data-report-actions></div></article>
+        </div>
+        <details class="card report-evidence"><summary>인용 근거지표·발행정보 보기</summary><div data-report-evidence></div></details>
       </section>
       <div class="notice">AI 해석은 정책검토 참고자료이며 법적 적합성, 안전성, 투자수익 또는 사업 타당성을 확정하지 않습니다.</div>
     </section>
@@ -192,6 +199,6 @@
   </main>
 
   <footer><span>부산광역시 관광정책 내부 검토용</span><span>데이터 기준일 <strong data-as-of>—</strong></span></footer>
-  <script src="app.js?v=20260822-vacant-hubs-v40"></script>
+  <script src="app.js?v=20260822-ai-report-v41"></script>
 </body>
 </html>
