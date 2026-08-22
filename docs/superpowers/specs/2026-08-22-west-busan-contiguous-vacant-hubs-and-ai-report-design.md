@@ -1,7 +1,7 @@
 # West Busan Contiguous Vacant-House Hubs and AI Report Design
 
 **Date:** 2026-08-22  
-**Status:** Approved in chat; awaiting written-spec review  
+**Status:** Approved for implementation  
 **Target branch:** `codex/busan-authority-filter`
 
 ## 1. Purpose
@@ -38,7 +38,9 @@ financially viable.
   eligibility and ranking; a weaker component is not promoted merely to balance
   district representation.
 - The map uses the same VWorld 2D tile base and server-side credential proxy as
-  the investment-information map.
+  the investment-information map. It is a live slippy map with pan and wheel/
+  button zoom; a static screenshot or fixed raster overview is not an accepted
+  implementation.
 - Exact address, lot number, and parcel geometry are shown in this release. The
   intended audience is internal public officials; authentication is deferred.
 - The final product has one shareable URL on the existing tourism dashboard.
@@ -164,8 +166,10 @@ The tab is summary-first and contains:
 - filters for district, dong, grade, construction age, housing type,
   demolition-needed flag, unlicensed flag, hub membership, and preliminary
   feasibility;
-- VWorld 2D map with numbered hub boundaries at broad zoom;
-- exact cadastral polygons and vacant-house points/labels at detailed zoom;
+- live VWorld 2D tile map with numbered hub boundaries at broad zoom;
+- progressive disclosure by zoom level: ranked hubs at city/district scale,
+  connected cadastral polygons at neighbourhood scale, and individual vacant-
+  house locations with exact address/lot detail at street/parcel scale;
 - candidate list ranked 1 through 10 with parcel count, union area, district,
   dong, and reason;
 - click detail for exact address, parcel/building facts, connected component,
@@ -173,7 +177,9 @@ The tab is summary-first and contains:
 
 Colours use distinct categorical hues for hub rank/status rather than barely
 different shades of one colour. The selected hub is visually isolated and the
-map fits its full component bounds.
+map fits its full component bounds. Zooming must request additional VWorld map
+tiles and re-render vector detail at the new scale; it must not magnify a fixed
+background image or leave individual vacant houses hidden at maximum zoom.
 
 ## 9. Address-Based Hub Analysis
 
