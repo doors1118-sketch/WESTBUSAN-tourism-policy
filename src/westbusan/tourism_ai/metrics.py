@@ -86,12 +86,37 @@ class _BenchmarkDistrict(BaseModel):
     recentLicenseShare: Number = Field(ge=0, le=100)
 
 
+class _RegistrationRegions(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    west: StrictInt = Field(ge=0)
+    east: StrictInt = Field(ge=0)
+    other: StrictInt = Field(ge=0)
+
+
+class _RegistrationType(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: Literal[
+        "lodgings",
+        "tourist_accommodations",
+        "foreigner_city_homestays",
+        "rural_homestays",
+        "hanok_experience",
+    ]
+    name: str = Field(min_length=1, max_length=30)
+    regions: _RegistrationRegions
+
+
 class _DashboardDocument(BaseModel):
     model_config = ConfigDict(extra="ignore", allow_inf_nan=False)
 
     as_of: str = Field(alias="asOf", pattern=r"^\d{4}-\d{2}-\d{2}$")
     published_run: UUID = Field(alias="publishedRun")
     regions: list[_Region] = Field(min_length=3, max_length=3)
+    registration_types: list[_RegistrationType] = Field(
+        alias="registrationTypes", min_length=5, max_length=5
+    )
     west_districts: list[_WestDistrict] = Field(
         alias="westDistricts", min_length=1, max_length=4
     )
@@ -174,6 +199,9 @@ def load_metric_catalogue(
     region_ids = [region.id for region in document.regions]
     if len(set(region_ids)) != 3 or set(region_ids) != {"west", "east", "other"}:
         raise MetricCatalogueError("invalid_dashboard_document")
+    registration_ids = [item.id for item in document.registration_types]
+    if len(set(registration_ids)) != 5:
+        raise MetricCatalogueError("invalid_dashboard_document")
 
     selected = (
         document.regions
@@ -196,6 +224,18 @@ def load_metric_catalogue(
                 region=region.name,
                 period=document.as_of,
                 quality_note="현재 발행본의 검증된 집계지표",
+            )
+
+        for registration in document.registration_types:
+            metric_id = f"{prefix}.registration.{registration.id}"
+            catalogue[metric_id] = EvidenceMetric(
+                metric_id=metric_id,
+                label=f"{region.name} {registration.name} 등록업체 수",
+                value=getattr(registration.regions, region.id),
+                unit="개소",
+                region=region.name,
+                period=document.as_of,
+                quality_note="현재 발행본의 등록유형별 업체 수; 복수 등록은 중복 가능",
             )
 
     if request.region == "west":

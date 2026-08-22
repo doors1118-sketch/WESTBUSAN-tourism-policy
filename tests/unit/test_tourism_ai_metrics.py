@@ -65,6 +65,33 @@ def _dashboard_document(*, published_run: UUID = RUN_ID) -> dict[str, object]:
                 "consumptionIndex": 65.05,
             },
         ],
+        "registrationTypes": [
+            {
+                "id": "lodgings",
+                "name": "일반숙박",
+                "regions": {"west": 389, "east": 713, "other": 1132},
+            },
+            {
+                "id": "tourist_accommodations",
+                "name": "관광숙박",
+                "regions": {"west": 3, "east": 155, "other": 48},
+            },
+            {
+                "id": "foreigner_city_homestays",
+                "name": "외국인도시민박",
+                "regions": {"west": 8, "east": 372, "other": 115},
+            },
+            {
+                "id": "rural_homestays",
+                "name": "농어촌민박",
+                "regions": {"west": 31, "east": 132, "other": 0},
+            },
+            {
+                "id": "hanok_experience",
+                "name": "한옥체험",
+                "regions": {"west": 0, "east": 5, "other": 0},
+            },
+        ],
         "westDistricts": [
             {
                 "id": "gangseo",
@@ -241,6 +268,9 @@ def test_all_catalogue_includes_three_regions_without_district_details(
     )
 
     assert {"west.rooms", "east.rooms", "other.rooms"} <= set(catalogue)
+    assert catalogue["west.registration.lodgings"].value == 389
+    assert catalogue["east.registration.tourist_accommodations"].value == 155
+    assert catalogue["other.registration.rural_homestays"].value == 0
     assert not any(".district." in key for key in catalogue)
 
 

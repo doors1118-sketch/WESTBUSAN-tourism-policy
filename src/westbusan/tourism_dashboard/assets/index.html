@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="관광수요를 부산의 체류·숙박·소비로 연결하기 위한 정책 분석 대시보드">
   <title>부산 관광경제 활력 분석</title>
-  <link rel="stylesheet" href="app.css?v=20260822-general-lodging-v35">
+  <link rel="stylesheet" href="app.css?v=20260822-supply-ai-v36">
 </head>
 <body>
   <header class="topbar">
@@ -96,6 +96,7 @@
         <div class="visitor-demand-insight" data-visitor-demand-insight></div>
         <p class="visitor-demand-definition">관광데이터랩 외지인·외국인 분류의 일별 추정 방문인원입니다. 관광객 순인원·숙박객이 아닌 일별 추정 방문인원으로, 숙박수요의 직접 실적이 아니라 지역 방문압력을 비교하는 지표입니다.</p>
       </article>
+      <div class="region-donut-grid" data-supply-donuts aria-label="권역별 숙박시설 비중"></div>
       <article class="card registration-type-card">
         <div class="card-head"><h3>등록유형별 숙박업체 비교</h3><span>업체 수 기준 · 서부산·동부산·기타 부산</span></div>
         <div class="registration-type-legend" aria-label="권역 색상 범례">
@@ -104,13 +105,24 @@
         <div class="registration-type-chart" data-registration-type-bars aria-label="등록유형별 권역 숙박업체 수 막대그래프"></div>
         <p class="registration-type-definition"><strong>업체 수 기준</strong>이며, 한 업체가 여러 등록유형에 해당하면 유형별로 중복 집계될 수 있습니다. 등록유형 기준·복수 등록 중복 가능.</p>
       </article>
-      <div class="region-donut-grid" data-supply-donuts aria-label="권역별 숙박시설 비중"></div>
       <div class="metric-table-wrap card"><table class="metric-table"><thead><tr><th>권역</th><th>시설</th><th>확인 객실</th><th>객실자료 확보율</th><th>시설당 객실 중앙값</th><th>건물 평균연수</th><th>20년+</th><th>인허가 평균업력</th><th>2021년 이후 숙박업 등록</th></tr></thead><tbody data-supply-table></tbody></table><p class="table-definition"><strong>객실자료 확보율</strong>은 전체 숙박시설 중 객실 수가 확인된 시설의 비율입니다. 동부산은 1,377개소 중 일반숙박 713개소의 객실 수가 확인됐으며, 관광숙박·도시민박 등은 현재 원천자료에 객실 수가 없어 확인 객실 합계에서 제외됩니다.</p></div>
       <div class="three-column compact-top">
         <article class="card mini-chart"><h3>관광숙박 등록 비율</h3><div data-tourism-bars></div></article>
         <article class="card mini-chart"><h3>외국인 숙박 대응시설 비율</h3><div data-foreign-bars></div></article>
         <article class="card mini-chart"><h3>2021년 이후 숙박업 등록 비율</h3><div data-new-bars></div></article>
       </div>
+      <article class="card supply-ai-control">
+        <div><span>AI SUPPLY ANALYSIS</span><h3>서부산·동부산 공급구조 AI 비교</h3><p>방문수요, 전체·일반숙박, 등록유형, 노후도와 신규 등록을 같은 발행본으로 해석합니다.</p></div>
+        <button type="button" data-supply-insight-button>AI 공급구조 분석</button>
+        <p data-supply-insight-state>버튼을 누르면 처음 한 번 분석하고, 데이터가 바뀌지 않으면 저장 결과를 재사용합니다.</p>
+      </article>
+      <section class="card supply-ai-result" data-supply-insight-result hidden aria-live="polite">
+        <div class="supply-ai-meta"><span data-supply-insight-source></span><span data-supply-insight-date></span><span data-supply-insight-cache></span></div>
+        <h3 data-supply-insight-headline></h3>
+        <p data-supply-insight-summary></p>
+        <div class="supply-ai-findings" data-supply-insight-findings></div>
+        <div class="supply-ai-options" data-supply-insight-options></div>
+      </section>
     </section>
 
     <section class="tab-panel" data-tab-panel="investment" id="investment">
@@ -169,6 +181,6 @@
   </main>
 
   <footer><span>부산광역시 관광정책 내부 검토용</span><span>데이터 기준일 <strong data-as-of>—</strong></span></footer>
-  <script src="app.js?v=20260822-general-lodging-v35"></script>
+  <script src="app.js?v=20260822-supply-ai-v36"></script>
 </body>
 </html>

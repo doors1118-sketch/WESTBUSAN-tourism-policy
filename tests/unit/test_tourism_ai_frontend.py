@@ -78,21 +78,66 @@ def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
     assert "관광숙박업·외국인관광 도시민박업 등록시설 비율" in script
     assert 'label: "2021년 이후 숙박업 등록"' in script
     assert "현재 영업시설 중 최초 인허가일 2021.1.1 이후 비율" in script
-    assert 'label: "전체 숙박업체·일반숙박"' in script
-    assert "현재 영업 중인 전체 숙박업체 대비 일반숙박업 등록 업체 수·비율" in script
+    assert 'label: "전체 숙박업체"' in script
+    assert "영업 중 시설 수 · 괄호는 일반숙박 비중" in script
+    assert 'generalRegistrations.regions.west, "개"' in script
+    assert 'generalRegistrations.regions.east, "개"' in script
     assert "서부산의 일반숙박 비중이 동부산보다" in script
     assert "generalRegistrations.regions.west" in script
     assert "generalRegistrations.regions.east" in script
     for selector in (
         ".supply-gap-summary",
         ".supply-gap-stat",
-        ".supply-gap-stat.featured",
         ".visitor-demand-card",
         ".visitor-demand-row",
         ".visitor-demand-bar",
         ".visitor-demand-insight",
     ):
         assert selector in stylesheet
+    assert "grid-template-columns:repeat(5,minmax(0,1fr))" in stylesheet
+    assert "featured: true" not in script
+
+
+def test_supply_tab_orders_evidence_and_adds_cached_east_west_ai_analysis() -> None:
+    """Keeps the supply decision flow and AI analysis tied to one publication."""
+    html = _asset("index.html")
+    script = _asset("app.js")
+    stylesheet = _asset("app.css")
+
+    supply = html.split('data-tab-panel="supply"', 1)[1].split(
+        'data-tab-panel="investment"', 1
+    )[0]
+    visitor = supply.index('data-visitor-demand-bars')
+    donuts = supply.index('data-supply-donuts')
+    registrations = supply.index('data-registration-type-bars')
+    ai_analysis = supply.index('data-supply-insight-button')
+    assert visitor < donuts < registrations < ai_analysis
+
+    assert "서부산·동부산 공급구조 AI 비교" in html
+    assert 'data-supply-insight-result' in html
+    assert 'requestInsight("all")' in script
+    assert "supplyInsightPromises" in script
+    assert "dashboardData.publishedRun" in script
+    assert 'data-supply-insight-cache' in script
+    for selector in (
+        ".supply-ai-control",
+        ".supply-ai-result",
+        ".supply-ai-findings",
+    ):
+        assert selector in stylesheet
+
+
+def test_supply_donuts_are_graph_focused_without_redundant_detail_text() -> None:
+    script = _asset("app.js")
+    block = script.split('const supplyDonuts', 1)[1].split(
+        'const supplyBody', 1
+    )[0]
+
+    assert 'node("h3", "", region.name)' in block
+    assert "부산 시설 비중" in block
+    assert "숙박시설 ${value(region.facilities" not in block
+    assert "확인 객실" not in block
+    assert "2021년 이후 숙박업 등록" not in block
 
 
 def test_supply_gap_compares_registration_type_facilities_by_region() -> None:
@@ -169,8 +214,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-general-lodging-v35"' in html
-    assert 'src="app.js?v=20260822-general-lodging-v35"' in html
+    assert 'href="app.css?v=20260822-supply-ai-v36"' in html
+    assert 'src="app.js?v=20260822-supply-ai-v36"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:

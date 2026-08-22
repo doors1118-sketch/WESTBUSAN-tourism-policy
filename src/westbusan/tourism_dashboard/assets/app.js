@@ -2,6 +2,7 @@ const fmt = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 1 });
 const colors = { west: "#176bff", east: "#19b6c9", other: "#9aa8ba" };
 let dashboardData = null;
 const districtInsightPromises = new Map();
+const supplyInsightPromises = new Map();
 let activeDistrictInsightId = null;
 
 function node(tag, className, text) {
@@ -81,12 +82,11 @@ function renderSupplyGapSummary(target, west, east, registrationTypes) {
   const eastGeneralShare = generalRegistrations.regions.east / east.facilities * 100;
   const metrics = [
     {
-      label: "전체 숙박업체·일반숙박",
-      west: `${value(west.facilities, "개소")} 중 일반숙박 ${value(generalRegistrations.regions.west, "개소")} (${value(westGeneralShare, "%")})`,
-      east: `${value(east.facilities, "개소")} 중 일반숙박 ${value(generalRegistrations.regions.east, "개소")} (${value(eastGeneralShare, "%")})`,
+      label: "전체 숙박업체",
+      west: `${value(west.facilities, "개소")} (일반 ${value(generalRegistrations.regions.west, "개")}·${value(westGeneralShare, "%")})`,
+      east: `${value(east.facilities, "개소")} (일반 ${value(generalRegistrations.regions.east, "개")}·${value(eastGeneralShare, "%")})`,
       comparison: `서부산의 일반숙박 비중이 동부산보다 ${value(westGeneralShare - eastGeneralShare, "%p 높음")}`,
-      definition: "현재 영업 중인 전체 숙박업체 대비 일반숙박업 등록 업체 수·비율",
-      featured: true,
+      definition: "영업 중 시설 수 · 괄호는 일반숙박 비중",
     },
     {
       label: "객실 100실당 방문수요",
@@ -119,7 +119,6 @@ function renderSupplyGapSummary(target, west, east, registrationTypes) {
   ];
   metrics.forEach((metric) => {
     const card = node("article", "supply-gap-stat");
-    if (metric.featured) card.classList.add("featured");
     const values = node("div", "supply-gap-values");
     values.append(
       node("span", "west", `서부산 ${metric.west}`),
@@ -655,11 +654,7 @@ function renderDashboard(data) {
     chart.style.setProperty("--region-share", `${facilityShare.toFixed(1)}%`);
     chart.append(node("strong", "", `${facilityShare.toFixed(1)}%`), node("small", "", "부산 시설 비중"));
     const details = node("div", "region-donut-details");
-    details.append(
-      node("h3", "", region.name),
-      node("p", "", `숙박시설 ${value(region.facilities, "개")} · 확인 객실 ${value(region.rooms, "실")}`),
-      node("p", "", `2021년 이후 숙박업 등록 ${value(region.recentLicenseShare, "%")} · 20년+ ${value(region.old20Share, "%")}`),
-    );
+    details.append(node("h3", "", region.name));
     card.append(chart, details);
     supplyDonuts.append(card);
   });
@@ -749,6 +744,32 @@ mapInsightButton.addEventListener("click", async () => {
   }
 });
 
+const supplyInsightButton = document.querySelector("[data-supply-insight-button]");
+supplyInsightButton.addEventListener("click", async () => {
+  if (!dashboardData) return;
+  const state = document.querySelector("[data-supply-insight-state]");
+  const cacheKey = `${dashboardData.publishedRun}:east-west-supply`;
+  supplyInsightButton.disabled = true;
+  state.textContent = "동·서부산 공급구조를 검증된 발행지표로 해석하고 있습니다.";
+  try {
+    const reusedInSession = supplyInsightPromises.has(cacheKey);
+    if (!reusedInSession) {
+      const pending = requestInsight("all").catch((error) => {
+        supplyInsightPromises.delete(cacheKey);
+        throw error;
+      });
+      supplyInsightPromises.set(cacheKey, pending);
+    }
+    const insight = await supplyInsightPromises.get(cacheKey);
+    renderSupplyInsight(insight, reusedInSession);
+    state.textContent = insight.cached || reusedInSession ? "동일 발행본의 저장 분석을 재사용했습니다." : "현재 발행본의 공급구조 분석을 저장했습니다.";
+  } catch (_) {
+    state.textContent = "공급구조 분석을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.";
+  } finally {
+    supplyInsightButton.disabled = false;
+  }
+});
+
 async function requestInsight(region, district = null) {
   const payload = { region, period: "latest", published_run: dashboardData.publishedRun };
   if (district) payload.district = district;
@@ -772,6 +793,34 @@ function renderMapInsight(insight) {
     const item = node("article", "");
     item.append(node("strong", "", finding.title), node("small", "", finding.claim));
     findings.append(item);
+  });
+}
+
+function renderSupplyInsight(insight, reusedInSession = false) {
+  const result = document.querySelector("[data-supply-insight-result]");
+  result.hidden = false;
+  document.querySelector("[data-supply-insight-source]").textContent = insight.source === "openai" ? "OpenAI 정책해석" : "기본 규칙 해석";
+  document.querySelector("[data-supply-insight-date]").textContent = `자료 ${insight.data_as_of}`;
+  document.querySelector("[data-supply-insight-cache]").textContent = insight.cached || reusedInSession ? "저장 분석" : "새 분석";
+  document.querySelector("[data-supply-insight-headline]").textContent = insight.headline;
+  document.querySelector("[data-supply-insight-summary]").textContent = insight.executive_summary;
+  const findings = document.querySelector("[data-supply-insight-findings]");
+  clear(findings);
+  insight.findings.forEach((finding) => {
+    const item = node("article", "");
+    item.append(node("strong", "", finding.title), node("p", "", finding.claim));
+    findings.append(item);
+  });
+  const options = document.querySelector("[data-supply-insight-options]");
+  clear(options);
+  insight.policy_options.slice(0, 3).forEach((option) => {
+    const item = node("article", "");
+    item.append(
+      node("span", "", `${option.priority_rank}순위`),
+      node("strong", "", option.action),
+      node("p", "", `${option.target_area} · ${option.rationale}`),
+    );
+    options.append(item);
   });
 }
 
