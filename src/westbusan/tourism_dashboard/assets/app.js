@@ -75,18 +75,15 @@ function renderBarGroup(target, regions, key, suffix, ceiling) {
   });
 }
 
-function renderSupplyGapSummary(target, west, east, registrationTypes) {
+function renderSupplyGapSummary(target, west, east) {
   clear(target);
-  const generalRegistrations = registrationTypes.find((item) => item.id === "lodgings");
-  const westGeneralShare = generalRegistrations.regions.west / west.facilities * 100;
-  const eastGeneralShare = generalRegistrations.regions.east / east.facilities * 100;
   const metrics = [
     {
       label: "전체 숙박업체",
-      west: `${value(west.facilities, "개소")} (일반 ${value(generalRegistrations.regions.west, "개")}·${value(westGeneralShare, "%")})`,
-      east: `${value(east.facilities, "개소")} (일반 ${value(generalRegistrations.regions.east, "개")}·${value(eastGeneralShare, "%")})`,
-      comparison: `서부산의 일반숙박 비중이 동부산보다 ${value(westGeneralShare - eastGeneralShare, "%p 높음")}`,
-      definition: "영업 중 시설 수 · 괄호는 일반숙박 비중",
+      west: value(west.facilities, "개소"),
+      east: value(east.facilities, "개소"),
+      comparison: `서부산은 동부산의 ${value(west.facilities / east.facilities * 100, "%")}`,
+      definition: "현재 영업 중인 전체 숙박업체 수",
     },
     {
       label: "객실 100실당 방문수요",
@@ -636,7 +633,6 @@ function renderDashboard(data) {
     document.querySelector("[data-supply-gap-summary]"),
     west,
     east,
-    data.registrationTypes,
   );
   renderVisitorDemandComparison(document.querySelector("[data-visitor-demand-bars]"), west, east);
   renderRegistrationTypeComparison(

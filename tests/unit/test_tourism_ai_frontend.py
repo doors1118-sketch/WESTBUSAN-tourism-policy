@@ -79,12 +79,12 @@ def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
     assert 'label: "2021년 이후 숙박업 등록"' in script
     assert "현재 영업시설 중 최초 인허가일 2021.1.1 이후 비율" in script
     assert 'label: "전체 숙박업체"' in script
-    assert "영업 중 시설 수 · 괄호는 일반숙박 비중" in script
-    assert 'generalRegistrations.regions.west, "개"' in script
-    assert 'generalRegistrations.regions.east, "개"' in script
-    assert "서부산의 일반숙박 비중이 동부산보다" in script
-    assert "generalRegistrations.regions.west" in script
-    assert "generalRegistrations.regions.east" in script
+    assert "현재 영업 중인 전체 숙박업체 수" in script
+    assert 'west: value(west.facilities, "개소")' in script
+    assert 'east: value(east.facilities, "개소")' in script
+    assert "서부산은 동부산의" in script
+    assert "괄호는 일반숙박 비중" not in script
+    assert "서부산의 일반숙박 비중이 동부산보다" not in script
     for selector in (
         ".supply-gap-summary",
         ".supply-gap-stat",
@@ -214,8 +214,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-supply-ai-v36"' in html
-    assert 'src="app.js?v=20260822-supply-ai-v36"' in html
+    assert 'href="app.css?v=20260822-supply-card-v37"' in html
+    assert 'src="app.js?v=20260822-supply-card-v37"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
