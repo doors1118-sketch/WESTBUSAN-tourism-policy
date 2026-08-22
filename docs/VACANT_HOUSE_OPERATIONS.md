@@ -301,3 +301,36 @@ The Seo-gu workbook remains blocked as `encrypted_office_source`; an authorised
 password or source-owner-provided decrypted workbook is required. Repeat the
 entire pre-import gate after the custody-preserving correction produces a
 readable 16-district archive.
+
+## 10. Contiguous-parcel hub publication
+
+Vacant-house development candidates are derived only from the current completed
+inventory and reviewed VWorld cadastral polygons. The eligible search scope is
+Gangseo-gu, Saha-gu, Buk-gu, and Sasang-gu. A hub contains at least three
+distinct PNUs whose parcel polygons touch (or differ only by the fixed 0.05 m
+geometry seam tolerance). A 500 m radius, proximity padding, or district quota
+must never connect otherwise separate parcels.
+
+The hub writer uses the same global `pipeline_writer_lease` as the core,
+spatial, and vacant inventory writers. Prepublication evidence, hub, member,
+and manifest rows do not directly reference the mutable hub control row because
+DuckDB cannot update a referenced parent reliably. Cross-run hub/member,
+evidence/member, manifest/pointer, and manifest/audit foreign keys remain the
+database-enforced publication boundary.
+
+Before finalization verify all of the following:
+
+- the inventory pointer still identifies the input inventory run;
+- every counted PNU has one reviewed cadastral outcome and every hub member has
+  matched geometry;
+- the three completion-manifest table hashes recompute exactly;
+- candidate ranks are stable, unique, and no greater than 10; and
+- the exact global writer owner, fence epoch, and unexpired lease still match.
+
+The run is made terminal before the current pointer and append-only audit are
+inserted in one transaction. A crash at evidence, hub, manifest, pointer, or
+audit stages leaves the previous hub pointer byte-for-byte unchanged. A
+controlled retry clears only the failed target run in committed FK layers and
+reuses the same deterministic run, manifest, pointer, event, and candidate
+order. Operations output may contain only aggregate counts and stable run IDs;
+do not print addresses, PNUs, raw provider payloads, or credentials.

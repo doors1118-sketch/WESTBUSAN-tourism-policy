@@ -48,8 +48,6 @@ create table vacant_house_cadastral_evidence (
     observed_at timestamp with time zone not null,
     primary key (hub_run_id, pnu),
     unique (hub_run_id, inventory_run_id, pnu),
-    foreign key (hub_run_id, inventory_run_id)
-        references vacant_house_hub_run(hub_run_id, inventory_run_id),
     check (
         (
             provider_status = 'matched'
@@ -82,9 +80,7 @@ create table vacant_house_hub (
     primary key (hub_run_id, hub_id),
     unique (hub_run_id, inventory_run_id, hub_id),
     unique (hub_run_id, component_id),
-    unique (hub_run_id, candidate_rank),
-    foreign key (hub_run_id, inventory_run_id)
-        references vacant_house_hub_run(hub_run_id, inventory_run_id)
+    unique (hub_run_id, candidate_rank)
 );
 
 create table vacant_house_hub_member (
@@ -106,7 +102,7 @@ create table vacant_house_hub_member (
 
 create table vacant_house_hub_manifest (
     manifest_id uuid primary key,
-    hub_run_id uuid not null references vacant_house_hub_run(hub_run_id),
+    hub_run_id uuid not null,
     table_name varchar not null,
     row_count bigint not null check (row_count >= 0),
     row_digest_sha256 varchar not null check (length(row_digest_sha256) = 64),
