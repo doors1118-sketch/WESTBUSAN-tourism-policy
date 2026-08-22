@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-vertical-nav-v18"' in html
-    assert 'src="app.js?v=20260822-vertical-nav-v18"' in html
+    assert 'href="app.css?v=20260822-fixed-sidebar-v20"' in html
+    assert 'src="app.js?v=20260822-fixed-sidebar-v20"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -249,14 +249,19 @@ def test_desktop_navigation_is_grouped_vertically_and_mobile_stays_horizontal() 
     stylesheet = _asset("app.css")
 
     assert 'class="dashboard-shell" data-dashboard-shell' in html
+    assert 'class="sidebar"' in html
+    assert 'class="sidebar-brand"' in html
     assert 'class="dashboard-content"' in html
     for group in ("현황", "정책분석", "공간분석"):
         assert f'<span class="tabs-group-title">{group}</span>' in html
-    assert "grid-template-columns:190px minmax(0,1fr)" in stylesheet
+    assert ".sidebar{position:fixed;inset:0 auto 0 0;width:250px" in stylesheet
+    assert "body{padding-left:250px}" in stylesheet
+    assert ".topbar .brand{display:none}" in stylesheet
     assert "flex-direction:column" in stylesheet
-    assert "@media(max-width:1180px){.dashboard-shell,.dashboard-shell.map-mode{display:block}" in stylesheet
+    assert "@media(max-width:1180px){body{padding-left:0}" in stylesheet
+    assert ".sidebar{position:static;width:auto;height:auto" in stylesheet
     assert ".tabs-group{display:contents}" in stylesheet
-    assert 'shell.classList.toggle("map-mode", target === "map")' in script
+    assert 'shell.classList.toggle("map-mode", target === "map")' not in script
     assert 'item.dataset.tabTarget === initialTarget' in script
 
 

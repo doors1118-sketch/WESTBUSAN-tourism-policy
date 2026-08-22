@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="관광수요를 부산의 체류·숙박·소비로 연결하기 위한 정책 분석 대시보드">
   <title>부산 관광경제 활력 분석</title>
-  <link rel="stylesheet" href="app.css?v=20260822-vertical-nav-v18">
+  <link rel="stylesheet" href="app.css?v=20260822-fixed-sidebar-v20">
 </head>
 <body>
   <header class="topbar">
@@ -33,6 +33,8 @@
     </section>
 
     <div class="dashboard-shell" data-dashboard-shell>
+      <aside class="sidebar">
+        <div class="sidebar-brand"><span class="brand-mark">B</span><div><strong>부산 관광경제<br>활력 분석</strong><small>정책분석 시스템</small></div></div>
       <nav class="tabs" aria-label="대시보드 메뉴" role="tablist">
         <div class="tabs-group" role="presentation">
           <span class="tabs-group-title">현황</span>
@@ -51,6 +53,8 @@
           <button role="tab" aria-selected="false" data-tab-target="vacant" title="빈집"><span class="tab-index">07</span><span class="tab-label">빈집</span></button>
         </div>
       </nav>
+        <div class="sidebar-meta"><span>데이터 기준일</span><strong data-as-of>—</strong><small>관광정책 의사결정 지원</small></div>
+      </aside>
 
       <div class="dashboard-content">
     <section class="tab-panel active" data-tab-panel="overview" id="overview">
@@ -138,6 +142,6 @@
   </main>
 
   <footer><span>부산광역시 관광정책 내부 검토용</span><span>데이터 기준일 <strong data-as-of>—</strong></span></footer>
-  <script src="app.js?v=20260822-vertical-nav-v18"></script>
+  <script src="app.js?v=20260822-fixed-sidebar-v20"></script>
 </body>
 </html>
