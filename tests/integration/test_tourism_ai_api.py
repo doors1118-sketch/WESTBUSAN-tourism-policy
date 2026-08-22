@@ -39,6 +39,25 @@ class _CountingGenerator:
         return ModelInsight.model_validate(self.document)
 
 
+class _RecoveringGenerator(_CountingGenerator):
+    def generate(
+        self,
+        catalogue: dict[str, EvidenceMetric],
+        *,
+        focus_region: str,
+        focus_selection: object | None,
+    ) -> ModelInsight:
+        if self.calls == 0:
+            with self._lock:
+                self.calls += 1
+            raise RuntimeError("temporary_upstream_failure")
+        return super().generate(
+            catalogue,
+            focus_region=focus_region,
+            focus_selection=focus_selection,
+        )
+
+
 def _settings(
     tmp_path: Path,
     *,
@@ -94,6 +113,23 @@ def test_same_district_is_generated_once_and_other_district_has_new_cache_key(
     assert gangseo_first.json()["cached"] is False
     assert gangseo_second.json()["cached"] is True
     assert saha.json()["cached"] is False
+    assert generator.calls == 2
+
+
+def test_rule_fallback_is_not_persisted_over_a_recovered_ai_result(
+    tmp_path: Path,
+) -> None:
+    generator = _RecoveringGenerator(_model_document())
+    client = TestClient(create_app(_settings(tmp_path), generator=generator))
+
+    fallback = client.post("/insights", json=_request(district="gangseo"))
+    recovered = client.post("/insights", json=_request(district="gangseo"))
+    cached = client.post("/insights", json=_request(district="gangseo"))
+
+    assert fallback.json()["source"] == "rule_fallback"
+    assert recovered.json()["source"] == "openai"
+    assert cached.json()["source"] == "openai"
+    assert cached.json()["cached"] is True
     assert generator.calls == 2
 
 

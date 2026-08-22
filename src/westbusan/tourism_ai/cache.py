@@ -63,7 +63,8 @@ class InsightCache:
             self._enforce_client_cooldown(client_id)
             self._consume_daily_generation()
             response = generate()
-            self._write(path, response)
+            if response.source == "openai":
+                self._write(path, response)
             return response
 
     def _lock_for(self, key: str) -> threading.Lock:
