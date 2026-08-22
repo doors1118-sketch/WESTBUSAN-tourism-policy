@@ -29,9 +29,11 @@ def test_nginx_snippet_only_proxies_tourism_ai_paths_with_small_bodies() -> None
     nginx = _read("westbusan-tourism-ai-nginx.conf")
 
     assert "location = /tourism/api/insights" in nginx
+    assert "location = /tourism/api/vworld/geocode" in nginx
     assert "location = /tourism/api/healthz" in nginx
     assert "client_max_body_size 2k" in nginx
     assert "proxy_pass http://127.0.0.1:18081/insights" in nginx
+    assert "proxy_pass http://127.0.0.1:18081/vworld/geocode" in nginx
     assert "proxy_pass http://127.0.0.1:18081/healthz" in nginx
     assert "limit_except POST" in nginx
     assert "proxy_set_header X-Forwarded-For $remote_addr" in nginx
