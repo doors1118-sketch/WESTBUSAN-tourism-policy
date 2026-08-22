@@ -97,10 +97,10 @@ function renderMonthlyTrend(data) {
 
   clear(chart);
   const width = 1120;
-  const height = 470;
+  const height = 390;
   const frame = { left: 76, right: 36 };
-  const demandPlot = { top: 54, height: 190 };
-  const entryPlot = { top: 318, height: 90 };
+  const demandPlot = { top: 46, height: 140 };
+  const entryPlot = { top: 252, height: 62 };
   const plotWidth = width - frame.left - frame.right;
   const visitors = series.flatMap((item) => [item.west.visitorDailyAverage, item.east.visitorDailyAverage]);
   const visitorMin = Math.min(...visitors);
@@ -130,7 +130,7 @@ function renderMonthlyTrend(data) {
   demandLabel.textContent = "방문수요(천 명)";
   const entryLabel = svgNode("text", { x: frame.left, y: entryPlot.top - 17, class: "trend-panel-label" });
   entryLabel.textContent = "최초 인허가 시설(개소)";
-  svg.append(demandLabel, entryLabel, svgNode("line", { x1: frame.left, x2: width - frame.right, y1: 280, y2: 280, class: "trend-panel-divider" }));
+  svg.append(demandLabel, entryLabel, svgNode("line", { x1: frame.left, x2: width - frame.right, y1: 218, y2: 218, class: "trend-panel-divider" }));
 
   for (let tick = 0; tick <= 3; tick += 1) {
     const y = demandPlot.top + (demandPlot.height * tick) / 3;
@@ -164,6 +164,16 @@ function renderMonthlyTrend(data) {
         rx: 4,
         class: amount === 0 ? `${barClass} zero` : barClass,
       }));
+      if (region === "west" && amount > 0) {
+        const valueLabel = svgNode("text", {
+          x: x(index) + offset + barWidth / 2,
+          y: Math.max(entryPlot.top + 10, y - 6),
+          class: "trend-west-entry-label",
+          "text-anchor": "middle",
+        });
+        valueLabel.textContent = String(amount);
+        svg.append(valueLabel);
+      }
     });
   });
 
