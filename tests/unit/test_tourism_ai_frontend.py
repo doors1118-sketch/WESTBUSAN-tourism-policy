@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-equal-cards-v16"' in html
-    assert 'src="app.js?v=20260822-equal-cards-v16"' in html
+    assert 'href="app.css?v=20260822-vertical-nav-v18"' in html
+    assert 'src="app.js?v=20260822-vertical-nav-v18"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -241,6 +241,30 @@ def test_hero_copy_omits_internal_publication_and_grid_details() -> None:
     assert "하나의 발행" not in html
     assert "500m 공간격자" not in html
     assert "방문수요 355일" not in html
+
+
+def test_desktop_navigation_is_grouped_vertically_and_mobile_stays_horizontal() -> None:
+    html = _asset("index.html")
+    script = _asset("app.js")
+    stylesheet = _asset("app.css")
+
+    assert 'class="dashboard-shell" data-dashboard-shell' in html
+    assert 'class="dashboard-content"' in html
+    for group in ("현황", "정책분석", "공간분석"):
+        assert f'<span class="tabs-group-title">{group}</span>' in html
+    assert "grid-template-columns:190px minmax(0,1fr)" in stylesheet
+    assert "flex-direction:column" in stylesheet
+    assert "@media(max-width:1180px){.dashboard-shell,.dashboard-shell.map-mode{display:block}" in stylesheet
+    assert ".tabs-group{display:contents}" in stylesheet
+    assert 'shell.classList.toggle("map-mode", target === "map")' in script
+    assert 'item.dataset.tabTarget === initialTarget' in script
+
+
+def test_overview_comparison_badges_are_pinned_to_each_card_bottom() -> None:
+    stylesheet = _asset("app.css")
+
+    assert "[data-overview-kpis] .kpi{display:flex;flex-direction:column}" in stylesheet
+    assert "[data-overview-kpis] .kpi .delta{align-self:flex-start;margin-top:auto}" in stylesheet
 
 
 def test_vacant_house_tab_does_not_embed_exact_locations() -> None:

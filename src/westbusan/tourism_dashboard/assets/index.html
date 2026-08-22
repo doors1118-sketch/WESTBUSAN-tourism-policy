@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="description" content="관광수요를 부산의 체류·숙박·소비로 연결하기 위한 정책 분석 대시보드">
   <title>부산 관광경제 활력 분석</title>
-  <link rel="stylesheet" href="app.css?v=20260822-equal-cards-v16">
+  <link rel="stylesheet" href="app.css?v=20260822-vertical-nav-v18">
 </head>
 <body>
   <header class="topbar">
@@ -32,16 +32,27 @@
       <article><span>03</span><div><strong>민간투자 유도</strong><p>신규 공급·리모델링·빈집 전환·콘텐츠 투자를 어느 지역에 어떤 순서로 검토할 것인가</p></div></article>
     </section>
 
-    <nav class="tabs" aria-label="대시보드 메뉴" role="tablist">
-      <button class="active" role="tab" aria-selected="true" data-tab-target="overview">종합현황</button>
-      <button role="tab" aria-selected="false" data-tab-target="tourism">관광 종합현황</button>
-      <button role="tab" aria-selected="false" data-tab-target="supply">공급 격차</button>
-      <button role="tab" aria-selected="false" data-tab-target="investment">민간투자 유도</button>
-      <button role="tab" aria-selected="false" data-tab-target="insights">정책 인사이트 도출</button>
-      <button role="tab" aria-selected="false" data-tab-target="map">공간지도</button>
-      <button role="tab" aria-selected="false" data-tab-target="vacant">빈집</button>
-    </nav>
+    <div class="dashboard-shell" data-dashboard-shell>
+      <nav class="tabs" aria-label="대시보드 메뉴" role="tablist">
+        <div class="tabs-group" role="presentation">
+          <span class="tabs-group-title">현황</span>
+          <button class="active" role="tab" aria-selected="true" data-tab-target="overview" title="종합현황"><span class="tab-index">01</span><span class="tab-label">종합현황</span></button>
+          <button role="tab" aria-selected="false" data-tab-target="tourism" title="관광 종합현황"><span class="tab-index">02</span><span class="tab-label">관광 종합현황</span></button>
+        </div>
+        <div class="tabs-group" role="presentation">
+          <span class="tabs-group-title">정책분석</span>
+          <button role="tab" aria-selected="false" data-tab-target="supply" title="공급 격차"><span class="tab-index">03</span><span class="tab-label">공급 격차</span></button>
+          <button role="tab" aria-selected="false" data-tab-target="investment" title="민간투자 유도"><span class="tab-index">04</span><span class="tab-label">민간투자 유도</span></button>
+          <button role="tab" aria-selected="false" data-tab-target="insights" title="정책 인사이트 도출"><span class="tab-index">05</span><span class="tab-label">정책 인사이트 도출</span></button>
+        </div>
+        <div class="tabs-group" role="presentation">
+          <span class="tabs-group-title">공간분석</span>
+          <button role="tab" aria-selected="false" data-tab-target="map" title="공간지도"><span class="tab-index">06</span><span class="tab-label">공간지도</span></button>
+          <button role="tab" aria-selected="false" data-tab-target="vacant" title="빈집"><span class="tab-index">07</span><span class="tab-label">빈집</span></button>
+        </div>
+      </nav>
 
+      <div class="dashboard-content">
     <section class="tab-panel active" data-tab-panel="overview" id="overview">
       <div class="section-head"><div><span>OVERVIEW</span><h2>한눈에 보는 서부산 체류전환 격차</h2></div><p data-load-state>운영 DB 지표를 불러오는 중입니다.</p></div>
       <div class="kpi-grid" data-overview-kpis></div>
@@ -122,9 +133,11 @@
       <div class="vacant-flow"><article><span>01</span><strong>현황 파악</strong><p>구·동·등급·건축연도</p></article><article><span>02</span><strong>1차 제도검토</strong><p>용도지역·지구·건물용도</p></article><article><span>03</span><strong>수요 결합</strong><p>관광·교통·숙박 공급</p></article><article><span>04</span><strong>현장 확인</strong><p>안전·소유·사업성</p></article></div>
       <article class="card vacant-status"><span>구축 진행</span><h3>15개 구 자료 검증 및 발행 준비</h3><p>서구 원본은 정상 비암호화 파일 확인 후 보정합니다. 정확주소는 권한이 있는 내부 상세화면에서만 제공합니다.</p><strong>대시보드 집계 탭과 상세 위치 권한을 분리합니다.</strong></article>
     </section>
+      </div>
+    </div>
   </main>
 
   <footer><span>부산광역시 관광정책 내부 검토용</span><span>데이터 기준일 <strong data-as-of>—</strong></span></footer>
-  <script src="app.js?v=20260822-equal-cards-v16"></script>
+  <script src="app.js?v=20260822-vertical-nav-v18"></script>
 </body>
 </html>

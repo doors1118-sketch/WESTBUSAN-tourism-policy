@@ -167,6 +167,8 @@ function renderDashboard(data) {
 document.querySelectorAll("[data-tab-target]").forEach((button) => {
   button.addEventListener("click", () => {
     const target = button.dataset.tabTarget;
+    const shell = document.querySelector("[data-dashboard-shell]");
+    shell.classList.toggle("map-mode", target === "map");
     if (target === "map") {
       const mapFrame = document.querySelector("[data-map-src]");
       if (mapFrame && !mapFrame.getAttribute("src")) {
@@ -182,6 +184,11 @@ document.querySelectorAll("[data-tab-target]").forEach((button) => {
     history.replaceState(null, "", `#${target}`);
   });
 });
+
+const initialTarget = location.hash.slice(1);
+const initialButton = [...document.querySelectorAll("[data-tab-target]")]
+  .find((item) => item.dataset.tabTarget === initialTarget);
+if (initialButton && !initialButton.classList.contains("active")) initialButton.click();
 
 const insightButton = document.querySelector("[data-insight-button]");
 insightButton.addEventListener("click", async () => {
