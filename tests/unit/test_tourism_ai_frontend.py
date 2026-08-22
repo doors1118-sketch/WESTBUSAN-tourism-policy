@@ -65,8 +65,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-facility-mix-v13"' in html
-    assert 'src="app.js?v=20260822-facility-mix-v13"' in html
+    assert 'href="app.css?v=20260822-visitor-demand-v14"' in html
+    assert 'src="app.js?v=20260822-visitor-demand-v14"' in html
 
 
 def test_map_tab_can_request_ai_explanation_for_published_priority_map() -> None:
@@ -155,6 +155,25 @@ def test_overview_leads_with_exclusive_facility_mix_not_room_coverage() -> None:
     assert 'value(west.facilities, "개소")' in script
     assert 'value(west.rooms, "실")' in script
     assert "객실 확인률 ${west.roomCoverageShare}%" not in script
+
+
+def test_overview_separates_absolute_demand_from_supply_pressure() -> None:
+    script = _asset("app.js")
+
+    assert 'kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage)' in script
+    assert 'kpi("방문수요 대비 객실공급 압력", value(west.demandPer100Rooms)' in script
+    assert "숙박객·객실점유율이 아닌 정책 검토용 파생지표" in script
+    assert 'kpi("객실 100실당 방문수요"' not in script
+
+
+def test_facility_card_renders_rooms_as_a_smaller_secondary_value() -> None:
+    script = _asset("app.js")
+    stylesheet = _asset("app.css")
+
+    assert "facilitySupplyKpi(west, east)" in script
+    assert 'node("span", "secondary-value"' in script
+    assert ".secondary-value" in stylesheet
+    assert "font-size:.68em" in stylesheet
 
 
 def test_vacant_house_tab_does_not_embed_exact_locations() -> None:

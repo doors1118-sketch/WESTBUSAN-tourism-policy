@@ -24,6 +24,24 @@ function kpi(label, main, note, delta) {
   return card;
 }
 
+function facilitySupplyKpi(west, east) {
+  const card = node("article", "card kpi");
+  const main = node("strong", "");
+  const facilityMix = west.facilityMix.map((item) => `${item.name} ${value(item.facilities, "개소")}`).join(" · ");
+  main.append(
+    document.createTextNode(value(west.facilities, "개소")),
+    document.createTextNode(" "),
+    node("span", "secondary-value", `(${value(west.rooms, "실")})`),
+  );
+  card.append(
+    node("span", "label", "서부산 숙박업체"),
+    main,
+    node("small", "", facilityMix),
+    node("span", "delta", `동부산 업체 수의 ${(west.facilities / east.facilities * 100).toFixed(1)}%`),
+  );
+  return card;
+}
+
 function renderBarGroup(target, regions, key, suffix, ceiling) {
   clear(target);
   regions.forEach((region) => {
@@ -46,10 +64,9 @@ function renderDashboard(data) {
   const east = data.regions.find((item) => item.id === "east");
 
   const overview = document.querySelector("[data-overview-kpis]");
-  const facilityMix = west.facilityMix.map((item) => `${item.name} ${value(item.facilities, "개소")}`).join(" · ");
   overview.append(
-    kpi("서부산 숙박업체", `${value(west.facilities, "개소")} (${value(west.rooms, "실")})`, facilityMix, `동부산 업체 수의 ${(west.facilities / east.facilities * 100).toFixed(1)}%`),
-    kpi("객실 100실당 방문수요", value(west.demandPer100Rooms), "외지인+외국인 일평균 기준", `동부산의 ${(west.demandPer100Rooms / east.demandPer100Rooms).toFixed(2)}배`),
+    facilitySupplyKpi(west, east),
+    kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "외지인+외국인 · 방문자-인일/일", `동부산 ${value(east.visitorDailyAverage)}`),
     kpi("관광숙박 등록", value(west.tourismFacilityShare, "%"), "시설 비율", `동부산 ${east.tourismFacilityShare}%`),
     kpi("2021년 이후 신규", value(west.recentLicenseShare, "%"), "시설 인허가 기준", `동부산 ${east.recentLicenseShare}%`)
   );
@@ -77,7 +94,7 @@ function renderDashboard(data) {
   const tourism = document.querySelector("[data-tourism-kpis]");
   tourism.append(
     kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "방문자-인일/일 · 최근 355일"),
-    kpi("수요/객실100실", value(west.demandPer100Rooms), "확인 객실과 결합한 파생지표"),
+    kpi("방문수요 대비 객실공급 압력", value(west.demandPer100Rooms), "숙박객·객실점유율이 아닌 정책 검토용 파생지표"),
     kpi("소비효율 원천지표", value(west.consumptionIndex), "2026-07 · 통화금액 아님"),
     kpi("3박 방문 원천지표", value(west.stay3Index), "2026-07 · 실제 명수 아님")
   );
