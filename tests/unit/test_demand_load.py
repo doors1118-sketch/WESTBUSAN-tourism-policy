@@ -811,6 +811,10 @@ def test_loader_collects_each_reviewed_operation_for_one_source(
         ("area_tar_exp_ds_list.2203",),
         ("area_tar_sjrn_ds_list.2102",),
     ]
+    assert db.query(
+        "select unit from fact_tourism_demand "
+        "where metric_code='area_tar_exp_ds_list.2203'"
+    ) == [("source_native",)]
 
 
 def test_loader_collects_each_reviewed_indicator_for_one_operation(

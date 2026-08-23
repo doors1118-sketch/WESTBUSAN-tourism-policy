@@ -44,6 +44,9 @@ metric_id만 인용하십시오. 서부산의 관광수요를 숙박·체류·�
 제안할 수 있지만 사실과 구분하십시오. 주소, 필지번호, 좌표나 개인·소유자 정보는
 요청하거나 추정하지 마십시오. 법적 적합성, 소유권, 안전성, 수익성, 허가 또는
 투자성과를 확정하지 마십시오. 한계와 후속검증을 명시하십시오.
+각 절의 findings는 1~2개로 제한하고 narrative는 2~4문장으로 간결하게
+작성하십시오. actions는 실행 우선순위가 있는 절에만 작성하되 보고서 전체에서
+5개를 넘지 마십시오. 같은 지표나 정책수단을 여러 절에서 반복하지 마십시오.
 """.strip()
 
 
@@ -193,7 +196,7 @@ class OpenAIResponsesClient:
                     ],
                 },
             ],
-            "max_output_tokens": max(self.max_output_tokens, 3600),
+            "max_output_tokens": max(self.max_output_tokens, 8000),
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -201,7 +204,7 @@ class OpenAIResponsesClient:
                     "strict": True,
                     "schema": ModelComprehensiveReport.model_json_schema(),
                 },
-                "verbosity": "medium",
+                "verbosity": "low",
             },
         }
         try:

@@ -213,8 +213,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260823-ai-report-v42"' in html
-    assert 'src="app.js?v=20260823-ai-report-v42"' in html
+    assert 'href="app.css?v=20260823-consumption-formula-v43"' in html
+    assert 'src="app.js?v=20260823-consumption-formula-v43"' in html
 
 
 def test_comprehensive_tab_has_all_report_sections_and_print_action() -> None:
@@ -418,6 +418,7 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     assert "객실 비중이 아닙니다" in overview_block
     assert "연결 인허가의 가장 이른 인허가일" in overview_block
     assert "지역 간 소비 수준 비교에만 사용" in overview_block
+    assert "전체 관광소비액 ÷ 전체 방문량" in overview_block
     assert "원화 금액·점유율로 해석하지 않습니다" in overview_block
     assert "내부 리모델링 상태를 뜻하지 않습니다" in overview_block
     assert "동일 사업자의 영업기간과 다릅니다" in overview_block

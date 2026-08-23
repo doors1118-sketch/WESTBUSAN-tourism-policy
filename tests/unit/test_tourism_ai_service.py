@@ -16,9 +16,11 @@ from westbusan.tourism_ai.models import (
     ModelInsight,
 )
 from westbusan.tourism_ai.openai_client import OpenAIResponsesClient
+from westbusan.tourism_ai.report_metrics import load_report_evidence
 from westbusan.tourism_ai.service import InsightService
 
 from .test_tourism_ai_metrics import RUN_ID, _write_dashboard
+from .test_tourism_ai_report_models import _payload as _report_payload
 
 
 def _metric(metric_id: str, value: float, unit: str = "%") -> EvidenceMetric:
@@ -181,6 +183,29 @@ def test_openai_payload_uses_strict_schema_and_no_tools() -> None:
     assert "구포동" in selection_payload
     assert "정책 아이디어" in instructions
     assert "데이터로 확인된 사실" in instructions
+
+
+def test_report_payload_reserves_complete_structured_output_budget(
+    tmp_path: Path,
+) -> None:
+    recorded: list[dict[str, Any]] = []
+    client = OpenAIResponsesClient(
+        api_key="test-key",
+        model="gpt-5.4-mini",
+        transport=_responses_transport(_report_payload(), recorded),
+    )
+
+    result = client.generate_report(
+        load_report_evidence(data_path=_write_dashboard(tmp_path), db_path=None)
+    )
+
+    assert len(result.sections) == 8
+    assert len(recorded) == 1
+    payload = recorded[0]
+    assert payload["max_output_tokens"] >= 8000
+    assert payload["text"]["verbosity"] == "low"
+    instructions = payload["input"][0]["content"][0]["text"]
+    assert "각 절의 findings는 1~2개" in instructions
 
 
 class _StubGenerator:

@@ -58,7 +58,7 @@ _UNITS_BY_INDICATOR_CODE = {
         "2104": "count",
         "2105": "count",
     },
-    "tarExpDsIxCd": {"2201": "KRW", "2202": "ratio", "2203": "KRW/person"},
+    "tarExpDsIxCd": {"2201": "KRW", "2202": "ratio", "2203": "source_native"},
     "tarSvcDemIxCd": {
         "1101": "SNS mentions",
         "1102": "SNS mentions",
