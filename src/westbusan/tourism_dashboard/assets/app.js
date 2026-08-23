@@ -209,7 +209,7 @@ const districtMetricDefinitions = [
   { label: "외국인 숙박 대응시설", key: "foreignCapableShare", suffix: "%", note: "관광숙박업·외국인관광 도시민박업 등록" },
   { label: "건축연령 20년 이상", key: "old20Share", suffix: "%", note: "건축물대장 사용승인일부터 산정" },
   { label: "2021년 이후 숙박업 등록", key: "recentLicenseShare", suffix: "%", note: "현재 영업시설의 최초 인허가일 기준" },
-  { label: "관광소비 원천지표", key: "consumptionIndex", suffix: "", note: "2026.07 지역 비교용·원화 아님" },
+  { label: "관광소비 상대지수", key: "consumptionIndex", suffix: "", note: "2026.07 구 평균·금액 아님" },
   { label: "3박 방문 원천지표", key: "stay3Index", suffix: "", note: "2026.07 지역 비교용·실제 명수 아님" },
 ];
 
@@ -600,7 +600,7 @@ function renderDashboard(data) {
     kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage), "외지인+외국인 · 일별 방문인원 평균", relativeToEast(west.visitorDailyAverage, east.visitorDailyAverage)),
     kpi("관광숙박업 등록시설 비율", value(west.tourismFacilityShare, "%"), "전체 숙박시설 대비 · 시설 수 기준", relativeToEast(west.tourismFacilityShare, east.tourismFacilityShare), "전체 숙박시설 중 관광진흥법상 관광숙박업 등록을 보유한 시설 수의 비율입니다. 객실 비중이 아닙니다."),
     kpi("2021년 이후 숙박업 등록", value(west.recentLicenseShare, "%"), "현재 영업시설 · 최초 인허가일 기준", relativeToEast(west.recentLicenseShare, east.recentLicenseShare), "현재 영업 중인 시설 가운데 연결 인허가의 가장 이른 인허가일이 2021.1.1 이후인 시설의 비율입니다. 전체 과거 신규등록 건수는 아닙니다."),
-    kpi("방문량 대비 관광소비 원천지표", value(west.consumptionIndex), "방문량 대비 방문소비 수준 · 2026.07", relativeToEast(west.consumptionIndex, east.consumptionIndex), "한국관광공사 관광데이터랩의 ‘방문량 대비 방문 소비액’ 원천값을 2026.07 권역 내 구 단위로 평균한 값입니다. 지역 간 소비 수준 비교에만 사용하며, 현재 원천 단위 계약을 검토 중이므로 원화 금액·점유율로 해석하지 않습니다."),
+    kpi("방문량 대비 관광소비 상대지수", value(west.consumptionIndex), "2026.07 구 평균 · 금액 아님", relativeToEast(west.consumptionIndex, east.consumptionIndex), "한국관광공사 관광데이터랩의 ‘방문량 대비 방문 소비액’ 원천값을 2026.07 권역 내 구 단위로 평균한 값입니다. 지역 간 소비 수준 비교에만 사용하며, 현재 원천 단위 계약을 검토 중이므로 원화 금액·점유율로 해석하지 않습니다."),
     kpi("건축연령 20년 이상 시설", value(west.old20Share, "%"), "건축물대장 사용승인일부터 산정", relativeToEast(west.old20Share, east.old20Share), "건축물대장 사용승인일이 확인된 시설만 분모로 하여 기준일 현재 20년 이상인 시설 비율입니다. 내부 리모델링 상태를 뜻하지 않습니다."),
     kpi("평균 인허가 경과연수", value(west.licenseAgeAverageYears, "년"), "최초 인허가일~기준일 평균", relativeToEast(west.licenseAgeAverageYears, east.licenseAgeAverageYears), "시설별 연결 인허가 중 가장 이른 인허가일부터 기준일까지의 평균 경과연수입니다. 건축물 연령이나 동일 사업자의 영업기간과 다릅니다."),
     kpi("외국인 숙박 대응시설", value(west.foreignCapableShare, "%"), "관광숙박업·외국인관광 도시민박업", relativeToEast(west.foreignCapableShare, east.foreignCapableShare), "전체 숙박시설 중 관광숙박업 또는 외국인관광 도시민박업으로 등록된 시설 비율입니다. 실제 외국인 투숙실적이나 모든 외국인 수용 가능 시설을 뜻하지 않습니다.")

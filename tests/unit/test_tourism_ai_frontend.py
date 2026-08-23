@@ -213,8 +213,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260822-ai-report-v41"' in html
-    assert 'src="app.js?v=20260822-ai-report-v41"' in html
+    assert 'href="app.css?v=20260823-ai-report-v42"' in html
+    assert 'src="app.js?v=20260823-ai-report-v42"' in html
 
 
 def test_comprehensive_tab_has_all_report_sections_and_print_action() -> None:
@@ -404,7 +404,7 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
         "서부산 일평균 방문수요",
         "관광숙박업 등록시설 비율",
         "2021년 이후 숙박업 등록",
-        "방문량 대비 관광소비 원천지표",
+        "방문량 대비 관광소비 상대지수",
         "건축연령 20년 이상 시설",
         "평균 인허가 경과연수",
         "외국인 숙박 대응시설",
@@ -424,7 +424,7 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     for note in (
         "전체 숙박시설 대비 · 시설 수 기준",
         "현재 영업시설 · 최초 인허가일 기준",
-        "방문량 대비 방문소비 수준 · 2026.07",
+        "2026.07 구 평균 · 금액 아님",
         "건축물대장 사용승인일부터 산정",
         "최초 인허가일~기준일 평균",
     ):

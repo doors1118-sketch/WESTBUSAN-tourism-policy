@@ -75,6 +75,12 @@ def test_report_requires_each_decision_section_exactly_once() -> None:
         ModelComprehensiveReport.model_validate(payload)
 
 
+def test_report_schema_requires_actions_for_openai_strict_outputs() -> None:
+    schema = ModelComprehensiveReport.model_json_schema()
+    section_schema = schema["$defs"]["ReportSection"]
+    assert set(section_schema["required"]) == set(section_schema["properties"])
+
+
 def test_report_rejects_duplicate_priorities() -> None:
     payload = _payload()
     sections = payload["sections"]

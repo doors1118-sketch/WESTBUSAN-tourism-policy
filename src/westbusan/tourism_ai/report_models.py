@@ -74,7 +74,7 @@ class ReportSection(BaseModel):
     title: str = Field(min_length=1, max_length=100)
     narrative: str = Field(min_length=1, max_length=1200)
     findings: list[ReportFinding] = Field(min_length=1, max_length=6)
-    actions: list[ReportAction] = Field(default_factory=list, max_length=4)
+    actions: list[ReportAction] = Field(max_length=4)
 
 
 class ModelComprehensiveReport(BaseModel):
