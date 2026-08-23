@@ -134,6 +134,13 @@ def test_rejects_non_binary_flags(
     [
         ("1등급", 1),
         ("(을)1등급", 1),
+        ("실1등급", 1),
+        ("실2등급", 2),
+        ("실3등급", 3),
+        ("신1등급", 1),
+        ("신2등급", 2),
+        ("신3등급", 3),
+        ("행정조사", None),
         ("1", 1),
         (2, 2),
         ("등외", None),
@@ -160,6 +167,13 @@ def test_rejects_invalid_or_out_of_snapshot_construction_year(value: object) -> 
 
     assert caught.value.code == "invalid_year"
     assert caught.value.field == "construction_year"
+
+
+@pytest.mark.parametrize("value", [0, "0", "0000", "-"])
+def test_treats_declared_unknown_construction_year_as_missing(value: object) -> None:
+    normalized = normalize_row(_row({"건축연도": value}), SNAPSHOT_DATE)
+
+    assert normalized.construction_year is None
 
 
 @pytest.mark.parametrize(

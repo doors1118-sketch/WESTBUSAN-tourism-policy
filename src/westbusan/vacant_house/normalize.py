@@ -19,7 +19,7 @@ from westbusan.vacant_house.models import (
 
 VACANT_HOUSE_NAMESPACE: Final = UUID("8f620225-0bd9-52b5-94e9-c3ef7253524a")
 _LEADING_PARENTHETICAL = re.compile(r"^\s*(?:\([^()]*\)|（[^（）]*）)\s*")
-_GRADE_MARKERS = frozenset({"", "0", "등외", "선정제외"})
+_GRADE_MARKERS = frozenset({"", "0", "등외", "선정제외", "행정조사"})
 
 _ALIASES: dict[str, tuple[str, ...]] = {
     "district_code": ("시군구코드",),
@@ -271,6 +271,9 @@ def _integer(value: object | None, code: str, field: str) -> int | None:
 
 
 def _year(value: object | None, snapshot_date: date) -> int | None:
+    text = _collapsed_text(value)
+    if text is None or "".join(text.split()) in {"0", "0000", "-"}:
+        return None
     year = _integer(value, "invalid_year", "construction_year")
     if year is not None and not 1800 <= year <= snapshot_date.year:
         raise VacantHouseRowError("invalid_year", "construction_year")
@@ -332,7 +335,7 @@ def _grade(value: object | None) -> tuple[str | None, int | None]:
         return original, None
     while _LEADING_PARENTHETICAL.match(text):
         text = _LEADING_PARENTHETICAL.sub("", text, count=1)
-    match = re.match(r"^([1-4])(?:\s*등급)?(?:\s|$)", text)
+    match = re.match(r"^(?:[실신])?([1-4])(?:\s*등급)?(?:\s|$)", text)
     if match is None:
         raise VacantHouseRowError("invalid_grade", "vacant_grade")
     return original, int(match.group(1))
