@@ -1,5 +1,39 @@
 # Codex Cloud 인수인계
 
+## 운영 완료 기준점 (2026-08-23)
+
+아래 상태가 현재 운영·GitHub 기준점이다. 이 절 아래의 초기 설계·과거 차단 기록은
+이력 보존용이며, 현재 상태와 충돌하면 이 절을 우선한다.
+
+- 공유 URL: `https://busanproduct.co.kr/tourism/`
+- 투자정보 지도: `https://busanproduct.co.kr/tourism/map/index.html`
+- 빈집 운영지도: `https://busanproduct.co.kr/tourism/vacant-map/index.html`
+- GitHub 브랜치: `codex/busan-authority-filter`
+- 현재 기능 완료 commit: `8de26a8` (`fix(tourism): complete reports and clarify consumption metric`)
+- 운영 UI release: `/opt/westbusan/dashboard/releases/20260823-consumption-ai-v43b`
+- 운영 AI release: `/opt/westbusan-tourism-ai/releases/20260823-consumption-ai-v43b`
+- 관련 테스트: 109 passed, Ruff·JavaScript syntax·diff check 통과
+- 운영 회귀: 관광 UI·투자지도·빈집지도·AI health를 포함한 공개 URL 12개 모두 HTTP 200
+- AI 종합보고서: OpenAI 8개 절·근거 30건 생성 확인, 동일 발행본 재호출 `cached=true`
+
+현재 운영 데이터 기준일은 2026-08-21이고 core 기준일은 2026-08-19이다. 관광
+UI는 종합현황, 서부산 자치구 현황, 동서 공급 격차, 투자정보 제공, 빈집 정보
+제공, AI 종합 분석의 6개 탭으로 운영한다. 투자정보 지도는 VWorld 2D 타일,
+숙박시설 위치 3,095건과 거점·정책 레이어를 제공한다. 빈집 지도는 서부산 빈집
+805건·고유 필지 760개를 표시하며, 지적 경계를 직접 맞댄 3필지 이상이라는
+물리적 연속성 기준을 충족한 후보는 현재 4개이다. 화면의 최대 제시건수 10개를
+맞추기 위해 비연속 빈집을 임의 추가하지 않는다.
+
+기능 구현은 완료 상태이나 다음은 데이터·정책판단 한계이다. 교통 fact와 체류시간은
+현재 발행본에 없으므로 지표로 게시하지 않는다. 관광소비 80.44 등은 한국관광공사
+시군구 월별 원천의 방문량 대비 관광소비 상대지표이며 원화·점유율·실제 1인당
+지출액이 아니다. 빈집 후보는 소유권·토지이용·구조안전·접도·소방·주차·위생과
+사업성을 확정하지 않으므로 후속 실사가 필요하다. API 키·SSH 개인키·환경파일은
+Git에 포함하지 않으며 서버 내부의 전용 비밀파일을 사용한다.
+
+대시보드 기능소개 DOCX는
+`docs/부산_관광경제활력_대시보드_기능소개서.docx`에 함께 보관한다.
+
 ## 현재 상태와 경계
 
 이 브랜치는 로컬 DuckDB·Parquet 실행 경로까지 구현합니다. 원격 저장소나 Codex
