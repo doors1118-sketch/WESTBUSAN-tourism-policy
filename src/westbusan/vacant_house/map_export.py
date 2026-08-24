@@ -374,6 +374,24 @@ def _map_data(
                 if source[3]
             }
         )
+        hub_features.append(
+            _feature(
+                from_wkb(bytes(row[4])),
+                {
+                    "hub_id": hub_id,
+                    "candidate_rank": rank,
+                    "parcel_count": int(row[2]),
+                    "union_area": float(row[3]),
+                    "district_codes": districts,
+                    "district_names": [
+                        _WEST_DISTRICTS.get(code, code) for code in districts
+                    ],
+                    "dong_names": dong_names,
+                    "context": _json_object(row[7]),
+                    "reason_codes": _json_list(row[8]),
+                },
+            )
+        )
 
     standalone_features: list[dict[str, object]] = []
     for candidate in standalone_candidates:
@@ -411,24 +429,6 @@ def _map_data(
                         "reviewed_parcel_area",
                         "pnu",
                     ],
-                },
-            )
-        )
-        hub_features.append(
-            _feature(
-                from_wkb(bytes(row[4])),
-                {
-                    "hub_id": hub_id,
-                    "candidate_rank": rank,
-                    "parcel_count": int(row[2]),
-                    "union_area": float(row[3]),
-                    "district_codes": districts,
-                    "district_names": [
-                        _WEST_DISTRICTS.get(code, code) for code in districts
-                    ],
-                    "dong_names": dong_names,
-                    "context": _json_object(row[7]),
-                    "reason_codes": _json_list(row[8]),
                 },
             )
         )

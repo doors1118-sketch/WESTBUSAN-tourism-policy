@@ -31,10 +31,16 @@ class _PublishedVacantMapConnection:
             box(128.9900, 35.2000, 128.9902, 35.2002),
             box(128.9902, 35.2000, 128.9904, 35.2002),
             box(128.9904, 35.2000, 128.9906, 35.2002),
-            box(128.9920, 35.2000, 128.9924, 35.2004),
+            box(128.9910, 35.2000, 128.9912, 35.2002),
+            box(128.9912, 35.2000, 128.9914, 35.2002),
+            box(128.9914, 35.2000, 128.9916, 35.2002),
+            box(128.9930, 35.2000, 128.9934, 35.2004),
         ]
         self.parcels = parcels
-        self.hub = parcels[0].union(parcels[1]).union(parcels[2])
+        self.hubs = (
+            parcels[0].union(parcels[1]).union(parcels[2]),
+            parcels[3].union(parcels[4]).union(parcels[5]),
+        )
 
     def execute(
         self, query: str, parameters: list[object] | None = None
@@ -52,12 +58,23 @@ class _PublishedVacantMapConnection:
                         1,
                         3,
                         540.5,
-                        to_wkb(self.hub),
+                        to_wkb(self.hubs[0]),
                         '["26320"]',
                         '["05000"]',
                         '{"selection":"contiguous_parcels"}',
                         '["parcel_count","contiguous"]',
-                    )
+                    ),
+                    (
+                        "hub-west-02",
+                        2,
+                        3,
+                        480.5,
+                        to_wkb(self.hubs[1]),
+                        '["26320"]',
+                        '["05000"]',
+                        '{"selection":"contiguous_parcels"}',
+                        '["parcel_count","contiguous"]',
+                    ),
                 ]
             )
         if "from spatial_publication_current" in query:
@@ -93,6 +110,10 @@ class _PublishedVacantMapConnection:
                     ("hub-west-01", f"26320050001000{index:04d}", index, 1)
                     for index in range(1, 4)
                 ]
+                + [
+                    ("hub-west-02", f"26320050001000{index:04d}", index - 3, 1)
+                    for index in range(4, 7)
+                ]
             )
         if "join vacant_house_revision as revision" in query:
             return _Result(
@@ -110,7 +131,7 @@ class _PublishedVacantMapConnection:
                         45.0 + index,
                         70.0 + index,
                     )
-                    for index in range(1, 5)
+                    for index in range(1, 8)
                 ]
             )
         raise AssertionError(query)
@@ -151,8 +172,9 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     html = first.index_html.read_text(encoding="utf-8")
     script = first.script.read_text(encoding="utf-8")
 
-    assert len(hubs["features"]) == 1
+    assert len(hubs["features"]) == 2
     assert hubs["features"][0]["properties"]["candidate_rank"] == 1
+    assert hubs["features"][1]["properties"]["candidate_rank"] == 2
     assert len(standalone["features"]) == 1
     assert standalone["features"][0]["properties"]["candidate_class"] == (
         "standalone_preliminary"
@@ -165,15 +187,15 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "nearby_attractions",
         "transport_access",
     ]
-    assert len(parcels["features"]) == 4
-    assert len(houses["features"]) == 4
+    assert len(parcels["features"]) == 7
+    assert len(houses["features"]) == 7
     assert houses["features"][0]["properties"]["exact_address"].startswith(
         "부산광역시 북구"
     )
-    assert summary["candidate_count"] == 1
+    assert summary["candidate_count"] == 2
     assert summary["standalone_candidate_count"] == 1
-    assert summary["distinct_parcel_count"] == 4
-    assert summary["exact_location_count"] == 4
+    assert summary["distinct_parcel_count"] == 7
+    assert summary["exact_location_count"] == 7
     assert summary["context_availability"] == {
         "district_visitor_demand": "available",
         "nearby_attractions": "not_joined",
