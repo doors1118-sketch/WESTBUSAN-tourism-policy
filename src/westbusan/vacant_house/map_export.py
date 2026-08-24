@@ -37,6 +37,7 @@ _FILES = (
     "bukgu-supplemental-candidates.geojson",
     "parcels.geojson",
     "vacant-houses.geojson",
+    "accessibility-context.geojson",
     "summary.json",
     "manifest.json",
 )
@@ -105,6 +106,10 @@ class VacantHouseMapBundle:
         return self.directory / "vacant-houses.geojson"
 
     @property
+    def accessibility_context(self) -> Path:
+        return self.directory / "accessibility-context.geojson"
+
+    @property
     def summary(self) -> Path:
         return self.directory / "summary.json"
 
@@ -162,6 +167,12 @@ def validate_vacant_house_map_bundle(bundle: VacantHouseMapBundle) -> bool:
     if manifest.get("hub_run_id") != str(bundle.hub_run_id):
         return False
     if manifest.get("inventory_run_id") != str(bundle.inventory_run_id):
+        return False
+    try:
+        summary = json.loads(bundle.summary.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if manifest.get("access_snapshot_id") != summary.get("access_snapshot_id"):
         return False
     entries = manifest.get("files")
     if not isinstance(entries, dict) or set(entries) != set(_FILES) - {
@@ -247,6 +258,9 @@ def _read_current(connection: QueryConnection) -> dict[str, object]:
     district_demand_scores, demand_status = _read_optional_district_demand_scores(
         connection
     )
+    access_snapshot_id, access_context, access_status = _read_optional_access_context(
+        connection
+    )
 
     return _map_data(
         hub_run_id=UUID(str(hub_run_id)),
@@ -259,6 +273,136 @@ def _read_current(connection: QueryConnection) -> dict[str, object]:
         revision_rows=revision_rows,
         district_demand_scores=district_demand_scores,
         district_demand_status=demand_status,
+        access_snapshot_id=access_snapshot_id,
+        access_context=access_context,
+        access_status=access_status,
+    )
+
+
+def _read_optional_access_context(
+    connection: QueryConnection,
+) -> tuple[UUID | None, dict[str, object], dict[str, str]]:
+    """Load only the current core/spatial-bound accessibility publication."""
+    empty = _collection([])
+    try:
+        pointer = connection.execute(
+            """select snapshot.snapshot_id, snapshot.transport_status,
+                      snapshot.tourism_status
+               from accessibility_publication_current as current
+               join accessibility_snapshot as snapshot
+                 on snapshot.snapshot_id = current.snapshot_id
+                and snapshot.status = 'COMPLETED'
+               join publication_state as core
+                 on core.publication_key = 'current'
+                and core.published_run_id = snapshot.core_run_id
+               join spatial_publication_current as spatial
+                 on spatial.publication_key = 'current'
+                and spatial.spatial_run_id = snapshot.spatial_run_id
+               where current.publication_key = 'current'"""
+        ).fetchall()
+        if len(pointer) != 1:
+            return None, empty, {"transport": "not_published", "tourism": "not_published"}
+        snapshot_id, transport_status, tourism_status = pointer[0]
+        transport_rows = connection.execute(
+            """select period, destination_district_code,
+                      destination_district_name, destination_dong_code,
+                      destination_dong_name, inbound_other_dong,
+                      inbound_other_district, unit
+               from mart_transport_dong_month
+               where snapshot_id = ?
+                 and destination_district_name in ('강서구','북구','사상구','사하구')
+               order by period, destination_district_code,
+                        destination_dong_code""",
+            [snapshot_id],
+        ).fetchall()
+        poi_rows = connection.execute(
+            """select content_id, title, district_name, dong_code, dong_name,
+                      longitude, latitude
+               from dim_tourism_poi_snapshot
+               where snapshot_id = ?
+                 and district_name in ('강서구','북구','사상구','사하구')
+               order by content_id""",
+            [snapshot_id],
+        ).fetchall()
+        candidate_rows = connection.execute(
+            """select candidate_id, transport_period, transport_inbound,
+                      nearest_transport_hub_name,
+                      nearest_transport_hub_distance_m,
+                      tourism_poi_count_1000m, nearest_tourism_poi_name,
+                      nearest_tourism_poi_distance_m, ranking_eligible,
+                      coverage_status
+               from mart_vacant_candidate_accessibility
+               where snapshot_id = ? order by candidate_id""",
+            [snapshot_id],
+        ).fetchall()
+    except duckdb.Error:
+        return None, empty, {"transport": "not_published", "tourism": "not_published"}
+
+    features: list[dict[str, object]] = []
+    for row in transport_rows:
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": None,
+                "properties": {
+                    "kind": "transport_dong",
+                    "period": str(row[0]),
+                    "district_code": str(row[1]),
+                    "district_name": str(row[2]),
+                    "dong_code": str(row[3]),
+                    "dong_name": str(row[4]),
+                    "inbound_other_dong": float(row[5]),
+                    "inbound_other_district": float(row[6]),
+                    "unit": str(row[7]),
+                },
+            }
+        )
+    for row in poi_rows:
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [float(row[5]), float(row[6])],
+                },
+                "properties": {
+                    "kind": "tourism_poi",
+                    "content_id": str(row[0]),
+                    "title": str(row[1]),
+                    "district_name": str(row[2] or ""),
+                    "dong_code": str(row[3] or ""),
+                    "dong_name": str(row[4] or ""),
+                },
+            }
+        )
+    for row in candidate_rows:
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": None,
+                "properties": {
+                    "kind": "candidate_accessibility",
+                    "candidate_id": str(row[0]),
+                    "transport_period": str(row[1]) if row[1] else None,
+                    "transport_inbound": float(row[2]) if row[2] is not None else None,
+                    "nearest_transport_hub_name": row[3],
+                    "nearest_transport_hub_distance_m": (
+                        float(row[4]) if row[4] is not None else None
+                    ),
+                    "tourism_poi_count_1000m": int(row[5]) if row[5] is not None else None,
+                    "nearest_tourism_poi_name": row[6],
+                    "nearest_tourism_poi_distance_m": (
+                        float(row[7]) if row[7] is not None else None
+                    ),
+                    "ranking_eligible": bool(row[8]),
+                    "coverage_status": str(row[9]),
+                },
+            }
+        )
+    return (
+        UUID(str(snapshot_id)),
+        _collection(features),
+        {"transport": str(transport_status), "tourism": str(tourism_status)},
     )
 
 
@@ -329,6 +473,9 @@ def _map_data(
     revision_rows: list[tuple[object, ...]],
     district_demand_scores: dict[str, float],
     district_demand_status: str,
+    access_snapshot_id: UUID | None,
+    access_context: dict[str, object],
+    access_status: dict[str, str],
 ) -> dict[str, object]:
     geometry_by_pnu = {
         str(row[0]): from_wkb(bytes(row[3])) for row in evidence_rows
@@ -602,6 +749,7 @@ def _map_data(
         "inventory_run_id": str(inventory_run_id),
         "source_snapshot_date": snapshot_date,
         "published_date": published_date,
+        "access_snapshot_id": str(access_snapshot_id) if access_snapshot_id else None,
         "candidate_count": len(hub_features),
         "standalone_candidate_count": len(standalone_features),
         "bukgu_supplemental_candidate_count": len(
@@ -646,7 +794,8 @@ def _map_data(
             "district_visitor_demand": district_demand_status,
             "nearby_attractions": "reviewed_place_proximity_available",
             "station_proximity": "available",
-            "transport_flow": "not_published",
+            "transport_flow": access_status["transport"],
+            "official_tourism_poi": access_status["tourism"],
         },
     }
     return {
@@ -659,6 +808,7 @@ def _map_data(
         ),
         "parcels": _collection(parcel_features),
         "houses": _collection(house_features),
+        "accessibility_context": access_context,
         "summary": summary,
     }
 
@@ -688,6 +838,7 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
         ),
         "parcels.geojson": _json_bytes(data["parcels"]),
         "vacant-houses.geojson": _json_bytes(data["houses"]),
+        "accessibility-context.geojson": _json_bytes(data["accessibility_context"]),
         "summary.json": _json_bytes(summary),
     }
     for name, body in bodies.items():
@@ -696,6 +847,7 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
         "schema_version": "vacant-map-v3",
         "hub_run_id": str(data["hub_run_id"]),
         "inventory_run_id": str(data["inventory_run_id"]),
+        "access_snapshot_id": summary["access_snapshot_id"],
         "source_snapshot_date": summary["source_snapshot_date"],
         "files": {
             name: {

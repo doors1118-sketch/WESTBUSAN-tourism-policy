@@ -21,7 +21,7 @@
   }).addTo(map);
 
   const data = {
-    hubs: [], standalone: [], supplemental: [], parcels: [], houses: [], summary: null,
+    hubs: [], standalone: [], supplemental: [], parcels: [], houses: [], access: [], summary: null,
   };
   const layers = {
     hubs: L.layerGroup().addTo(map),
@@ -29,6 +29,8 @@
     supplemental: L.layerGroup().addTo(map),
     parcels: L.layerGroup(),
     houses: L.layerGroup(),
+    transport: L.layerGroup().addTo(map),
+    tourismPois: L.layerGroup().addTo(map),
   };
   const featureLayers = {
     hubs: new Map(), standalone: new Map(), supplemental: new Map(),
@@ -41,6 +43,21 @@
     transport_flow: "교통량",
   };
   let selected = null;
+
+  function candidateAccess(identifier) {
+    return data.access.find((item) => item.properties.kind === "candidate_accessibility"
+      && item.properties.candidate_id === identifier)?.properties || null;
+  }
+  function accessibilityText(identifier) {
+    const access = candidateAccess(identifier);
+    if (!access) return "교통·관광지 접근성 자료 미결합으로 기존 후보순위를 유지합니다.";
+    const parts = [];
+    if (access.transport_inbound !== null) parts.push(`대중교통 유입 ${Number(access.transport_inbound).toLocaleString("ko-KR")}통행 (${access.transport_period})`);
+    if (access.tourism_poi_count_1000m !== null) parts.push(`1km 내 관광지 ${Number(access.tourism_poi_count_1000m).toLocaleString("ko-KR")}개`);
+    if (access.nearest_tourism_poi_name) parts.push(`최근접 관광지 ${access.nearest_tourism_poi_name} ${Math.round(access.nearest_tourism_poi_distance_m).toLocaleString("ko-KR")}m`);
+    parts.push(access.ranking_eligible ? "접근성 근거가 완결되어 보완순위에 반영됨" : "근거가 일부 미완결되어 기존 후보순위 유지");
+    return parts.join(" · ");
+  }
 
   function textElement(tagName, text, className = "") {
     const element = document.createElement(tagName);
@@ -154,7 +171,7 @@
       `${Math.round(properties.union_area).toLocaleString("ko-KR")}㎡`
     );
     document.getElementById("detail-evidence").textContent = (
-      "지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. 소유권·접도·용도지역·구조안전·소방·주차와 사업성은 별도 검토 대상입니다."
+      `지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. ${accessibilityText(properties.hub_id)}. 소유권·접도·용도지역·구조안전·소방·주차와 사업성은 별도 검토 대상입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.hubs.get(properties.hub_id);
@@ -188,7 +205,7 @@
       `${Math.round(properties.parcel_area).toLocaleString("ko-KR")}㎡`
     );
     document.getElementById("detail-evidence").textContent = (
-      `${demand}. ${gaps.join(" · ")}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
+      `${demand}. ${gaps.join(" · ")}. ${accessibilityText(properties.candidate_id)}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.standalone.get(properties.candidate_id);
@@ -397,6 +414,24 @@
       marker.addTo(layers.houses);
       featureLayers.houses.set(feature.properties.record_id, marker);
     });
+    const visibleHouses = data.houses.filter(featureMatches);
+    data.access.filter((feature) => feature.properties.kind === "tourism_poi" && featureMatches(feature)).forEach((feature) => {
+      const [longitude, latitude] = feature.geometry.coordinates;
+      L.marker([latitude, longitude], { icon: L.divIcon({
+        className: "tourism-poi-icon", html: "관", iconSize: [28, 28], iconAnchor: [14, 14],
+      }) }).bindPopup(`<strong>${feature.properties.title}</strong><br>${feature.properties.district_name} ${feature.properties.dong_name || ""}`).addTo(layers.tourismPois);
+    });
+    data.access.filter((feature) => feature.properties.kind === "transport_dong" && featureMatches(feature)).forEach((feature) => {
+      const matching = visibleHouses.filter((house) => house.properties.dong_name === feature.properties.dong_name);
+      if (!matching.length) return;
+      const latitude = matching.reduce((sum, house) => sum + Number(house.geometry.coordinates[1]), 0) / matching.length;
+      const longitude = matching.reduce((sum, house) => sum + Number(house.geometry.coordinates[0]), 0) / matching.length;
+      const value = Number(feature.properties.inbound_other_district || feature.properties.inbound_other_dong || 0);
+      L.circleMarker([latitude, longitude], {
+        radius: Math.max(7, Math.min(24, 7 + Math.sqrt(value) / 6)),
+        color: "#8e0152", weight: 2, fillColor: "#d95f72", fillOpacity: .35,
+      }).bindPopup(`<strong>${feature.properties.district_name} ${feature.properties.dong_name}</strong><br>타 자치구 대중교통 유입 ${value.toLocaleString("ko-KR")}통행<br><small>관광객 수가 아니며 통행 목적·중복 이용자를 구분하지 못함</small>`).addTo(layers.transport);
+    });
     updateSelectionStyles(); updateLayerVisibility(); renderCandidates();
   }
   function updateLayerVisibility() {
@@ -461,6 +496,11 @@
     if (districtFilter.value) fitVisibleInventory(13);
     else fitVisibleCandidates(12);
   });
+  document.querySelectorAll("[data-layer]").forEach((control) => control.addEventListener("change", () => {
+    const layer = control.dataset.layer === "transport_inflow" ? layers.transport : layers.tourismPois;
+    if (control.checked && !map.hasLayer(layer)) layer.addTo(map);
+    if (!control.checked && map.hasLayer(layer)) map.removeLayer(layer);
+  }));
   document.getElementById("address-analysis-form").addEventListener(
     "submit",
     async (event) => {
@@ -495,17 +535,19 @@
       "bukgu-supplemental-candidates.geojson",
       "parcels.geojson",
       "vacant-houses.geojson",
+      "accessibility-context.geojson",
       "summary.json",
     ].map((url) => fetch(url).then((response) => {
       if (!response.ok) throw new Error("map_data_failed");
       return response.json();
     })),
-  ).then(([hubs, standalone, supplemental, parcels, houses, summary]) => {
+  ).then(([hubs, standalone, supplemental, parcels, houses, access, summary]) => {
     data.hubs = hubs.features;
     data.standalone = standalone.features;
     data.supplemental = supplemental.features;
     data.parcels = parcels.features;
     data.houses = houses.features;
+    data.access = access.features;
     data.summary = summary;
     WEST_DISTRICTS.forEach(
       (district) => districtFilter.add(new Option(district, district)),

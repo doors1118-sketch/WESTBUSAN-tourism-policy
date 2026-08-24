@@ -15,6 +15,7 @@ from westbusan.vacant_house.map_export import (
 
 HUB_RUN_ID = UUID("11111111-1111-1111-1111-111111111111")
 INVENTORY_RUN_ID = UUID("22222222-2222-2222-2222-222222222222")
+ACCESS_SNAPSHOT_ID = UUID("44444444-4444-4444-4444-444444444444")
 
 
 class _Result:
@@ -49,6 +50,54 @@ class _PublishedVacantMapConnection:
         if "from vacant_house_hub_publication_current" in query:
             return _Result(
                 [(HUB_RUN_ID, INVENTORY_RUN_ID, date(2025, 2, 28), date(2026, 8, 22))]
+            )
+        if "from accessibility_publication_current" in query:
+            return _Result([(ACCESS_SNAPSHOT_ID, "available", "available")])
+        if "from mart_transport_dong_month" in query:
+            return _Result(
+                [
+                    (
+                        "2026-06",
+                        "26320",
+                        "북구",
+                        "2632010500",
+                        "구포동",
+                        150.0,
+                        90.0,
+                        "passengers",
+                    )
+                ]
+            )
+        if "from dim_tourism_poi_snapshot" in query:
+            return _Result(
+                [
+                    (
+                        "126848",
+                        "구포시장",
+                        "북구",
+                        "2632010500",
+                        "구포동",
+                        128.991,
+                        35.201,
+                    )
+                ]
+            )
+        if "from mart_vacant_candidate_accessibility" in query:
+            return _Result(
+                [
+                    (
+                        "hub-west-01",
+                        "2026-06",
+                        90.0,
+                        None,
+                        None,
+                        1,
+                        "구포시장",
+                        450.0,
+                        False,
+                        "complete",
+                    )
+                ]
             )
         if "from vacant_house_hub where" in query:
             return _Result(
@@ -137,6 +186,15 @@ class _PublishedVacantMapConnection:
         raise AssertionError(query)
 
 
+class _PublishedVacantMapWithoutAccess(_PublishedVacantMapConnection):
+    def execute(
+        self, query: str, parameters: list[object] | None = None
+    ) -> _Result:
+        if "from accessibility_publication_current" in query:
+            return _Result([])
+        return super().execute(query, parameters)
+
+
 def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     tmp_path: Path,
 ) -> None:
@@ -154,6 +212,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "bukgu-supplemental-candidates.geojson",
         "parcels.geojson",
         "vacant-houses.geojson",
+        "accessibility-context.geojson",
         "summary.json",
         "manifest.json",
     }
@@ -173,6 +232,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     parcels = json.loads(first.parcels.read_text(encoding="utf-8"))
     houses = json.loads(first.houses.read_text(encoding="utf-8"))
     summary = json.loads(first.summary.read_text(encoding="utf-8"))
+    access = json.loads(first.accessibility_context.read_text(encoding="utf-8"))
     html = first.index_html.read_text(encoding="utf-8")
     script = first.script.read_text(encoding="utf-8")
 
@@ -207,8 +267,9 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert summary["context_availability"] == {
         "district_visitor_demand": "available",
         "nearby_attractions": "reviewed_place_proximity_available",
+        "official_tourism_poi": "available",
         "station_proximity": "available",
-        "transport_flow": "not_published",
+        "transport_flow": "available",
     }
     assert summary["district_house_counts"] == {
         "강서구": 0,
@@ -241,6 +302,12 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "scope": "서부산 4개 구",
     }
     assert summary["schema_version"] == "vacant-map-v3"
+    assert summary["access_snapshot_id"] == str(ACCESS_SNAPSHOT_ID)
+    assert {item["properties"]["kind"] for item in access["features"]} == {
+        "transport_dong",
+        "tourism_poi",
+        "candidate_accessibility",
+    }
     assert "/tourism/api/vworld/tiles/{z}/{x}/{y}.png" in html
     assert "정적 지도" not in html
     assert "data-min-zoom=\"7\"" in html
@@ -262,6 +329,10 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "현재 게시된 단독개발 상위후보 0개" in script
     assert "C${Number(feature.properties.preliminary_rank)}" in script
     assert "nearby_attractions" in script
+    assert "accessibility-context.geojson" in script
+    assert "대중교통 유입량은 관광객 수가 아닙니다" in html
+    assert 'data-layer="tourism_poi"' in html
+    assert 'data-layer="transport_inflow"' in html
     assert "자료 미결합" in script
     assert "A${Number(feature.properties.candidate_rank)}" in script
     assert "B${Number(feature.properties.preliminary_rank)}" in script
@@ -280,3 +351,22 @@ def test_vacant_map_manifest_detects_modified_exact_location_bytes(
     )
 
     assert not validate_vacant_house_map_bundle(bundle)
+
+
+def test_missing_accessibility_keeps_existing_candidate_order(
+    tmp_path: Path,
+) -> None:
+    bundle = export_vacant_house_map_current(
+        _PublishedVacantMapWithoutAccess(), tmp_path / "without-access"
+    )
+
+    hubs = json.loads(bundle.hubs.read_text(encoding="utf-8"))
+    summary = json.loads(bundle.summary.read_text(encoding="utf-8"))
+    access = json.loads(bundle.accessibility_context.read_text(encoding="utf-8"))
+
+    assert [
+        item["properties"]["candidate_rank"] for item in hubs["features"]
+    ] == [1, 2]
+    assert summary["access_snapshot_id"] is None
+    assert summary["context_availability"]["transport_flow"] == "not_published"
+    assert access == {"features": [], "type": "FeatureCollection"}
