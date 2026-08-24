@@ -13,15 +13,23 @@ from pathlib import Path
 from typing import Protocol
 from uuid import UUID
 
+import duckdb
 from shapely import from_wkb
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
+
+from westbusan.spatial.export import _demand_scores_from_rows
+from westbusan.vacant_house.hub_models import CadastralParcel, VacantParcel
+from westbusan.vacant_house.standalone_candidates import (
+    build_standalone_candidates,
+)
 
 _FILES = (
     "index.html",
     "vacant-map.css",
     "vacant-map.js",
     "hubs.geojson",
+    "standalone-candidates.geojson",
     "parcels.geojson",
     "vacant-houses.geojson",
     "summary.json",
@@ -33,6 +41,11 @@ _WEST_DISTRICTS = {
     "26440": "강서구",
     "26530": "사상구",
 }
+_DISTRICT_CODES_BY_NAME = {
+    name: code for code, name in _WEST_DISTRICTS.items()
+}
+_STANDALONE_MINIMUM_AREA = 300.0
+_STANDALONE_LIMIT = 6
 
 
 class QueryConnection(Protocol):
@@ -68,6 +81,10 @@ class VacantHouseMapBundle:
     @property
     def hubs(self) -> Path:
         return self.directory / "hubs.geojson"
+
+    @property
+    def standalone_candidates(self) -> Path:
+        return self.directory / "standalone-candidates.geojson"
 
     @property
     def parcels(self) -> Path:
@@ -217,6 +234,9 @@ def _read_current(connection: QueryConnection) -> dict[str, object]:
              and revision.lot_type is not null and revision.main_lot is not null
            order by pnu, revision.record_id"""
     ).fetchall()
+    district_demand_scores, demand_status = _read_optional_district_demand_scores(
+        connection
+    )
 
     return _map_data(
         hub_run_id=UUID(str(hub_run_id)),
@@ -227,7 +247,64 @@ def _read_current(connection: QueryConnection) -> dict[str, object]:
         evidence_rows=evidence_rows,
         member_rows=member_rows,
         revision_rows=revision_rows,
+        district_demand_scores=district_demand_scores,
+        district_demand_status=demand_status,
     )
+
+
+def _read_optional_district_demand_scores(
+    connection: QueryConnection,
+) -> tuple[dict[str, float], str]:
+    """Read the current spatial demand comparator without blocking map export."""
+    try:
+        pointer = connection.execute(
+            """select run.spatial_run_id, run.started_at, run.business_date
+               from spatial_publication_current as current
+               join spatial_run as run
+                 on run.spatial_run_id = current.spatial_run_id
+               where current.publication_key = 'current'
+                 and run.status = 'COMPLETED'"""
+        ).fetchall()
+        if len(pointer) != 1:
+            return {}, "not_joined"
+        spatial_run_id, started_at, business_date = pointer[0]
+        visitor_rows = connection.execute(
+            """with eligible as (
+                   select district, try_cast(period as date) as day, metric_value
+                   from fact_tourism_demand
+                   where metric_code='locgo_regn_visitr_dd_list.visitor_count'
+                     and unit='count' and loaded_at <= ?
+                     and try_cast(period as date) <= ?
+                     and json_extract_string(dimension_json, '$.touDivCd')
+                         in ('2','3')
+               ), latest as (
+                   select max(day) as max_day from eligible where day is not null
+               ), daily as (
+                   select district, day, sum(metric_value) as visitors
+                   from eligible, latest
+                   where day is not null and day > max_day - interval 355 day
+                   group by district, day
+               )
+               select district, avg(visitors) from daily
+               group by district order by district""",
+            [started_at, business_date],
+        ).fetchall()
+        room_rows = connection.execute(
+            """select district_name, sum(room_count)
+               from mart_facility_priority_current
+               where spatial_run_id=? and room_count is not null
+               group by district_name order by district_name""",
+            [spatial_run_id],
+        ).fetchall()
+    except duckdb.Error:  # Optional enrichment must not invalidate a vacant release.
+        return {}, "not_joined"
+    by_name = _demand_scores_from_rows(visitor_rows, room_rows)
+    by_code = {
+        _DISTRICT_CODES_BY_NAME[name]: score
+        for name, score in by_name.items()
+        if name in _DISTRICT_CODES_BY_NAME
+    }
+    return by_code, "available" if by_code else "not_joined"
 
 
 def _map_data(
@@ -240,6 +317,8 @@ def _map_data(
     evidence_rows: list[tuple[object, ...]],
     member_rows: list[tuple[object, ...]],
     revision_rows: list[tuple[object, ...]],
+    district_demand_scores: dict[str, float],
+    district_demand_status: str,
 ) -> dict[str, object]:
     geometry_by_pnu = {
         str(row[0]): from_wkb(bytes(row[3])) for row in evidence_rows
@@ -257,6 +336,28 @@ def _map_data(
     for row in revision_rows:
         address_by_pnu.setdefault(str(row[0]), []).append(row)
 
+    inventory_by_pnu = _inventory_by_pnu(address_by_pnu)
+    reviewed_cadastral = tuple(
+        CadastralParcel(
+            pnu=str(row[0]),
+            district_code=str(row[1]),
+            legal_dong_code=str(row[2]),
+            geometry=geometry_by_pnu[str(row[0])],
+            geometry_hash=hashlib.sha256(bytes(row[3])).hexdigest(),
+            source_date=row[4],
+            source_record_count=len(address_by_pnu.get(str(row[0]), [])),
+        )
+        for row in evidence_rows
+    )
+    standalone_candidates = build_standalone_candidates(
+        reviewed_cadastral,
+        inventory_by_pnu,
+        excluded_pnus=frozenset(member_by_pnu),
+        district_demand_scores=district_demand_scores,
+        minimum_area=_STANDALONE_MINIMUM_AREA,
+        limit=_STANDALONE_LIMIT,
+    )
+
     hub_features: list[dict[str, object]] = []
     hub_rank_by_id: dict[str, int] = {}
     for row in hub_rows:
@@ -272,6 +373,46 @@ def _map_data(
                 for source in source_rows
                 if source[3]
             }
+        )
+
+    standalone_features: list[dict[str, object]] = []
+    for candidate in standalone_candidates:
+        sources = address_by_pnu.get(candidate.pnu, [])
+        district_name = _WEST_DISTRICTS.get(
+            candidate.district_code, candidate.district_code
+        )
+        standalone_features.append(
+            _feature(
+                candidate.geometry,
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "candidate_class": candidate.candidate_class,
+                    "preliminary_rank": candidate.preliminary_rank,
+                    "pnu": candidate.pnu,
+                    "district_code": candidate.district_code,
+                    "district_name": district_name,
+                    "legal_dong_code": candidate.legal_dong_code,
+                    "dong_name": str(sources[0][3]) if sources else "",
+                    "exact_address": str(sources[0][4] or "") if sources else "",
+                    "road_address": str(sources[0][5] or "") if sources else "",
+                    "parcel_area": round(candidate.parcel_area, 1),
+                    "minimum_area_square_metres": _STANDALONE_MINIMUM_AREA,
+                    "vacant_house_count": candidate.source_record_count,
+                    "housing_types": list(candidate.housing_types),
+                    "construction_years": _unique_values(sources, 7),
+                    "vacant_grades": _unique_values(sources, 8),
+                    "building_areas": _unique_values(sources, 9),
+                    "source_land_areas": _unique_values(sources, 10),
+                    "district_demand_score": candidate.district_demand_score,
+                    "context_coverage": list(candidate.context_coverage),
+                    "missing_context": list(candidate.missing_context),
+                    "ranking_basis": [
+                        "district_visitor_demand",
+                        "reviewed_parcel_area",
+                        "pnu",
+                    ],
+                },
+            )
         )
         hub_features.append(
             _feature(
@@ -355,12 +496,13 @@ def _map_data(
             )
 
     summary = {
-        "schema_version": "vacant-map-v1",
+        "schema_version": "vacant-map-v2",
         "hub_run_id": str(hub_run_id),
         "inventory_run_id": str(inventory_run_id),
         "source_snapshot_date": snapshot_date,
         "published_date": published_date,
         "candidate_count": len(hub_features),
+        "standalone_candidate_count": len(standalone_features),
         "distinct_parcel_count": len(parcel_features),
         "exact_location_count": len(house_features),
         "district_parcel_counts": dict(sorted(district_counts.items())),
@@ -371,11 +513,25 @@ def _map_data(
             "maximum_candidates": 10,
             "district_quota": False,
         },
+        "standalone_candidate_policy": {
+            "scope": "서부산 4개 구",
+            "candidate_label": "단독개발·숙박전환 예비후보",
+            "housing_type": "단독주택",
+            "minimum_area_square_metres": _STANDALONE_MINIMUM_AREA,
+            "maximum_candidates": _STANDALONE_LIMIT,
+            "district_quota": False,
+        },
+        "context_availability": {
+            "district_visitor_demand": district_demand_status,
+            "nearby_attractions": "not_joined",
+            "transport_access": "not_joined",
+        },
     }
     return {
         "hub_run_id": hub_run_id,
         "inventory_run_id": inventory_run_id,
         "hubs": _collection(hub_features),
+        "standalone_candidates": _collection(standalone_features),
         "parcels": _collection(parcel_features),
         "houses": _collection(house_features),
         "summary": summary,
@@ -399,6 +555,9 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
         "vacant-map.css": stylesheet.encode("utf-8"),
         "vacant-map.js": script.encode("utf-8"),
         "hubs.geojson": _json_bytes(data["hubs"]),
+        "standalone-candidates.geojson": _json_bytes(
+            data["standalone_candidates"]
+        ),
         "parcels.geojson": _json_bytes(data["parcels"]),
         "vacant-houses.geojson": _json_bytes(data["houses"]),
         "summary.json": _json_bytes(summary),
@@ -406,7 +565,7 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
     for name, body in bodies.items():
         (directory / name).write_bytes(body)
     manifest = {
-        "schema_version": "vacant-map-v1",
+        "schema_version": "vacant-map-v2",
         "hub_run_id": str(data["hub_run_id"]),
         "inventory_run_id": str(data["inventory_run_id"]),
         "source_snapshot_date": summary["source_snapshot_date"],
@@ -419,6 +578,37 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
         },
     }
     (directory / "manifest.json").write_bytes(_json_bytes(manifest))
+
+
+def _inventory_by_pnu(
+    address_by_pnu: dict[str, list[tuple[object, ...]]],
+) -> dict[str, VacantParcel]:
+    result: dict[str, VacantParcel] = {}
+    for pnu, rows in address_by_pnu.items():
+        result[pnu] = VacantParcel(
+            pnu=pnu,
+            district_code=pnu[:5],
+            legal_dong_code=pnu[5:10],
+            record_ids=tuple(sorted(UUID(str(row[1])) for row in rows)),
+            source_row_ids=(),
+            source_record_count=len(rows),
+            exact_addresses=tuple(sorted({str(row[4]) for row in rows if row[4]})),
+            road_addresses=tuple(sorted({str(row[5]) for row in rows if row[5]})),
+            housing_types=tuple(sorted({str(row[6]) for row in rows if row[6]})),
+            construction_years=tuple(sorted({int(row[7]) for row in rows if row[7] is not None})),
+            vacant_grades=tuple(sorted({int(row[8]) for row in rows if row[8] is not None})),
+            building_areas=tuple(sorted({float(row[9]) for row in rows if row[9] is not None})),
+            land_areas=tuple(sorted({float(row[10]) for row in rows if row[10] is not None})),
+            has_unlicensed_record=False,
+            demolition_needed=False,
+        )
+    return result
+
+
+def _unique_values(
+    rows: list[tuple[object, ...]], index: int
+) -> list[object]:
+    return sorted({row[index] for row in rows if row[index] is not None})
 
 
 def _feature(geometry: BaseGeometry, properties: dict[str, object]) -> dict[str, object]:
