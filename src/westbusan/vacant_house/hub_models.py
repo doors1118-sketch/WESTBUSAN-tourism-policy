@@ -78,4 +78,32 @@ class HubCandidate:
     reason_codes: tuple[str, ...]
 
 
-__all__ = ["CadastralParcel", "HubCandidate", "VacantHub", "VacantParcel"]
+@dataclass(frozen=True, slots=True)
+class StandaloneCandidate:
+    """Large non-hub parcel retained as a preliminary standalone review target."""
+
+    preliminary_rank: int
+    candidate_id: str
+    pnu: str
+    district_code: str
+    legal_dong_code: str
+    geometry: BaseGeometry = field(repr=False)
+    parcel_area: float
+    source_record_count: int
+    housing_types: tuple[str, ...]
+    district_demand_score: float | None
+    context_coverage: tuple[str, ...]
+    missing_context: tuple[str, ...]
+
+    @property
+    def candidate_class(self) -> str:
+        return "standalone_preliminary"
+
+
+__all__ = [
+    "CadastralParcel",
+    "HubCandidate",
+    "StandaloneCandidate",
+    "VacantHub",
+    "VacantParcel",
+]
