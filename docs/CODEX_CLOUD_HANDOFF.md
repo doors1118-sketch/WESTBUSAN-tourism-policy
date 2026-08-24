@@ -9,13 +9,13 @@
 - 투자정보 지도: `https://busanproduct.co.kr/tourism/map/index.html`
 - 빈집 운영지도: `https://busanproduct.co.kr/tourism/vacant-map/index.html`
 - GitHub 브랜치: `codex/busan-authority-filter`
-- 현재 기능 완료 commit: `c18bcf0` (`fix(vacant-house): accept reviewed single-family source label`)
-- 운영 UI release: `/opt/westbusan/dashboard/releases/20260824-vacant-ab-v45`
-- 직전 rollback release: `/opt/westbusan/dashboard/releases/20260824-track-overlap-v44`
+- 현재 기능 완료 commit: `1024b05` (`feat(tourism): add workation candidate programme`)
+- 운영 UI release: `/opt/westbusan/dashboard/releases/20260824-workation-v46`
+- 직전 rollback release: `/opt/westbusan/dashboard/releases/20260824-vacant-ab-v45`
 - 운영 AI release: `/opt/westbusan-tourism-ai/releases/20260823-consumption-ai-v43b`
 - 빈집 전체 회귀 테스트: 214 passed, Ruff·JavaScript syntax·diff check 통과
 - 운영 회귀: 관광 UI·투자지도·빈집지도·신규 후보 GeoJSON을 포함한 공개 URL 15개 모두 HTTP 200
-- 브라우저 검증: A/B 목록·후보선택·상세근거·VWorld 확대 정상, console error 0건
+- 브라우저 검증: A/B 목록·워크케이션 후보표 5행·행정검토 기준·VWorld 지도 로드 정상
 - AI 종합보고서: OpenAI 8개 절·근거 30건 생성 확인, 동일 발행본 재호출 `cached=true`
 
 현재 운영 데이터 기준일은 2026-08-21이고 core 기준일은 2026-08-19이다. 관광
@@ -29,6 +29,13 @@ UI는 종합현황, 서부산 자치구 현황, 동서 공급 격차, 투자정�
 비거점 단독주택형 빈집의 지적면적 분포에서 약 90백분위(252.9㎡)를 보수적으로
 반올림한 선별선이며 법정·사업성 최소면적이 아니다. 현재 B형 6개는 자치구
 할당 없이 동일 산식을 적용한 결과 모두 강서구에 위치한다.
+
+빈집 탭은 현재 A·B형 후보를 사업방식별로 묶어 워케이션 개발사업 후보지역과
+행정문서형 검토방향 5개 행을 제시한다. 모라동은 복합형 거점, 명지동·동선동·
+죽동동은 독립개발형, 괴정동·감전동은 연속필지 통합개발형, 죽림동·녹산동은
+전환·재생형, 장림동은 인접 필지 추가 확보를 전제로 한 조건부 후보로 구분한다.
+이는 현재 게시 빈집의 필지 연속성·면적·건축자료를 묶은 행정검토용 분류이며
+사업대상지 확정이나 사업성 판정이 아니다.
 
 기능 구현은 완료 상태이나 다음은 데이터·정책판단 한계이다. 교통 fact와 체류시간은
 현재 발행본에 없으므로 지표로 게시하지 않는다. 관광소비 80.44 등은 한국관광공사
