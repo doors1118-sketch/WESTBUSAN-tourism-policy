@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from westbusan.accessibility.build import build_accessibility_snapshot
+from westbusan.accessibility.poi import TourismPoi
 from westbusan.db import Database
 
 
@@ -188,3 +189,38 @@ def test_empty_transport_membership_keeps_transport_metrics_absent(
         [summary.snapshot_id],
     ) == 0
 
+
+def test_reviewed_tourism_pois_are_manifest_bound(tmp_path: Path) -> None:
+    db, core_run_id, spatial_run_id = _current_database(tmp_path)
+    poi = TourismPoi(
+        content_id="126848",
+        title="구포시장",
+        content_type_id="12",
+        category_codes=("A02", "A0203", "A02030100"),
+        address="부산광역시 북구 구포동",
+        longitude=128.991,
+        latitude=35.201,
+        modified_time="20260825093000",
+        observed_date=date(2026, 8, 25),
+    )
+
+    summary = build_accessibility_snapshot(
+        db,
+        core_run_id,
+        spatial_run_id,
+        date(2026, 8, 25),
+        tourism_pois=(poi,),
+    )
+
+    assert summary.tourism_status == "available"
+    assert summary.tourism_poi_count == 1
+    assert db.query(
+        """select content_id, title, district_name, longitude, latitude
+           from dim_tourism_poi_snapshot where snapshot_id = ?""",
+        [summary.snapshot_id],
+    ) == [("126848", "구포시장", "북구", 128.991, 35.201)]
+    assert db.scalar(
+        """select tourism_poi_count from accessibility_completion_manifest
+           where snapshot_id = ?""",
+        [summary.snapshot_id],
+    ) == 1
