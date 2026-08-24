@@ -10,6 +10,29 @@ import pytest
 from westbusan.db import Database
 
 
+def test_accessibility_migration_creates_shared_snapshot_schema(
+    tmp_path: Path,
+) -> None:
+    """Catches either map shipping without a shared accessibility identity."""
+    db = Database(tmp_path / "accessibility-schema.duckdb", Path("sql"))
+
+    db.migrate()
+
+    expected = {
+        "accessibility_snapshot",
+        "mart_transport_dong_month",
+        "dim_tourism_poi_snapshot",
+        "mart_grid_accessibility",
+        "mart_vacant_candidate_accessibility",
+        "accessibility_completion_manifest",
+        "accessibility_publication_current",
+    }
+    assert expected <= {row[0] for row in db.query("show tables")}
+    assert db.query(
+        "select version from schema_migrations where version like '042_%'"
+    ) == [("042_tourism_accessibility",)]
+
+
 def test_tourism_spatial_enrichment_migration_creates_geocode_cache(
     tmp_path: Path,
 ) -> None:
