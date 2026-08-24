@@ -198,6 +198,13 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "street-detail-mode" in script
     assert "vacant/address-analysis" in script
     assert "exact_address" in script
+    assert "연속필지 거점개발 후보" in html
+    assert "단독개발·숙박전환 예비후보" in html
+    assert "standalone-candidates.geojson" in script
+    assert "nearby_attractions" in script
+    assert "자료 미결합" in script
+    assert "A${Number(feature.properties.candidate_rank)}" in script
+    assert "B${Number(feature.properties.preliminary_rank)}" in script
 
 
 def test_vacant_map_manifest_detects_modified_exact_location_bytes(

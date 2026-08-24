@@ -334,3 +334,33 @@ controlled retry clears only the failed target run in committed FK layers and
 reuses the same deterministic run, manifest, pointer, event, and candidate
 order. Operations output may contain only aggregate counts and stable run IDs;
 do not print addresses, PNUs, raw provider payloads, or credentials.
+
+## 11. Supplemental standalone candidate map
+
+Map schema `vacant-map-v2` preserves the hub publication unchanged and adds a
+separate `standalone-candidates.geojson`. This file contains at most six
+non-hub, single-family vacant PNUs in the four West Busan districts whose
+reviewed cadastral area in EPSG:5179 is at least 300 square metres. The 300
+square-metre line is a preliminary screening threshold derived from the current
+non-hub single-family parcel distribution; it is not a statutory development
+minimum or proof of site feasibility.
+
+The B-type preliminary order uses current district visitor-demand evidence when
+the spatial publication is available, then reviewed parcel area and PNU for
+stable tie-breaking. It has no district quota. Nearby-attraction and transport
+evidence remain `not_joined` until source-backed parcel-level enrichment is
+published. Missing evidence must not be converted to zero. The map therefore
+labels these records `standalone development / lodging-conversion preliminary
+candidates`, not contiguous hubs or final investment priorities.
+
+Before deploying a v2 bundle verify:
+
+- existing A-type hub count, IDs, members, ranks, and geometries are unchanged;
+- every B-type PNU is outside the hub-member set and has only `단독주택` source
+  types;
+- every B-type reviewed projected parcel area is at least 300 square metres;
+- the B-type count is no greater than six and its order is deterministic;
+- `standalone-candidates.geojson` is bound by the manifest hash and byte count;
+  and
+- the UI distinguishes A/B candidates by both label and shape, and states the
+  unjoined tourism-attraction/transport limitations.

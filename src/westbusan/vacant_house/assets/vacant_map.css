@@ -1,6 +1,6 @@
 :root {
   --navy: #0d2e4a; --blue: #146cff; --red: #d9475a; --ink: #10283f;
-  --muted: #60758a; --line: #d9e4ec; --panel: #f4f8fb;
+  --muted: #60758a; --line: #d9e4ec; --panel: #f4f8fb; --gold: #c98200;
 }
 * { box-sizing: border-box; }
 body { margin: 0; color: var(--ink); font-family: Pretendard,"Noto Sans KR",Arial,sans-serif; background: #eef3f7; }
@@ -14,10 +14,18 @@ main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: ca
 .map-sidebar>p { margin: 0 0 18px; color: var(--muted); font-size: 12px; line-height: 1.65; }
 .map-sidebar label { display: grid; gap: 6px; font-size: 12px; font-weight: 800; }
 .map-sidebar select { padding: 11px; border: 1px solid #bfcdd9; border-radius: 9px; background: #fff; }
+.candidate-group { margin-top: 18px; }
+.candidate-group h3 { margin: 0; font-size: 13px; line-height: 1.45; }
+.candidate-group h3 span { display: inline-grid; place-items: center; margin-right: 5px; padding: 2px 6px; border-radius: 6px; background: var(--blue); color: #fff; font-size: 10px; }
+.candidate-group h3 small { color: var(--muted); font-size: 10px; }
+.candidate-group>p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.standalone-group h3 span { background: var(--gold); }
 .candidate-list { display: grid; gap: 8px; margin: 16px 0; padding: 0; list-style: none; }
 .candidate-list button { display: grid; grid-template-columns: 32px 1fr; gap: 10px; width: 100%; padding: 11px; border: 1px solid var(--line); border-radius: 11px; text-align: left; background: #f8fbfd; cursor: pointer; }
 .candidate-list button:hover,.candidate-list button.is-active { border-color: var(--blue); background: #eef5ff; }
+.standalone-group .candidate-list button:hover,.standalone-group .candidate-list button.is-active { border-color: var(--gold); background: #fff8e9; }
 .candidate-list b { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--navy); color: #fff; }
+.standalone-group .candidate-list b { border-radius: 7px; background: var(--gold); }
 .candidate-list strong,.candidate-list small { display: block; }
 .candidate-list strong { font-size: 12px; }
 .candidate-list small { margin-top: 3px; color: var(--muted); font-size: 10px; }
@@ -25,22 +33,27 @@ main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: ca
 .legend span { display: flex; align-items: center; gap: 8px; }
 .legend i { width: 15px; height: 15px; border-radius: 4px; }
 .legend .hub { border: 2px solid var(--blue); background: rgba(20,108,255,.28); }
+.legend .standalone { transform: rotate(45deg) scale(.75); border: 2px solid var(--gold); background: rgba(229,166,31,.38); }
 .legend .parcel { border: 1px solid #c55d1b; background: rgba(237,125,49,.55); }
 .legend .house { width: 11px; height: 11px; border-radius: 50%; background: var(--red); }
 .map-workspace { padding: 12px; overflow: auto; }
 #vacant-slippy-map { position: relative; height: 620px; overflow: hidden; border: 1px solid #cbd9e3; border-radius: 14px; background: #dbe5ea; }
 .candidate-marker { display: grid!important; place-items: center; border: 2px solid #fff; border-radius: 50%; background: var(--navy); box-shadow: 0 2px 9px rgba(13,46,74,.38); color: #fff; font-size: 13px; font-weight: 900; }
+.standalone-marker { display: grid!important; place-items: center; transform: rotate(45deg); border: 2px solid #fff; border-radius: 7px; background: var(--gold); box-shadow: 0 2px 9px rgba(97,64,0,.38); color: #fff; font-size: 11px; font-weight: 900; }
+.standalone-marker span { transform: rotate(-45deg); }
 .street-detail-mode .candidate-marker { display: none!important; }
+.street-detail-mode .standalone-marker { display: none!important; }
 .leaflet-popup-content p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
 .leaflet-control-attribution { font-size: 9px; }
 .zoom-guide { position: absolute; z-index: 800; right: 12px; bottom: 22px; max-width: 360px; padding: 9px 12px; border-radius: 9px; background: rgba(13,46,74,.9); color: #fff; font-size: 11px; }
 .selected-detail,.address-analysis { margin-top: 12px; padding: 20px; border: 1px solid var(--line); border-radius: 14px; background: #fff; }
 .selected-detail>div:first-child h2,.address-analysis h2 { margin: 4px 0 5px; font-size: 21px; }
 .selected-detail>div:first-child p,.address-analysis p { margin: 0; color: var(--muted); font-size: 12px; }
-.detail-kpis { display: grid; grid-template-columns: repeat(4,1fr); gap: 10px; margin-top: 16px; }
+.detail-kpis { display: grid; grid-template-columns: repeat(5,1fr); gap: 10px; margin-top: 16px; }
 .detail-kpis article { padding: 13px; border-radius: 11px; background: var(--panel); }
 .detail-kpis span { display: block; color: var(--muted); font-size: 10px; }
 .detail-kpis strong { display: block; margin-top: 5px; font-size: 20px; }
+.detail-evidence { margin: 12px 0 0; padding: 11px 13px; border-radius: 10px; background: #fff8e9; color: #624b15; font-size: 11px; line-height: 1.55; }
 .house-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 14px; }
 .house-list article { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
 .house-list strong { display: block; font-size: 12px; }
@@ -51,5 +64,5 @@ main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: ca
 .address-analysis button { padding: 12px 16px; border: 0; border-radius: 9px; background: var(--blue); color: #fff; font-weight: 900; cursor: pointer; }
 #address-analysis-result { grid-column: 1/-1; padding: 13px; border-radius: 10px; background: #eef6ff; color: #234a6b; font-size: 12px; }
 .map-note { margin: 10px 3px 0; color: var(--muted); font-size: 10px; }
-@media(max-width:960px) { main { grid-template-columns: 1fr; } .map-sidebar { border-right: 0; border-bottom: 1px solid var(--line); } .candidate-list { grid-template-columns: repeat(2,1fr); } #vacant-slippy-map { height: 540px; } }
+@media(max-width:960px) { main { grid-template-columns: 1fr; } .map-sidebar { border-right: 0; border-bottom: 1px solid var(--line); } .candidate-list { grid-template-columns: repeat(2,1fr); } .detail-kpis { grid-template-columns: repeat(3,1fr); } #vacant-slippy-map { height: 540px; } }
 @media(max-width:650px) { .map-header { align-items: flex-start; flex-direction: column; } .candidate-list,.house-list { grid-template-columns: 1fr; } .detail-kpis { grid-template-columns: repeat(2,1fr); } .address-analysis { grid-template-columns: 1fr; } .address-analysis form { flex-direction: column; } #vacant-slippy-map { height: 470px; } }

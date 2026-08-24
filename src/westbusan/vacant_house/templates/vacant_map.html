@@ -3,22 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>서부산 빈집 연속필지군 개발후보 지도</title>
+  <title>서부산 빈집 개발후보 지도</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
   <link rel="stylesheet" href="vacant-map.css">
 </head>
 <body>
   <header class="map-header">
-    <div><span>WEST BUSAN VACANT-HOUSE INTELLIGENCE</span><h1>빈집 연속필지군 개발후보 지도</h1></div>
+    <div><span>WEST BUSAN VACANT-HOUSE INTELLIGENCE</span><h1>빈집 개발후보 지도</h1></div>
     <p>원천 기준일 <strong>{{SOURCE_DATE}}</strong></p>
   </header>
   <main>
     <aside class="map-sidebar">
-      <h2>빈집 개발 후보지 10개</h2>
-      <p>서부산 4개 구에서 3개 이상 빈집 필지가 경계를 직접 맞댄 연속 필지군만 순위를 표시합니다.</p>
+      <h2>빈집 개발 후보</h2>
+      <p>물리적으로 이어진 거점개발 후보와 일정 규모 이상의 단독개발·숙박전환 예비후보를 분리해 표시합니다.</p>
       <label>자치구<select id="district-filter"><option value="">서부산 전체</option></select></label>
-      <ol id="candidate-list" class="candidate-list"></ol>
-      <div class="legend"><strong>확대 단계</strong><span><i class="hub"></i>후보 연속필지군</span><span><i class="parcel"></i>개별 지적필지</span><span><i class="house"></i>개별 빈집 위치</span></div>
+      <section class="candidate-group"><h3><span>A형</span> 연속필지 거점개발 후보 <small id="hub-candidate-count"></small></h3><p>3개 이상 빈집 필지의 경계 접촉이 확인된 필지군</p><ol id="hub-candidate-list" class="candidate-list"></ol></section>
+      <section class="candidate-group standalone-group"><h3><span>B형</span> 단독개발·숙박전환 예비후보 <small id="standalone-candidate-count"></small></h3><p>비연속 단독주택형 빈집 중 검증 지적면적 300㎡ 이상</p><ol id="standalone-candidate-list" class="candidate-list"></ol></section>
+      <div class="legend"><strong>지도 기호</strong><span><i class="hub"></i>A형 연속필지군</span><span><i class="standalone"></i>B형 단일필지 예비후보</span><span><i class="parcel"></i>개별 지적필지</span><span><i class="house"></i>개별 빈집 위치</span></div>
     </aside>
     <section class="map-workspace">
       <div id="vacant-slippy-map" data-map-center="129.035,35.155" data-map-zoom="11"
@@ -27,8 +28,9 @@
         <div class="zoom-guide" id="zoom-guide">후보 번호를 선택하면 연속필지군으로 확대됩니다.</div>
       </div>
       <section class="selected-detail" id="selected-detail" aria-live="polite">
-        <div><span>SELECTED VACANT HUB</span><h2 id="detail-title">서부산 빈집 연속필지군</h2><p id="detail-summary">지도 또는 후보 목록을 선택하면 필지 수와 상세 빈집 주소를 확인할 수 있습니다.</p></div>
-        <div class="detail-kpis"><article><span>후보순위</span><strong id="detail-rank">—</strong></article><article><span>연속필지</span><strong id="detail-parcels">—</strong></article><article><span>개별 빈집</span><strong id="detail-houses">—</strong></article><article><span>필지면적</span><strong id="detail-area">—</strong></article></div>
+        <div><span>SELECTED VACANT CANDIDATE</span><h2 id="detail-title">서부산 빈집 개발후보</h2><p id="detail-summary">지도 또는 후보 목록을 선택하면 후보 유형과 상세 빈집 주소를 확인할 수 있습니다.</p></div>
+        <div class="detail-kpis"><article><span>후보유형</span><strong id="detail-type">—</strong></article><article><span>검토순서</span><strong id="detail-rank">—</strong></article><article><span>필지</span><strong id="detail-parcels">—</strong></article><article><span>개별 빈집</span><strong id="detail-houses">—</strong></article><article><span>필지면적</span><strong id="detail-area">—</strong></article></div>
+        <p id="detail-evidence" class="detail-evidence">후보를 선택하면 적용 기준과 미결합 근거를 표시합니다.</p>
         <div id="house-list" class="house-list"></div>
       </section>
       <section class="address-analysis">
@@ -36,7 +38,7 @@
         <form id="address-analysis-form"><input name="address" id="address-input" maxlength="160" required placeholder="부산광역시 북구 구포동 123-4"><button type="submit">빈집 거점개발 판정</button></form>
         <div id="address-analysis-result" hidden></div>
       </section>
-      <p class="map-note">지도 점은 지적필지 내부 대표점입니다. 관광숙박 전환은 토지이용·건축·소방·위생·소유관계와 사업성을 별도 검토해야 합니다.</p>
+      <p class="map-note">A형은 연속필지 거점개발 후보, B형은 단독개발·숙박전환 예비후보입니다. 관광숙박 전환은 소유권·접도·토지이용·건축·소방·주차·위생·사업성을 별도 검토해야 합니다.</p>
     </section>
   </main>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
