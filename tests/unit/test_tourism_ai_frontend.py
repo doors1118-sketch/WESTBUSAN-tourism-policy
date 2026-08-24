@@ -244,7 +244,7 @@ def test_large_spatial_map_is_loaded_only_after_investment_tab_is_selected() -> 
     html = _asset("index.html")
     script = _asset("app.js")
 
-    assert 'data-map-src="map/index.html?v=20260822-priority-sites-v39"' in html
+    assert 'data-map-src="map/index.html?v=20260824-dong-total-v47"' in html
     assert '<iframe src="map/index.html"' not in html
     assert 'target === "investment"' in script
     assert "방문·체류·소비·교통수요가 어디에서 얼마나 발생하는가" in html
@@ -717,7 +717,10 @@ def test_vacant_house_tab_lazy_loads_exact_internal_map_without_embedding_source
     script = _asset("app.js")
     document = json.loads(_asset("data.json"))
 
-    assert 'data-vacant-map-src="vacant-map/index.html?v=20260822-vacant-hubs-v40"' in html
+    assert (
+        'data-vacant-map-src="vacant-map/index.html?v=20260824-bukgu-context-v47"'
+        in html
+    )
     assert '<iframe src="vacant-map/index.html"' not in html
     assert 'target === "vacant"' in script
     assert "연속 필지군" in html

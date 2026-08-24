@@ -32,7 +32,12 @@ westbusan = "westbusan.cli:app"
 [tool.setuptools.package-data]
 "westbusan.spatial" = ["templates/*.html", "assets/*.css", "assets/*.js"]
 "westbusan.tourism_dashboard" = ["assets/*"]
-"westbusan.vacant_house" = ["templates/*.html", "assets/*.css", "assets/*.js"]
+"westbusan.vacant_house" = [
+  "templates/*.html",
+  "assets/*.css",
+  "assets/*.js",
+  "reference/*.json",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

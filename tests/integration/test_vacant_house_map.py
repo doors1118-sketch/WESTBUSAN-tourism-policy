@@ -151,6 +151,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "vacant-map.js",
         "hubs.geojson",
         "standalone-candidates.geojson",
+        "bukgu-supplemental-candidates.geojson",
         "parcels.geojson",
         "vacant-houses.geojson",
         "summary.json",
@@ -166,6 +167,9 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     standalone = json.loads(
         first.standalone_candidates.read_text(encoding="utf-8")
     )
+    bukgu_supplemental = json.loads(
+        first.bukgu_supplemental_candidates.read_text(encoding="utf-8")
+    )
     parcels = json.loads(first.parcels.read_text(encoding="utf-8"))
     houses = json.loads(first.houses.read_text(encoding="utf-8"))
     summary = json.loads(first.summary.read_text(encoding="utf-8"))
@@ -176,6 +180,10 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert hubs["features"][0]["properties"]["candidate_rank"] == 1
     assert hubs["features"][1]["properties"]["candidate_rank"] == 2
     assert len(standalone["features"]) == 1
+    assert len(bukgu_supplemental["features"]) == 1
+    assert bukgu_supplemental["features"][0]["properties"]["candidate_class"] == (
+        "bukgu_supplemental_preliminary"
+    )
     assert standalone["features"][0]["properties"]["candidate_class"] == (
         "standalone_preliminary"
     )
@@ -198,8 +206,31 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert summary["exact_location_count"] == 7
     assert summary["context_availability"] == {
         "district_visitor_demand": "available",
-        "nearby_attractions": "not_joined",
-        "transport_access": "not_joined",
+        "nearby_attractions": "reviewed_place_proximity_available",
+        "station_proximity": "available",
+        "transport_flow": "not_published",
+    }
+    assert summary["district_house_counts"] == {
+        "강서구": 0,
+        "북구": 7,
+        "사상구": 0,
+        "사하구": 0,
+    }
+    assert summary["district_parcel_counts"] == {
+        "강서구": 0,
+        "북구": 7,
+        "사상구": 0,
+        "사하구": 0,
+    }
+    assert summary["district_candidate_counts"]["북구"] == {
+        "contiguous_hubs": 2,
+        "standalone_candidates": 1,
+        "supplemental_candidates": 1,
+    }
+    assert summary["district_candidate_counts"]["강서구"] == {
+        "contiguous_hubs": 0,
+        "standalone_candidates": 0,
+        "supplemental_candidates": 0,
     }
     assert summary["standalone_candidate_policy"] == {
         "candidate_label": "단독개발·숙박전환 예비후보",
@@ -209,7 +240,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "minimum_area_square_metres": 300.0,
         "scope": "서부산 4개 구",
     }
-    assert summary["schema_version"] == "vacant-map-v2"
+    assert summary["schema_version"] == "vacant-map-v3"
     assert "/tourism/api/vworld/tiles/{z}/{x}/{y}.png" in html
     assert "정적 지도" not in html
     assert "data-min-zoom=\"7\"" in html
@@ -223,6 +254,13 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "연속필지 거점개발 후보" in html
     assert "단독개발·숙박전환 예비후보" in html
     assert "standalone-candidates.geojson" in script
+    assert "bukgu-supplemental-candidates.geojson" in script
+    assert 'const WEST_DISTRICTS = ["강서구", "북구", "사상구", "사하구"]' in script
+    assert "빈집 전수현황" in html
+    assert "개발후보" in html
+    assert "연속필지 개발후보 0개" in script
+    assert "현재 게시된 단독개발 상위후보 0개" in script
+    assert "C${Number(feature.properties.preliminary_rank)}" in script
     assert "nearby_attractions" in script
     assert "자료 미결합" in script
     assert "A${Number(feature.properties.candidate_rank)}" in script

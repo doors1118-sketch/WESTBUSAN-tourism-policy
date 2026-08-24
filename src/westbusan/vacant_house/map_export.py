@@ -19,6 +19,10 @@ from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 
 from westbusan.spatial.export import _demand_scores_from_rows
+from westbusan.vacant_house.bukgu_candidates import (
+    build_bukgu_supplemental_candidates,
+    load_bukgu_context_anchors,
+)
 from westbusan.vacant_house.hub_models import CadastralParcel, VacantParcel
 from westbusan.vacant_house.standalone_candidates import (
     build_standalone_candidates,
@@ -30,6 +34,7 @@ _FILES = (
     "vacant-map.js",
     "hubs.geojson",
     "standalone-candidates.geojson",
+    "bukgu-supplemental-candidates.geojson",
     "parcels.geojson",
     "vacant-houses.geojson",
     "summary.json",
@@ -46,6 +51,7 @@ _DISTRICT_CODES_BY_NAME = {
 }
 _STANDALONE_MINIMUM_AREA = 300.0
 _STANDALONE_LIMIT = 6
+_BUKGU_SUPPLEMENTAL_LIMIT = 5
 
 
 class QueryConnection(Protocol):
@@ -85,6 +91,10 @@ class VacantHouseMapBundle:
     @property
     def standalone_candidates(self) -> Path:
         return self.directory / "standalone-candidates.geojson"
+
+    @property
+    def bukgu_supplemental_candidates(self) -> Path:
+        return self.directory / "bukgu-supplemental-candidates.geojson"
 
     @property
     def parcels(self) -> Path:
@@ -357,6 +367,19 @@ def _map_data(
         minimum_area=_STANDALONE_MINIMUM_AREA,
         limit=_STANDALONE_LIMIT,
     )
+    station_anchors, attraction_anchors, anchor_provenance = (
+        load_bukgu_context_anchors()
+    )
+    bukgu_supplemental_candidates = build_bukgu_supplemental_candidates(
+        reviewed_cadastral,
+        inventory_by_pnu,
+        excluded_pnus=frozenset(member_by_pnu),
+        district_demand_scores=district_demand_scores,
+        station_anchors=station_anchors,
+        attraction_anchors=attraction_anchors,
+        minimum_area=_STANDALONE_MINIMUM_AREA,
+        limit=_BUKGU_SUPPLEMENTAL_LIMIT,
+    )
 
     hub_features: list[dict[str, object]] = []
     hub_rank_by_id: dict[str, int] = {}
@@ -433,9 +456,68 @@ def _map_data(
             )
         )
 
+    bukgu_supplemental_features: list[dict[str, object]] = []
+    for candidate in bukgu_supplemental_candidates:
+        sources = address_by_pnu.get(candidate.pnu, [])
+        bukgu_supplemental_features.append(
+            _feature(
+                candidate.geometry,
+                {
+                    "candidate_id": candidate.candidate_id,
+                    "candidate_class": candidate.candidate_class,
+                    "preliminary_rank": candidate.preliminary_rank,
+                    "pnu": candidate.pnu,
+                    "district_code": candidate.district_code,
+                    "district_name": "북구",
+                    "legal_dong_code": candidate.legal_dong_code,
+                    "dong_name": str(sources[0][3]) if sources else "",
+                    "exact_address": str(sources[0][4] or "") if sources else "",
+                    "road_address": str(sources[0][5] or "") if sources else "",
+                    "parcel_area": round(candidate.parcel_area, 1),
+                    "minimum_area_square_metres": _STANDALONE_MINIMUM_AREA,
+                    "vacant_house_count": candidate.source_record_count,
+                    "housing_types": list(candidate.housing_types),
+                    "construction_years": _unique_values(sources, 7),
+                    "vacant_grades": _unique_values(sources, 8),
+                    "building_areas": _unique_values(sources, 9),
+                    "source_land_areas": _unique_values(sources, 10),
+                    "district_demand_score": candidate.district_demand_score,
+                    "nearest_station": candidate.nearest_station,
+                    "station_distance_metres": round(
+                        candidate.station_distance_metres, 1
+                    ),
+                    "nearest_attraction": candidate.nearest_attraction,
+                    "attraction_distance_metres": round(
+                        candidate.attraction_distance_metres, 1
+                    ),
+                    "composite_score": candidate.composite_score,
+                    "score_weights": {
+                        "reviewed_parcel_area": 0.35,
+                        "station_proximity": 0.25,
+                        "nearby_attractions": 0.25,
+                        "district_visitor_demand": 0.15,
+                    },
+                    "context_coverage": list(candidate.context_coverage),
+                    "missing_context": list(candidate.missing_context),
+                    "ranking_basis": [
+                        "reviewed_parcel_area",
+                        "station_proximity",
+                        "nearby_attractions",
+                        "district_visitor_demand",
+                    ],
+                    "anchor_provenance": anchor_provenance,
+                    "limitation": (
+                        "역·관광지 거리는 직선거리이며 승하차량·통행시간이 아닙니다. "
+                        "자치구 방문수요는 개별 필지의 수요를 뜻하지 않습니다."
+                    ),
+                },
+            )
+        )
+
     parcel_features: list[dict[str, object]] = []
     house_features: list[dict[str, object]] = []
-    district_counts: dict[str, int] = {}
+    district_parcel_counts = {name: 0 for name in _WEST_DISTRICTS.values()}
+    district_house_counts = {name: 0 for name in _WEST_DISTRICTS.values()}
     for pnu in sorted(geometry_by_pnu):
         geometry = geometry_by_pnu[pnu]
         evidence = evidence_by_pnu[pnu]
@@ -447,7 +529,8 @@ def _map_data(
             else _WEST_DISTRICTS.get(str(evidence[1]), str(evidence[1]))
         )
         dong_name = str(sources[0][3]) if sources and sources[0][3] else ""
-        district_counts[district_name] = district_counts.get(district_name, 0) + 1
+        district_parcel_counts[district_name] += 1
+        district_house_counts[district_name] += len(sources)
         parcel_features.append(
             _feature(
                 geometry,
@@ -495,17 +578,40 @@ def _map_data(
                 )
             )
 
+    district_candidate_counts = {
+        name: {
+            "contiguous_hubs": 0,
+            "standalone_candidates": 0,
+            "supplemental_candidates": 0,
+        }
+        for name in _WEST_DISTRICTS.values()
+    }
+    for feature in hub_features:
+        for district_name in feature["properties"]["district_names"]:
+            district_candidate_counts[str(district_name)]["contiguous_hubs"] += 1
+    for feature in standalone_features:
+        district_name = str(feature["properties"]["district_name"])
+        district_candidate_counts[district_name]["standalone_candidates"] += 1
+    for feature in bukgu_supplemental_features:
+        district_name = str(feature["properties"]["district_name"])
+        district_candidate_counts[district_name]["supplemental_candidates"] += 1
+
     summary = {
-        "schema_version": "vacant-map-v2",
+        "schema_version": "vacant-map-v3",
         "hub_run_id": str(hub_run_id),
         "inventory_run_id": str(inventory_run_id),
         "source_snapshot_date": snapshot_date,
         "published_date": published_date,
         "candidate_count": len(hub_features),
         "standalone_candidate_count": len(standalone_features),
+        "bukgu_supplemental_candidate_count": len(
+            bukgu_supplemental_features
+        ),
         "distinct_parcel_count": len(parcel_features),
         "exact_location_count": len(house_features),
-        "district_parcel_counts": dict(sorted(district_counts.items())),
+        "district_parcel_counts": dict(sorted(district_parcel_counts.items())),
+        "district_house_counts": dict(sorted(district_house_counts.items())),
+        "district_candidate_counts": dict(sorted(district_candidate_counts.items())),
         "candidate_policy": {
             "scope": "서부산 4개 구",
             "minimum_distinct_pnus": 3,
@@ -521,10 +627,26 @@ def _map_data(
             "maximum_candidates": _STANDALONE_LIMIT,
             "district_quota": False,
         },
+        "bukgu_supplemental_candidate_policy": {
+            "scope": "북구",
+            "candidate_label": "북구 관광·교통 보완검토 후보",
+            "housing_type": "단독주택",
+            "minimum_area_square_metres": _STANDALONE_MINIMUM_AREA,
+            "maximum_candidates": _BUKGU_SUPPLEMENTAL_LIMIT,
+            "excluded_from_global_b_rank": True,
+            "score_weights": {
+                "reviewed_parcel_area": 0.35,
+                "station_proximity": 0.25,
+                "nearby_attractions": 0.25,
+                "district_visitor_demand": 0.15,
+            },
+            "anchor_provenance": anchor_provenance,
+        },
         "context_availability": {
             "district_visitor_demand": district_demand_status,
-            "nearby_attractions": "not_joined",
-            "transport_access": "not_joined",
+            "nearby_attractions": "reviewed_place_proximity_available",
+            "station_proximity": "available",
+            "transport_flow": "not_published",
         },
     }
     return {
@@ -532,6 +654,9 @@ def _map_data(
         "inventory_run_id": inventory_run_id,
         "hubs": _collection(hub_features),
         "standalone_candidates": _collection(standalone_features),
+        "bukgu_supplemental_candidates": _collection(
+            bukgu_supplemental_features
+        ),
         "parcels": _collection(parcel_features),
         "houses": _collection(house_features),
         "summary": summary,
@@ -558,6 +683,9 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
         "standalone-candidates.geojson": _json_bytes(
             data["standalone_candidates"]
         ),
+        "bukgu-supplemental-candidates.geojson": _json_bytes(
+            data["bukgu_supplemental_candidates"]
+        ),
         "parcels.geojson": _json_bytes(data["parcels"]),
         "vacant-houses.geojson": _json_bytes(data["houses"]),
         "summary.json": _json_bytes(summary),
@@ -565,7 +693,7 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
     for name, body in bodies.items():
         (directory / name).write_bytes(body)
     manifest = {
-        "schema_version": "vacant-map-v2",
+        "schema_version": "vacant-map-v3",
         "hub_run_id": str(data["hub_run_id"]),
         "inventory_run_id": str(data["inventory_run_id"]),
         "source_snapshot_date": summary["source_snapshot_date"],

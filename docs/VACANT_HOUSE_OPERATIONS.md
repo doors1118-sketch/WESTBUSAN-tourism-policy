@@ -337,7 +337,7 @@ do not print addresses, PNUs, raw provider payloads, or credentials.
 
 ## 11. Supplemental standalone candidate map
 
-Map schema `vacant-map-v2` preserves the hub publication unchanged and adds a
+Map schema `vacant-map-v3` preserves the hub publication unchanged and adds a
 separate `standalone-candidates.geojson`. This file contains at most six
 non-hub, single-family vacant PNUs in the four West Busan districts whose
 reviewed cadastral area in EPSG:5179 is at least 300 square metres. The 300
@@ -347,13 +347,28 @@ minimum or proof of site feasibility.
 
 The B-type preliminary order uses current district visitor-demand evidence when
 the spatial publication is available, then reviewed parcel area and PNU for
-stable tie-breaking. It has no district quota. Nearby-attraction and transport
-evidence remain `not_joined` until source-backed parcel-level enrichment is
-published. Missing evidence must not be converted to zero. The map therefore
-labels these records `standalone development / lodging-conversion preliminary
-candidates`, not contiguous hubs or final investment priorities.
+stable tie-breaking. It has no district quota. B-type records keep nearby
+attraction and transport evidence as missing; missing evidence must not be
+converted to zero. The map therefore labels these records `standalone
+development / lodging-conversion preliminary candidates`, not contiguous hubs
+or final investment priorities.
 
-Before deploying a v2 bundle verify:
+Schema v3 also adds `bukgu-supplemental-candidates.geojson`. The C-type list is
+an explicitly separate North District supplement, not a republished B-type
+rank. It uses the same non-hub, single-family, reviewed-area threshold and then
+combines reviewed parcel area (35%), straight-line station proximity to Gupo or
+Deokcheon station (25%), straight-line proximity to reviewed North District
+tourism places (25%), and current published district visitor-demand score
+(15%). The station and tourism-place points are pinned VWorld place-search
+results with verification date and CRS in the packaged reference file.
+
+C-type station proximity is not transit ridership, service frequency, network
+travel time, or pedestrian access. Raw public-transport OD observations must
+not enter the score while the current core publication has no transport fact
+membership. District visitor demand is context and does not prove parcel-level
+demand. All C-type rows remain preliminary feasibility-screening candidates.
+
+Before deploying a v3 bundle verify:
 
 - existing A-type hub count, IDs, members, ranks, and geometries are unchanged;
 - every B-type PNU is outside the hub-member set and has only `단독주택` source
@@ -361,6 +376,11 @@ Before deploying a v2 bundle verify:
 - every B-type reviewed projected parcel area is at least 300 square metres;
 - the B-type count is no greater than six and its order is deterministic;
 - `standalone-candidates.geojson` is bound by the manifest hash and byte count;
-  and
-- the UI distinguishes A/B candidates by both label and shape, and states the
-  unjoined tourism-attraction/transport limitations.
+- the C-type count is no greater than five, every row is in North District, and
+  its pinned station/attraction provenance is present;
+- `bukgu-supplemental-candidates.geojson` is bound by the manifest hash and byte
+  count;
+- all four district filters remain visible even when a district has no A/B
+  candidates; and
+- the UI distinguishes the full inventory from A/B/C candidates and states the
+  straight-line distance and unpublished transport-flow limitations.

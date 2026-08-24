@@ -14,18 +14,28 @@ main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: ca
 .map-sidebar>p { margin: 0 0 18px; color: var(--muted); font-size: 12px; line-height: 1.65; }
 .map-sidebar label { display: grid; gap: 6px; font-size: 12px; font-weight: 800; }
 .map-sidebar select { padding: 11px; border: 1px solid #bfcdd9; border-radius: 9px; background: #fff; }
+.inventory-status { margin-top: 14px; padding: 13px; border: 1px solid #cfe0ec; border-radius: 11px; background: #f1f7fb; }
+.inventory-status h3 { margin: 0 0 9px; font-size: 13px; }
+.inventory-status div { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 5px 7px; align-items: baseline; }
+.inventory-status strong { font-size: 16px; }
+.inventory-status span { color: var(--muted); font-size: 10px; }
+.inventory-status p { margin: 9px 0 0; color: #34566f; font-size: 10px; line-height: 1.55; }
+.candidate-heading { margin-top: 20px!important; font-size: 16px!important; }
 .candidate-group { margin-top: 18px; }
 .candidate-group h3 { margin: 0; font-size: 13px; line-height: 1.45; }
 .candidate-group h3 span { display: inline-grid; place-items: center; margin-right: 5px; padding: 2px 6px; border-radius: 6px; background: var(--blue); color: #fff; font-size: 10px; }
 .candidate-group h3 small { color: var(--muted); font-size: 10px; }
 .candidate-group>p { margin: 5px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .standalone-group h3 span { background: var(--gold); }
+.supplemental-group h3 span { background: #6945b5; }
 .candidate-list { display: grid; gap: 8px; margin: 16px 0; padding: 0; list-style: none; }
 .candidate-list button { display: grid; grid-template-columns: 32px 1fr; gap: 10px; width: 100%; padding: 11px; border: 1px solid var(--line); border-radius: 11px; text-align: left; background: #f8fbfd; cursor: pointer; }
 .candidate-list button:hover,.candidate-list button.is-active { border-color: var(--blue); background: #eef5ff; }
 .standalone-group .candidate-list button:hover,.standalone-group .candidate-list button.is-active { border-color: var(--gold); background: #fff8e9; }
+.supplemental-group .candidate-list button:hover,.supplemental-group .candidate-list button.is-active { border-color: #6945b5; background: #f5f1ff; }
 .candidate-list b { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--navy); color: #fff; }
 .standalone-group .candidate-list b { border-radius: 7px; background: var(--gold); }
+.supplemental-group .candidate-list b { background: #6945b5; }
 .candidate-list strong,.candidate-list small { display: block; }
 .candidate-list strong { font-size: 12px; }
 .candidate-list small { margin-top: 3px; color: var(--muted); font-size: 10px; }
@@ -34,6 +44,7 @@ main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: ca
 .legend i { width: 15px; height: 15px; border-radius: 4px; }
 .legend .hub { border: 2px solid var(--blue); background: rgba(20,108,255,.28); }
 .legend .standalone { transform: rotate(45deg) scale(.75); border: 2px solid var(--gold); background: rgba(229,166,31,.38); }
+.legend .supplemental { border: 2px solid #6945b5; background: rgba(122,91,199,.38); }
 .legend .parcel { border: 1px solid #c55d1b; background: rgba(237,125,49,.55); }
 .legend .house { width: 11px; height: 11px; border-radius: 50%; background: var(--red); }
 .map-workspace { padding: 12px; overflow: auto; }
@@ -41,8 +52,10 @@ main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: ca
 .candidate-marker { display: grid!important; place-items: center; border: 2px solid #fff; border-radius: 50%; background: var(--navy); box-shadow: 0 2px 9px rgba(13,46,74,.38); color: #fff; font-size: 13px; font-weight: 900; }
 .standalone-marker { display: grid!important; place-items: center; transform: rotate(45deg); border: 2px solid #fff; border-radius: 7px; background: var(--gold); box-shadow: 0 2px 9px rgba(97,64,0,.38); color: #fff; font-size: 11px; font-weight: 900; }
 .standalone-marker span { transform: rotate(-45deg); }
+.supplemental-marker { display: grid!important; place-items: center; border: 2px solid #fff; border-radius: 50%; background: #6945b5; box-shadow: 0 2px 9px rgba(58,36,107,.4); color: #fff; font-size: 11px; font-weight: 900; }
 .street-detail-mode .candidate-marker { display: none!important; }
 .street-detail-mode .standalone-marker { display: none!important; }
+.street-detail-mode .supplemental-marker { display: none!important; }
 .leaflet-popup-content p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
 .leaflet-control-attribution { font-size: 9px; }
 .zoom-guide { position: absolute; z-index: 800; right: 12px; bottom: 22px; max-width: 360px; padding: 9px 12px; border-radius: 9px; background: rgba(13,46,74,.9); color: #fff; font-size: 11px; }

@@ -305,18 +305,25 @@
 
   function renderGridSummary(node) {
     const name = `${node.dataset.district} ${node.dataset.dong}`;
+    const dongNodes = matchingGrids(node.dataset.district, node.dataset.dong);
+    const dongSum = (key) => dongNodes.reduce(
+      (total, item) => total + (numeric(item, key) || 0), 0,
+    );
     const facilityCount = numeric(node, "mappedFacilityCount") || 0;
     const aged = numeric(node, "agedCount") || 0;
     const known = numeric(node, "ageKnown") || 0;
     const rooms = numeric(node, "roomCount") || 0;
+    const dongFacilityCount = dongSum("mappedFacilityCount");
+    const dongAgedCount = dongSum("agedCount");
+    const dongRoomCount = dongSum("roomCount");
     const gap = numeric(node, "tourismSupplyGap");
     setRegionMetricLabels({
-      first: ["숙박시설 수", "해당 500m 주소 좌표 확인 기준"],
-      second: ["20년 이상 시설", `건축연령 확인 ${formatNumber(known)}개 시설 기준`],
-      third: ["확인 객실", "객실 자료 확인분 합계"],
+      first: ["500m 격자 숙박시설", `${node.dataset.dong} 전체 ${formatNumber(dongFacilityCount)}개`],
+      second: ["500m 격자 노후시설", `${node.dataset.dong} 전체 ${formatNumber(dongAgedCount)}개 · 격자 표본 ${formatNumber(known)}개`],
+      third: ["500m 격자 확인객실", `${node.dataset.dong} 전체 ${formatNumber(dongRoomCount)}실`],
       fourth: ["공급부족도", "방문수요 점수 − 객실공급 점수"],
     });
-    document.getElementById("region-summary-title").textContent = `${name} · 500m 후보지역 상세`;
+    document.getElementById("region-summary-title").textContent = `${name} · 선택 500m 격자 상세`;
     document.getElementById("region-facility-count").textContent = `${formatNumber(facilityCount)}개`;
     document.getElementById("region-aged-count").textContent = `${formatNumber(aged)}개`;
     document.getElementById("region-room-count").textContent = `${formatNumber(rooms)}실`;
@@ -329,7 +336,7 @@
       investment_caution: "공급 확대 신중 검토",
     }[node.dataset.recommendation] || "수요·노후 근거 보완";
     const fundingTracks = fundingTrackLabel(node);
-    document.getElementById("region-summary-text").textContent = `${name}의 500m 분석지역입니다. 시장 신호는 ${action}이며, 지원방식은 ${fundingTracks}입니다. 사업주체·인수 가능성 자료가 없어 확정 배정이 아닌 1차 중복 검토 결과입니다.`;
+    document.getElementById("region-summary-text").textContent = `선택한 500m 격자 내 숙박시설은 ${formatNumber(facilityCount)}개이며, ${node.dataset.dong} 전체는 ${formatNumber(dongFacilityCount)}개입니다. 격자 시장 신호는 ${action}이며, 지원방식은 ${fundingTracks}입니다. 사업주체·인수 가능성 자료가 없어 확정 배정이 아닌 1차 중복 검토 결과입니다.`;
   }
 
   function fundingTrackLabel(node) {

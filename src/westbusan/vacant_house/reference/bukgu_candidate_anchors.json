@@ -1,0 +1,19 @@
+{
+  "schema_version": "bukgu-candidate-anchors-v1",
+  "provider": "국토교통부 VWorld place search",
+  "tourism_name_source": "current core publication related_tourism_destinations membership",
+  "transport_flow_status": "not_published_in_current_core_membership",
+  "verified_date": "2026-08-24",
+  "crs": "EPSG:4326",
+  "distance_method": "WGS84 representative-point haversine straight-line distance",
+  "stations": [
+    {"name": "구포역", "longitude": 128.99738326754374, "latitude": 35.205354449788906},
+    {"name": "덕천역", "longitude": 129.0054188990454, "latitude": 35.21010675550198}
+  ],
+  "attractions": [
+    {"name": "구포시장", "longitude": 129.00375026345608, "latitude": 35.2079535697075},
+    {"name": "화명생태공원", "longitude": 129.0042629468051, "latitude": 35.22793263406856},
+    {"name": "부산어촌민속관", "longitude": 129.00846599909113, "latitude": 35.23377179940546},
+    {"name": "화명수목원", "longitude": 129.04266040043268, "latitude": 35.251011101256374}
+  ]
+}

@@ -302,6 +302,17 @@ def test_metric_layers_use_counts_and_explain_the_supply_gap_formula() -> None:
     assert "facilityDensity" not in rendered
 
 
+def test_grid_detail_distinguishes_one_cell_from_the_whole_dong() -> None:
+    """Catches a 500m cell count being presented as the whole dong total."""
+    rendered = render_map(_map_data())
+
+    assert "500m 격자 숙박시설" in rendered
+    assert "500m 격자 내" in rendered
+    assert "전체 ${formatNumber(dongFacilityCount)}개" in rendered
+    assert "const dongNodes = matchingGrids" in rendered
+    assert "dongFacilityCount" in rendered
+
+
 def test_policy_layer_ranks_dong_and_500m_candidates_not_whole_districts() -> None:
     """Catches district-wide colours being presented as investment locations."""
     rendered = render_map(_map_data())

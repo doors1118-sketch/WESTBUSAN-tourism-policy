@@ -14,12 +14,19 @@
   </header>
   <main>
     <aside class="map-sidebar">
-      <h2>빈집 개발 후보</h2>
-      <p>물리적으로 이어진 거점개발 후보와 일정 규모 이상의 단독개발·숙박전환 예비후보를 분리해 표시합니다.</p>
+      <h2>빈집 현황과 개발후보</h2>
+      <p>자치구별 빈집 전수현황과 별도 기준으로 선별한 개발후보를 분리해 표시합니다.</p>
       <label>자치구<select id="district-filter"><option value="">서부산 전체</option></select></label>
+      <section class="inventory-status" aria-live="polite">
+        <h3>빈집 전수현황</h3>
+        <div><strong id="inventory-house-count">—</strong><span>빈집 위치</span><strong id="inventory-parcel-count">—</strong><span>고유 필지</span></div>
+        <p id="district-candidate-status">서부산 4개 구의 전수현황과 개발후보를 함께 표시합니다.</p>
+      </section>
+      <h2 class="candidate-heading">개발후보</h2>
       <section class="candidate-group"><h3><span>A형</span> 연속필지 거점개발 후보 <small id="hub-candidate-count"></small></h3><p>3개 이상 빈집 필지의 경계 접촉이 확인된 필지군</p><ol id="hub-candidate-list" class="candidate-list"></ol></section>
       <section class="candidate-group standalone-group"><h3><span>B형</span> 단독개발·숙박전환 예비후보 <small id="standalone-candidate-count"></small></h3><p>비연속 단독주택형 빈집 중 검증 지적면적 300㎡ 이상</p><ol id="standalone-candidate-list" class="candidate-list"></ol></section>
-      <div class="legend"><strong>지도 기호</strong><span><i class="hub"></i>A형 연속필지군</span><span><i class="standalone"></i>B형 단일필지 예비후보</span><span><i class="parcel"></i>개별 지적필지</span><span><i class="house"></i>개별 빈집 위치</span></div>
+      <section class="candidate-group supplemental-group"><h3><span>C형</span> 북구 관광·교통 보완후보 <small id="supplemental-candidate-count"></small></h3><p>300㎡ 이상 단독주택형 필지에 역·관광지 거리와 자치구 방문수요를 결합한 별도 예비후보</p><ol id="supplemental-candidate-list" class="candidate-list"></ol></section>
+      <div class="legend"><strong>지도 기호</strong><span><i class="hub"></i>A형 연속필지군</span><span><i class="standalone"></i>B형 단일필지 예비후보</span><span><i class="supplemental"></i>C형 북구 보완후보</span><span><i class="parcel"></i>개별 지적필지</span><span><i class="house"></i>개별 빈집 위치</span></div>
     </aside>
     <section class="map-workspace">
       <div id="vacant-slippy-map" data-map-center="129.035,35.155" data-map-zoom="11"
@@ -38,7 +45,7 @@
         <form id="address-analysis-form"><input name="address" id="address-input" maxlength="160" required placeholder="부산광역시 북구 구포동 123-4"><button type="submit">빈집 거점개발 판정</button></form>
         <div id="address-analysis-result" hidden></div>
       </section>
-      <p class="map-note">A형은 연속필지 거점개발 후보, B형은 단독개발·숙박전환 예비후보입니다. 관광숙박 전환은 소유권·접도·토지이용·건축·소방·주차·위생·사업성을 별도 검토해야 합니다.</p>
+      <p class="map-note">A형은 연속필지 거점개발 후보, B형은 서부산 공통 단독개발 예비후보, C형은 북구 보완검토 후보입니다. C형 역·관광지 거리는 직선거리이며 승하차량·통행시간이 아닙니다. 관광숙박 전환은 소유권·접도·토지이용·건축·소방·주차·위생·사업성을 별도 검토해야 합니다.</p>
     </section>
   </main>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>

@@ -3,7 +3,9 @@
   const mapElement = document.getElementById("vacant-slippy-map");
   const hubCandidateList = document.getElementById("hub-candidate-list");
   const standaloneCandidateList = document.getElementById("standalone-candidate-list");
+  const supplementalCandidateList = document.getElementById("supplemental-candidate-list");
   const districtFilter = document.getElementById("district-filter");
+  const WEST_DISTRICTS = ["강서구", "북구", "사상구", "사하구"];
   const guide = document.getElementById("zoom-guide");
   const map = L.map(mapElement, {
     minZoom: Number(mapElement.dataset.minZoom),
@@ -18,20 +20,25 @@
     attribution: "국토교통부 VWorld",
   }).addTo(map);
 
-  const data = { hubs: [], standalone: [], parcels: [], houses: [] };
+  const data = {
+    hubs: [], standalone: [], supplemental: [], parcels: [], houses: [], summary: null,
+  };
   const layers = {
     hubs: L.layerGroup().addTo(map),
     standalone: L.layerGroup().addTo(map),
+    supplemental: L.layerGroup().addTo(map),
     parcels: L.layerGroup(),
     houses: L.layerGroup(),
   };
   const featureLayers = {
-    hubs: new Map(), standalone: new Map(), parcels: new Map(), houses: new Map(),
+    hubs: new Map(), standalone: new Map(), supplemental: new Map(),
+    parcels: new Map(), houses: new Map(),
   };
   const contextLabels = {
     district_visitor_demand: "자치구 방문수요",
     nearby_attractions: "인근 관광지",
-    transport_access: "교통 접근성",
+    station_proximity: "역 접근성",
+    transport_flow: "교통량",
   };
   let selected = null;
 
@@ -93,6 +100,10 @@
     featureLayers.standalone.forEach((entry, candidateId) => entry.shape.setStyle({
       fillOpacity: isSelected("standalone", candidateId) ? 0.52 : 0.24,
       weight: isSelected("standalone", candidateId) ? 4 : 2,
+    }));
+    featureLayers.supplemental.forEach((entry, candidateId) => entry.shape.setStyle({
+      fillOpacity: isSelected("supplemental", candidateId) ? 0.56 : 0.28,
+      weight: isSelected("supplemental", candidateId) ? 4 : 2,
     }));
   }
   function renderHouseCards(houses) {
@@ -184,6 +195,34 @@
     entry.shape.bringToFront();
     map.fitBounds(entry.shape.getBounds(), { padding: [65, 65], maxZoom: 18 });
   }
+  function selectSupplemental(feature) {
+    const properties = feature.properties;
+    selected = selectionKey("supplemental", properties.candidate_id);
+    updateSelectionStyles();
+    const houses = candidateHouses("supplemental", feature);
+    document.getElementById("detail-title").textContent = (
+      `${properties.district_name} ${properties.dong_name || "단일필지"}`
+    );
+    document.getElementById("detail-summary").textContent = (
+      "북구의 300㎡ 이상 단독주택형 비연속 필지에 역·관광지 접근성과 자치구 방문수요를 결합한 C형 보완검토 후보입니다."
+    );
+    document.getElementById("detail-type").textContent = "C형";
+    document.getElementById("detail-rank").textContent = (
+      `C${properties.preliminary_rank} 예비`
+    );
+    document.getElementById("detail-parcels").textContent = "1필지";
+    document.getElementById("detail-houses").textContent = `${houses.length}개소`;
+    document.getElementById("detail-area").textContent = (
+      `${Math.round(properties.parcel_area).toLocaleString("ko-KR")}㎡`
+    );
+    document.getElementById("detail-evidence").textContent = (
+      `종합점수 ${Number(properties.composite_score).toFixed(1)}점 · ${properties.nearest_station} 직선거리 ${Math.round(properties.station_distance_metres).toLocaleString("ko-KR")}m · ${properties.nearest_attraction} 직선거리 ${Math.round(properties.attraction_distance_metres).toLocaleString("ko-KR")}m · 자치구 방문수요 ${Number(properties.district_demand_score).toFixed(1)}점. ${properties.limitation}`
+    );
+    renderHouseCards(houses);
+    const entry = featureLayers.supplemental.get(properties.candidate_id);
+    entry.shape.bringToFront();
+    map.fitBounds(entry.shape.getBounds(), { padding: [65, 65], maxZoom: 18 });
+  }
   function candidateButton(kind, feature) {
     const properties = feature.properties;
     const isHub = kind === "hub";
@@ -200,30 +239,84 @@
       : `${properties.district_name} ${properties.dong_name || "단일필지"}`;
     const evidence = isHub
       ? `${properties.parcel_count}개 연속필지 · ${Math.round(area).toLocaleString("ko-KR")}㎡`
-      : `단독주택형 · ${Math.round(area).toLocaleString("ko-KR")}㎡ · 예비검토`;
+      : kind === "supplemental"
+        ? `${properties.nearest_station} ${Math.round(properties.station_distance_metres).toLocaleString("ko-KR")}m · ${Math.round(area).toLocaleString("ko-KR")}㎡`
+        : `단독주택형 · ${Math.round(area).toLocaleString("ko-KR")}㎡ · 예비검토`;
     label.append(textElement("strong", place), textElement("small", evidence));
     const markerLabel = isHub
       ? `A${Number(feature.properties.candidate_rank)}`
-      : `B${Number(feature.properties.preliminary_rank)}`;
+      : kind === "supplemental"
+        ? `C${Number(feature.properties.preliminary_rank)}`
+        : `B${Number(feature.properties.preliminary_rank)}`;
     button.append(textElement("b", markerLabel), label);
-    button.addEventListener("click", () => (
-      isHub ? selectHub(feature) : selectStandalone(feature)
-    ));
+    button.addEventListener("click", () => {
+      if (isHub) selectHub(feature);
+      else if (kind === "supplemental") selectSupplemental(feature);
+      else selectStandalone(feature);
+    });
     item.append(button);
     return item;
   }
   function renderCandidates() {
     hubCandidateList.replaceChildren();
     standaloneCandidateList.replaceChildren();
+    supplementalCandidateList.replaceChildren();
     const hubs = data.hubs.filter(featureMatches);
     const standalone = data.standalone.filter(featureMatches);
+    const supplemental = data.supplemental.filter(featureMatches);
     hubs.forEach((feature) => hubCandidateList.append(candidateButton("hub", feature)));
     standalone.forEach((feature) => (
       standaloneCandidateList.append(candidateButton("standalone", feature))
     ));
+    supplemental.forEach((feature) => (
+      supplementalCandidateList.append(candidateButton("supplemental", feature))
+    ));
     document.getElementById("hub-candidate-count").textContent = `${hubs.length}개`;
     document.getElementById("standalone-candidate-count").textContent = (
       `${standalone.length}개`
+    );
+    document.getElementById("supplemental-candidate-count").textContent = (
+      `${supplemental.length}개`
+    );
+    renderInventoryStatus();
+  }
+  function renderInventoryStatus() {
+    if (!data.summary) return;
+    const district = districtFilter.value;
+    const houseCount = district
+      ? data.summary.district_house_counts[district]
+      : data.summary.exact_location_count;
+    const parcelCount = district
+      ? data.summary.district_parcel_counts[district]
+      : data.summary.distinct_parcel_count;
+    document.getElementById("inventory-house-count").textContent = (
+      `${Number(houseCount || 0).toLocaleString("ko-KR")}개소`
+    );
+    document.getElementById("inventory-parcel-count").textContent = (
+      `${Number(parcelCount || 0).toLocaleString("ko-KR")}필지`
+    );
+    const counts = district
+      ? data.summary.district_candidate_counts[district]
+      : {
+        contiguous_hubs: data.summary.candidate_count,
+        standalone_candidates: data.summary.standalone_candidate_count,
+        supplemental_candidates: data.summary.bukgu_supplemental_candidate_count,
+      };
+    const noPrimaryCandidates = (
+      "연속필지 개발후보 0개 / 현재 게시된 단독개발 상위후보 0개"
+    );
+    const primaryStatus = counts.contiguous_hubs === 0
+      && counts.standalone_candidates === 0
+      ? noPrimaryCandidates
+      : `연속필지 개발후보 ${counts.contiguous_hubs}개 / 현재 게시된 단독개발 상위후보 ${counts.standalone_candidates}개`;
+    const supplementStatus = counts.supplemental_candidates
+      ? ` / 북구 보완검토 후보 ${counts.supplemental_candidates}개`
+      : "";
+    const reason = district && counts.contiguous_hubs === 0
+      ? " 연속필지 후보는 3개 이상 지적필지의 경계 접촉 기준을 충족하지 못해 미선정되었습니다."
+      : "";
+    document.getElementById("district-candidate-status").textContent = (
+      `${district || "서부산 전체"}: ${primaryStatus}${supplementStatus}.${reason}`
     );
   }
   function refreshLayers() {
@@ -255,14 +348,31 @@
         feature.properties.candidate_id, { shape, marker },
       );
     });
+    data.supplemental.filter(featureMatches).forEach((feature) => {
+      const shape = L.geoJSON(feature, { style: {
+        color: "#4d2a91", weight: 2, fillColor: "#7a5bc7", fillOpacity: 0.28,
+      } }).on("click", () => selectSupplemental(feature));
+      const marker = L.marker(shape.getBounds().getCenter(), { icon: L.divIcon({
+        className: "supplemental-marker",
+        html: `<span>C${Number(feature.properties.preliminary_rank)}</span>`,
+        iconSize: [38, 38], iconAnchor: [19, 19],
+      }) }).on("click", () => selectSupplemental(feature));
+      shape.addTo(layers.supplemental); marker.addTo(layers.supplemental);
+      featureLayers.supplemental.set(
+        feature.properties.candidate_id, { shape, marker },
+      );
+    });
     data.parcels.filter(featureMatches).forEach((feature) => {
       const standalone = data.standalone.find(
         (item) => item.properties.pnu === feature.properties.pnu,
       );
+      const supplemental = data.supplemental.find(
+        (item) => item.properties.pnu === feature.properties.pnu,
+      );
       const shape = L.geoJSON(feature, { style: {
-        color: standalone ? "#9b6400" : "#a64613",
+        color: supplemental ? "#4d2a91" : standalone ? "#9b6400" : "#a64613",
         weight: 2,
-        fillColor: standalone ? "#e5a61f" : "#ed7d31",
+        fillColor: supplemental ? "#7a5bc7" : standalone ? "#e5a61f" : "#ed7d31",
         fillOpacity: 0.5,
       } });
       shape.on("click", () => {
@@ -270,6 +380,7 @@
           (item) => item.properties.hub_id === feature.properties.hub_id,
         );
         if (hub) selectHub(hub);
+        else if (supplemental) selectSupplemental(supplemental);
         else if (standalone) selectStandalone(standalone);
       });
       shape.addTo(layers.parcels);
@@ -292,27 +403,38 @@
     const zoom = map.getZoom();
     if (!map.hasLayer(layers.hubs)) layers.hubs.addTo(map);
     if (!map.hasLayer(layers.standalone)) layers.standalone.addTo(map);
+    if (!map.hasLayer(layers.supplemental)) layers.supplemental.addTo(map);
     if (zoom >= 14 && !map.hasLayer(layers.parcels)) layers.parcels.addTo(map);
     if (zoom < 14 && map.hasLayer(layers.parcels)) map.removeLayer(layers.parcels);
-    if (zoom >= 17 && !map.hasLayer(layers.houses)) layers.houses.addTo(map);
-    if (zoom < 17 && map.hasLayer(layers.houses)) map.removeLayer(layers.houses);
+    const showHouses = zoom >= 17 || Boolean(districtFilter.value);
+    if (showHouses && !map.hasLayer(layers.houses)) layers.houses.addTo(map);
+    if (!showHouses && map.hasLayer(layers.houses)) map.removeLayer(layers.houses);
+    featureLayers.houses.forEach((marker) => marker.setRadius(zoom >= 17 ? 7 : 4));
     mapElement.classList.toggle("parcel-detail-mode", zoom >= 14);
     mapElement.classList.toggle("street-detail-mode", zoom >= 17);
-    [featureLayers.hubs, featureLayers.standalone].forEach((entries) => {
+    [
+      featureLayers.hubs, featureLayers.standalone, featureLayers.supplemental,
+    ].forEach((entries) => {
       entries.forEach((entry) => {
-        const layer = entries === featureLayers.hubs ? layers.hubs : layers.standalone;
+        const layer = entries === featureLayers.hubs
+          ? layers.hubs
+          : entries === featureLayers.standalone
+            ? layers.standalone
+            : layers.supplemental;
         if (zoom >= 17) layer.removeLayer(entry.marker);
         else if (!layer.hasLayer(entry.marker)) layer.addLayer(entry.marker);
       });
     });
     guide.textContent = zoom >= 17
       ? "개별 빈집 점을 누르면 정확주소·주택유형·건축연도를 확인합니다."
+      : districtFilter.value
+        ? `${districtFilter.value} 빈집 전수 위치를 표시합니다. 확대하면 지적필지 경계를 확인할 수 있습니다.`
       : zoom >= 14
         ? "지적필지 경계가 표시됩니다. 더 확대하면 개별 빈집 위치가 보입니다."
         : "A형 또는 B형 후보를 선택하면 해당 필지로 확대됩니다.";
   }
   function visibleCandidateFeatures() {
-    return [...data.hubs, ...data.standalone].filter(featureMatches);
+    return [...data.hubs, ...data.standalone, ...data.supplemental].filter(featureMatches);
   }
   function fitVisibleCandidates(maxZoom = 12) {
     const visible = visibleCandidateFeatures();
@@ -323,9 +445,21 @@
     }));
     if (bounds.isValid()) map.fitBounds(bounds, { padding: [35, 35], maxZoom });
   }
+  function fitVisibleInventory(maxZoom = 13) {
+    const visible = data.parcels.filter(featureMatches);
+    if (!visible.length) return;
+    const bounds = L.latLngBounds(visible.flatMap((feature) => {
+      const featureBounds = L.geoJSON(feature).getBounds();
+      return [featureBounds.getSouthWest(), featureBounds.getNorthEast()];
+    }));
+    if (bounds.isValid()) map.fitBounds(bounds, { padding: [35, 35], maxZoom });
+  }
   map.on("zoomend", updateLayerVisibility);
   districtFilter.addEventListener("change", () => {
-    selected = null; refreshLayers(); fitVisibleCandidates(13);
+    selected = null;
+    refreshLayers();
+    if (districtFilter.value) fitVisibleInventory(13);
+    else fitVisibleCandidates(12);
   });
   document.getElementById("address-analysis-form").addEventListener(
     "submit",
@@ -358,25 +492,28 @@
     [
       "hubs.geojson",
       "standalone-candidates.geojson",
+      "bukgu-supplemental-candidates.geojson",
       "parcels.geojson",
       "vacant-houses.geojson",
+      "summary.json",
     ].map((url) => fetch(url).then((response) => {
       if (!response.ok) throw new Error("map_data_failed");
       return response.json();
     })),
-  ).then(([hubs, standalone, parcels, houses]) => {
+  ).then(([hubs, standalone, supplemental, parcels, houses, summary]) => {
     data.hubs = hubs.features;
     data.standalone = standalone.features;
+    data.supplemental = supplemental.features;
     data.parcels = parcels.features;
     data.houses = houses.features;
-    [...new Set(visibleCandidateFeatures().flatMap((feature) => (
-      feature.properties.district_names || [feature.properties.district_name]
-    )))].sort().forEach(
+    data.summary = summary;
+    WEST_DISTRICTS.forEach(
       (district) => districtFilter.add(new Option(district, district)),
     );
     refreshLayers(); fitVisibleCandidates(12);
   }).catch(() => {
     hubCandidateList.textContent = "게시 지도자료를 불러오지 못했습니다.";
     standaloneCandidateList.textContent = "게시 지도자료를 불러오지 못했습니다.";
+    supplementalCandidateList.textContent = "게시 지도자료를 불러오지 못했습니다.";
   });
 })();
