@@ -9,13 +9,13 @@
 - 투자정보 지도: `https://busanproduct.co.kr/tourism/map/index.html`
 - 빈집 운영지도: `https://busanproduct.co.kr/tourism/vacant-map/index.html`
 - GitHub 브랜치: `codex/busan-authority-filter`
-- 현재 기능 완료 commit: `1024b05` (`feat(tourism): add workation candidate programme`)
-- 운영 UI release: `/opt/westbusan/dashboard/releases/20260824-workation-v46`
-- 직전 rollback release: `/opt/westbusan/dashboard/releases/20260824-vacant-ab-v45`
+- 현재 기능 완료 commit: `9248e9d` (`fix(spatial): validate ranked map payload`)
+- 운영 UI release: `/opt/westbusan/dashboard/releases/20260824-bukgu-context-v47`
+- 직전 rollback release: `/opt/westbusan/dashboard/releases/20260824-workation-v46`
 - 운영 AI release: `/opt/westbusan-tourism-ai/releases/20260823-consumption-ai-v43b`
-- 빈집 전체 회귀 테스트: 214 passed, Ruff·JavaScript syntax·diff check 통과
-- 운영 회귀: 관광 UI·투자지도·빈집지도·신규 후보 GeoJSON을 포함한 공개 URL 15개 모두 HTTP 200
-- 브라우저 검증: A/B 목록·워크케이션 후보표 5행·행정검토 기준·VWorld 지도 로드 정상
+- 이번 release 회귀 테스트: 관련 unit·integration 62 passed, Ruff·JavaScript syntax·diff check 통과
+- 운영 회귀: 기존 서비스와 관광 UI·투자지도·빈집지도·북구 보완후보 GeoJSON을 포함한 공개 URL 16개 모두 HTTP 200
+- 운영 산출물 검증: 공간·빈집 manifest 유효, 빈집 schema `vacant-map-v3`, 구포동 전체 숙박시설 52개소
 - AI 종합보고서: OpenAI 8개 절·근거 30건 생성 확인, 동일 발행본 재호출 `cached=true`
 
 현재 운영 데이터 기준일은 2026-08-21이고 core 기준일은 2026-08-19이다. 관광
@@ -28,9 +28,13 @@ UI는 종합현황, 서부산 자치구 현황, 동서 공급 격차, 투자정�
 점수, 면적, PNU 순으로 정렬한 단독개발·숙박전환 예비후보 6개이다. 300㎡는
 비거점 단독주택형 빈집의 지적면적 분포에서 약 90백분위(252.9㎡)를 보수적으로
 반올림한 선별선이며 법정·사업성 최소면적이 아니다. 현재 B형 6개는 자치구
-할당 없이 동일 산식을 적용한 결과 모두 강서구에 위치한다.
+할당 없이 동일 산식을 적용한 결과 모두 강서구에 위치한다. 별도 C형은 북구의
+300㎡ 이상 단독주택형 비연속 필지를 대상으로 검토 지적면적 35%, 구포역·덕천역
+직선거리 25%, 검토 관광지 직선거리 25%, 현 발행 자치구 방문수요 15%를 결합한
+보완검토 후보 5개이다. 북구 전수현황 175개소·161필지는 후보 유무와 관계없이
+자치구 선택 시 지도에 표시한다.
 
-빈집 탭은 현재 A·B형 후보를 사업방식별로 묶어 워케이션 개발사업 후보지역과
+빈집 탭은 현재 A·B·C형 후보를 사업방식별로 묶어 워케이션 개발사업 후보지역과
 행정문서형 검토방향 5개 행을 제시한다. 모라동은 복합형 거점, 명지동·동선동·
 죽동동은 독립개발형, 괴정동·감전동은 연속필지 통합개발형, 죽림동·녹산동은
 전환·재생형, 장림동은 인접 필지 추가 확보를 전제로 한 조건부 후보로 구분한다.
@@ -42,8 +46,12 @@ UI는 종합현황, 서부산 자치구 현황, 동서 공급 격차, 투자정�
 시군구 월별 원천의 방문량 대비 관광소비 상대지표이며 원화·점유율·실제 1인당
 지출액이 아니다. 빈집 후보는 소유권·토지이용·구조안전·접도·소방·주차·위생과
 사업성을 확정하지 않으므로 후속 실사가 필요하다. B형에는 인근 관광지와 교통
-접근성 근거가 아직 결합되지 않아 화면에 `자료 미결합`으로 표시한다. B형 번호는
-최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서이다. API 키·SSH 개인키·환경파일은
+접근성 근거가 아직 결합되지 않아 화면에 `자료 미결합`으로 표시한다. C형은 검토
+역·관광지의 직선거리만 결합하며 승하차량·교통량·통행시간은 포함하지 않는다.
+B·C형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서이다.
+투자정보 지도에서 500m 격자 수치는 동 전체 합계가 아니다. 예를 들어 구포동 선택
+격자 `g5174_500_762_380`은 1개소·12실이지만 구포동 전체는 52개소이므로, v47부터
+두 범위를 상세 카드에 함께 표시한다. API 키·SSH 개인키·환경파일은
 Git에 포함하지 않으며 서버 내부의 전용 비밀파일을 사용한다.
 
 대시보드 기능소개 DOCX는
