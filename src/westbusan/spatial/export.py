@@ -23,7 +23,11 @@ import pyarrow as pa
 from pyarrow import parquet
 
 from westbusan.db import Database
-from westbusan.spatial.map import PublicSpatialData, render_map
+from westbusan.spatial.map import (
+    PublicSpatialData,
+    build_public_spatial_payload,
+    render_map,
+)
 from westbusan.spatial.opportunity import OpportunityMetrics, recommend_investment
 from westbusan.spatial.publish import spatial_manifest_is_valid
 
@@ -1143,9 +1147,4 @@ def _embedded_payload_matches(path: Path, public_data: PublicSpatialData) -> boo
         return False
     payload_text = text.split(marker, 1)[1].split("</script>", 1)[0]
     payload = json.loads(payload_text)
-    return payload == {
-        "evidence": list(public_data.evidence),
-        "facilities": public_data.facility_geojson,
-        "grids": public_data.grid_geojson,
-        "metadata": public_data.metadata,
-    }
+    return payload == build_public_spatial_payload(public_data)

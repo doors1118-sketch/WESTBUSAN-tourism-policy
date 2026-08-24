@@ -178,9 +178,9 @@ def _candidate_score(
     return signal * 1000 + (gap or 0.0) * 10 + aged + facilities * 0.1
 
 
-def render_map(bundle_data: PublicSpatialData) -> str:
-    """Render one deterministic, policy-oriented investment opportunity map."""
-    payload = {
+def build_public_spatial_payload(bundle_data: PublicSpatialData) -> dict[str, Any]:
+    """Return the exact JSON payload embedded in the standalone map."""
+    return {
         "candidate_rankings": {
             layer: build_layer_candidate_rankings(
                 list(bundle_data.grid_geojson.get("features", [])),
@@ -193,6 +193,11 @@ def render_map(bundle_data: PublicSpatialData) -> str:
         "grids": bundle_data.grid_geojson,
         "metadata": bundle_data.metadata,
     }
+
+
+def render_map(bundle_data: PublicSpatialData) -> str:
+    """Render one deterministic, policy-oriented investment opportunity map."""
+    payload = build_public_spatial_payload(bundle_data)
     priorities = _district_policy_priorities(bundle_data.metadata)
     svg = _render_svg(
         bundle_data.grid_geojson,
