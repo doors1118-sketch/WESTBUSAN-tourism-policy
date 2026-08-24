@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 ASSET_ROOT = (
@@ -15,6 +16,48 @@ ASSET_ROOT = (
 
 def _asset(name: str) -> str:
     return (ASSET_ROOT / name).read_text(encoding="utf-8")
+
+
+class _WorkationCandidateTableParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self._inside_table = False
+        self._inside_body = False
+        self._inside_cell = False
+        self._cell_parts: list[str] = []
+        self._row: list[str] | None = None
+        self.rows: list[list[str]] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        attributes = dict(attrs)
+        if tag == "table" and "data-workation-candidate-table" in attributes:
+            self._inside_table = True
+        elif self._inside_table and tag == "tbody":
+            self._inside_body = True
+        elif self._inside_body and tag == "tr":
+            self._row = []
+        elif self._row is not None and tag == "td":
+            self._inside_cell = True
+            self._cell_parts = []
+
+    def handle_data(self, data: str) -> None:
+        if self._inside_cell:
+            self._cell_parts.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._inside_cell and tag == "td":
+            assert self._row is not None
+            self._row.append(" ".join("".join(self._cell_parts).split()))
+            self._inside_cell = False
+        elif self._inside_body and tag == "tr" and self._row is not None:
+            self.rows.append(self._row)
+            self._row = None
+        elif self._inside_table and tag == "tbody":
+            self._inside_body = False
+        elif self._inside_table and tag == "table":
+            self._inside_table = False
 
 
 def test_dashboard_exposes_three_decision_questions_and_required_tabs() -> None:
@@ -678,7 +721,58 @@ def test_vacant_house_tab_lazy_loads_exact_internal_map_without_embedding_source
     assert '<iframe src="vacant-map/index.html"' not in html
     assert 'target === "vacant"' in script
     assert "연속 필지군" in html
-    assert "빈집 개발 후보지 10개" in html
+    assert "A형 연속필지 거점개발 후보 4곳" in html
+    assert "B형 단독개발·숙박전환 예비후보 6곳" in html
     assert "주소·지번 분석" in html
     assert "vacantHouses" not in document
     assert "parcel" not in json.dumps(document).lower()
+
+
+def test_vacant_house_tab_exposes_workation_candidate_programme_table() -> None:
+    html = _asset("index.html")
+    parser = _WorkationCandidateTableParser()
+
+    parser.feed(html)
+
+    assert parser.rows == [
+        [
+            "1",
+            "사상구 모라동",
+            "대규모 연속 필지",
+            "숙박·업무·교류 기능을 결합한 복합형 워케이션 거점 우선 검토",
+        ],
+        [
+            "2",
+            "강서구 명지동·동선동·죽동동",
+            "일정 규모 이상의 단독필지",
+            "필지별 독립형 워케이션 숙박·업무시설 개발 검토",
+        ],
+        [
+            "3",
+            "사하구 괴정동·사상구 감전동",
+            "다수의 연속 필지",
+            "연속 필지를 활용한 통합개발 또는 소규모 워케이션 거점 조성 검토",
+        ],
+        [
+            "4",
+            "강서구 죽림동·녹산동",
+            "기존 건축물이 있는 중소규모 필지",
+            "기존 건축물의 리모델링·전환·재생을 통한 워케이션 시설 조성 검토",
+        ],
+        [
+            "5",
+            "사하구 장림동",
+            "개발면적이 협소한 연속 필지",
+            "인접 빈집·유휴부지 추가 확보를 전제로 조건부 추진",
+        ],
+    ]
+    assert "빈집 활용 워케이션 개발사업 후보지역 및 검토방향" in html
+    assert "투자검토 우선지역 선별 결과이며 사업대상지 확정이 아닙니다" in html
+
+
+def test_vacant_house_tab_distinguishes_contiguous_and_standalone_candidates() -> None:
+    html = _asset("index.html")
+
+    assert "A형 연속필지 거점개발 후보 4곳" in html
+    assert "B형 단독개발·숙박전환 예비후보 6곳" in html
+    assert "빈집 개발 후보지 10개" not in html
