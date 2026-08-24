@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 from westbusan.spatial.map import (
     PublicSpatialData,
@@ -128,6 +129,55 @@ def test_map_uses_vworld_basemap_and_policy_opportunity_layers() -> None:
     assert 'data-max-zoom="19"' in rendered
     assert 'id="vworld-basemap"' not in rendered
     assert '/tourism/api/vworld/base.png' not in rendered
+
+
+def test_map_exposes_transport_and_tourism_context_layers() -> None:
+    data = replace(
+        _map_data(),
+        access_context={
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "id": "transport:2026-06:2632010500",
+                    "geometry": None,
+                    "properties": {
+                        "kind": "transport_dong",
+                        "period": "2026-06",
+                        "district_name": "북구",
+                        "dong_code": "2632010500",
+                        "dong_name": "구포동",
+                        "inbound_other_dong": 150,
+                        "inbound_other_district": 90,
+                        "unit": "passengers",
+                    },
+                },
+                {
+                    "type": "Feature",
+                    "id": "poi:126848",
+                    "geometry": {"type": "Point", "coordinates": [129.0, 35.2]},
+                    "properties": {
+                        "kind": "tourism_poi",
+                        "title": "구포시장",
+                        "district_name": "북구",
+                        "dong_name": "구포동",
+                    },
+                },
+            ],
+        },
+    )
+
+    rendered = render_map(data)
+
+    assert 'data-layer="transport_inflow"' in rendered
+    assert 'data-layer="tourism_poi"' in rendered
+    assert 'class="tourism-poi-marker"' in rendered
+    assert "대중교통 유입량은 관광객 수가 아닙니다" in rendered
+    payload = json.loads(
+        rendered.split('<script id="bundle-data" type="application/json">', 1)[1]
+        .split("</script>", 1)[0]
+    )
+    assert payload["access_context"] == data.access_context
     assert "VWORLD_API_KEY" not in rendered
     assert 'data-layer="tourism_supply_gap"' in rendered
     assert 'data-layer="facility_density"' in rendered

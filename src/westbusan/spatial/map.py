@@ -6,7 +6,7 @@ import html
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.resources import files
 from typing import Any
 
@@ -31,6 +31,9 @@ class PublicSpatialData:
     facility_geojson: Mapping[str, Any]
     evidence: Sequence[Mapping[str, Any]]
     metadata: Mapping[str, Any]
+    access_context: Mapping[str, Any] = field(
+        default_factory=lambda: {"type": "FeatureCollection", "features": []}
+    )
 
 
 def build_policy_candidate_rankings(
@@ -192,6 +195,7 @@ def build_public_spatial_payload(bundle_data: PublicSpatialData) -> dict[str, An
         "facilities": bundle_data.facility_geojson,
         "grids": bundle_data.grid_geojson,
         "metadata": bundle_data.metadata,
+        "access_context": bundle_data.access_context,
     }
 
 
@@ -203,6 +207,7 @@ def render_map(bundle_data: PublicSpatialData) -> str:
         bundle_data.grid_geojson,
         bundle_data.facility_geojson,
         priorities,
+        bundle_data.access_context,
     )
     package = files("westbusan.spatial")
     template = (
@@ -237,9 +242,18 @@ def _render_svg(
     grids: Mapping[str, Any],
     facilities: Mapping[str, Any],
     priorities: Sequence[Mapping[str, Any]],
+    access_context: Mapping[str, Any],
 ) -> str:
     grid_features = list(grids.get("features", []))
     facility_features = list(facilities.get("features", []))
+    access_features = list(access_context.get("features", []))
+    transport_by_dong = {
+        str(item.get("properties", {}).get("dong_code") or ""): item.get(
+            "properties", {}
+        )
+        for item in access_features
+        if item.get("properties", {}).get("kind") == "transport_dong"
+    }
     candidate_rankings = build_policy_candidate_rankings(grid_features)
     policy_by_district = {
         str(item["name"]): (
@@ -269,6 +283,8 @@ def _render_svg(
         district = str(properties.get("district_name", ""))
         dong = str(properties.get("primary_dong_name", ""))
         grid_key = str(properties.get("grid_id", ""))
+        dong_code = str(properties.get("primary_dong_code") or "")
+        transport = transport_by_dong.get(dong_code, {})
         policy_kind = policy_by_district.get(district, ("", 0, ""))[0]
         default_rank = candidate_rankings["default"].get(grid_key, "")
         district_rank = candidate_rankings["district"].get(district, {}).get(
@@ -299,6 +315,7 @@ def _render_svg(
             'data-aged-count="{aged_count}" data-age-known="{age_known}" '
             'data-room-count="{room_count}" data-room-coverage="{room_coverage}" '
             'data-demand-score="{demand_score}" data-supply-score="{supply_score}" '
+            'data-transport-inbound="{transport_inbound}" '
             'data-default-rank="{default_rank}" data-district-rank="{district_rank}" '
             'data-dong-rank="{dong_rank}" '
             'data-map-bounds="{min_x:.3f},{min_y:.3f},{max_x:.3f},{max_y:.3f}" '
@@ -327,6 +344,10 @@ def _render_svg(
                 room_coverage=_attribute(properties.get("room_coverage")),
                 demand_score=_attribute(properties.get("demand_context_score")),
                 supply_score=_attribute(properties.get("room_supply_score")),
+                transport_inbound=_attribute(
+                    transport.get("inbound_other_district")
+                    or transport.get("inbound_other_dong")
+                ),
                 default_rank=_attribute(default_rank),
                 district_rank=_attribute(district_rank),
                 dong_rank=_attribute(dong_rank),
@@ -445,6 +466,41 @@ def _render_svg(
                 ),
             )
         )
+    poi_markers: list[str] = []
+    for feature in access_features:
+        properties = feature.get("properties", {})
+        geometry = feature.get("geometry") or {}
+        if properties.get("kind") != "tourism_poi" or geometry.get("type") != "Point":
+            continue
+        coordinates = geometry.get("coordinates") or []
+        if len(coordinates) != 2:
+            continue
+        x, y = project(coordinates)
+        poi_markers.append(
+            '<circle class="tourism-poi-marker" cx="{x:.3f}" cy="{y:.3f}" '
+            'r="5" data-base-radius="5" data-district="{district}" '
+            'data-dong="{dong}" data-title="{poi_title}" tabindex="0" '
+            'role="button" aria-label="{label}"><title>{title}</title></circle>'.format(
+                x=x,
+                y=y,
+                district=_attribute(properties.get("district_name")),
+                dong=_attribute(properties.get("dong_name")),
+                poi_title=_attribute(properties.get("title")),
+                label=_attribute(f"관광지 {properties.get('title') or ''}"),
+                title=html.escape(
+                    " · ".join(
+                        filter(
+                            None,
+                            (
+                                str(properties.get("title") or "관광지"),
+                                str(properties.get("district_name") or ""),
+                                str(properties.get("dong_name") or ""),
+                            ),
+                        )
+                    )
+                ),
+            )
+        )
     return (
         '<svg id="spatial-map" viewBox="0 0 1000 700" '
         'data-map-center="129.075,35.18" data-map-zoom="10" '
@@ -452,6 +508,9 @@ def _render_svg(
         '<g id="map-viewport">'
         + "".join(paths)
         + '<g id="candidate-markers"></g>'
+        + '<g id="tourism-poi-markers">'
+        + "".join(poi_markers)
+        + "</g>"
         + "".join(clusters)
         + "".join(circles)
         + "</g></svg>"

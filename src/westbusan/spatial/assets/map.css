@@ -57,6 +57,10 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .grid-feature:hover, .grid-feature:focus { stroke: #102a43 !important; stroke-width: 2.4 !important; outline: none; }
 .grid-feature.is-selected { stroke: #0057d9 !important; stroke-width: 3.2 !important; fill-opacity: .9 !important; }
 .facility-feature, .facility-cluster { display: none; }
+.tourism-poi-marker { display: none; fill: #0f8b8d; stroke: #fff; stroke-width: 2; cursor: pointer; vector-effect: non-scaling-stroke; }
+.tourism-poi-layer .tourism-poi-marker:not(.is-filtered) { display: block; }
+.tourism-poi-marker:hover, .tourism-poi-marker:focus { fill: #c53b2d; stroke: #102a43; outline: none; }
+.access-disclaimer { margin: -6px 0 14px; padding: 9px 10px; border-left: 3px solid #0f8b8d; background: #f4f8f8; color: #52616a; font-size: .72rem; line-height: 1.45; }
 .facility-feature { stroke: #fff; stroke-width: .9; fill: #102a43; fill-opacity: .78; vector-effect: non-scaling-stroke; }
 .facility-layer.detail-mode .facility-feature:not(.is-filtered) { display: block; }
 .facility-layer .facility-cluster:not(.is-filtered) { display: block; }

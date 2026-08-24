@@ -213,6 +213,7 @@ def test_spatial_bundle_has_exact_files_schemas_counts_and_hashes(
     assert {path.name for path in bundle.paths} == {
         "grid_500m.geojson",
         "facility_priority.geojson",
+        "access_context.geojson",
         "grid_priority.csv",
         "facility_priority.csv",
         "spatial_evidence.parquet",
@@ -279,6 +280,62 @@ def test_spatial_bundle_has_exact_files_schemas_counts_and_hashes(
         "quality_band",
         "evidence_json",
     ]
+
+
+def test_spatial_bundle_contains_matching_access_snapshot(tmp_path: Path) -> None:
+    db, settings, spatial_run_id = _published_fixture(tmp_path)
+    core_run_id = db.scalar(
+        "select base_published_run_id from spatial_run where spatial_run_id = ?",
+        [spatial_run_id],
+    )
+    published_at = db.scalar(
+        "select published_at from spatial_publication_current where publication_key='current'"
+    )
+    snapshot_id = uuid4()
+    db.connection.execute(
+        """insert into accessibility_snapshot (
+               snapshot_id, core_run_id, spatial_run_id, business_date, status,
+               transport_status, tourism_status, transport_observation_count,
+               transport_dong_month_count, tourism_poi_count, started_at, completed_at
+           ) values (?, ?, ?, '2026-08-17', 'COMPLETED', 'available', 'available',
+                     1, 1, 1, ?, ?)""",
+        [snapshot_id, core_run_id, spatial_run_id, published_at, published_at],
+    )
+    db.connection.execute(
+        """insert into mart_transport_dong_month values (
+               ?, '2026-06', '26320', '북구', '2632010500', '구포동',
+               150, 90, 40, 110, 1, 'passengers', 'public_transport_od_usage',
+               '2026-06', '{"scope":"destination_dong"}')""",
+        [snapshot_id],
+    )
+    db.connection.execute(
+        """insert into dim_tourism_poi_snapshot values (
+               ?, '126848', '구포시장', 'A04', '쇼핑', '26320', '북구',
+               '2632010500', '구포동', 129.0028, 35.2054,
+               'tourism_poi_area', '2026-08-25', '{"review":"accepted"}')""",
+        [snapshot_id],
+    )
+    db.connection.execute(
+        """insert into accessibility_completion_manifest values (
+               ?, ?, ?, '2026-08-17', 1, 1, 0, 0, 'fixture', ?)""",
+        [snapshot_id, core_run_id, spatial_run_id, published_at],
+    )
+    db.connection.execute(
+        """insert into accessibility_publication_current values
+               ('current', ?, '2026-08-17', ?)""",
+        [snapshot_id, published_at],
+    )
+
+    bundle = export_spatial_current(db, settings.data_dir, EXPORT_DATE)
+    manifest = json.loads(bundle.manifest.read_text(encoding="utf-8"))
+    context = json.loads(bundle.access_context_geojson.read_text(encoding="utf-8"))
+
+    assert manifest["access_snapshot_id"] == str(snapshot_id)
+    assert manifest["files"]["access_context.geojson"]["row_count"] == 2
+    assert {feature["properties"]["kind"] for feature in context["features"]} == {
+        "tourism_poi",
+        "transport_dong",
+    }
 
 
 def test_opportunity_density_uses_reviewed_points_when_stock_is_unobserved(

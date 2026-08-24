@@ -13,7 +13,8 @@
   const facilities = [...document.querySelectorAll(".facility-feature")];
   const clusters = [...document.querySelectorAll(".facility-cluster")];
   const policyLabels = [...document.querySelectorAll(".district-policy-label")];
-  const filterable = [...grids, ...facilities, ...clusters, ...policyLabels];
+  const tourismPois = [...document.querySelectorAll(".tourism-poi-marker")];
+  const filterable = [...grids, ...facilities, ...clusters, ...policyLabels, ...tourismPois];
   const westDistricts = new Set(["강서구", "사하구", "북구", "사상구"]);
   const eastDistricts = new Set(["해운대구", "수영구", "기장군"]);
   const filters = {
@@ -104,6 +105,7 @@
       node.setAttribute("transform", `translate(${node.dataset.x} ${node.dataset.y}) scale(${inverse})`);
     });
     facilities.forEach((node) => node.setAttribute("r", String(Number(node.dataset.baseRadius || 3) * inverse)));
+    tourismPois.forEach((node) => node.setAttribute("r", String(Number(node.dataset.baseRadius || 5) * inverse)));
     document.body.classList.toggle("detail-mode", mapState.zoom >= 15);
   }
 
@@ -204,6 +206,7 @@
       if (Number(node.dataset.ageKnown || 0) <= 0) return Number.NaN;
       raw = node.dataset.agedCount;
     }
+    if (activeLayer === "transport_inflow") raw = node.dataset.transportInbound;
     return raw === undefined || raw === "" ? Number.NaN : Number(raw);
   }
 
@@ -229,7 +232,8 @@
   function setLayerEncoding() {
     document.body.classList.toggle("policy-layer", activeLayer === "policy_priority");
     document.body.classList.toggle("facility-layer", activeLayer === "facility_locations");
-    document.body.classList.toggle("candidate-layer", activeLayer !== "facility_locations");
+    document.body.classList.toggle("tourism-poi-layer", activeLayer === "tourism_poi");
+    document.body.classList.toggle("candidate-layer", !["facility_locations", "tourism_poi"].includes(activeLayer));
     document.body.dataset.activeLayer = activeLayer;
     grids.forEach((node) => {
       if (activeLayer === "policy_priority") {
@@ -238,7 +242,7 @@
         node.style.stroke = node.dataset.recommendation === "new_supply" ? "#0b3c5d" : node.dataset.recommendation === "remodel" ? "#7a3e00" : "#4f5963";
         node.style.strokeWidth = node.dataset.recommendation ? "1.2" : ".4";
         node.style.strokeDasharray = node.dataset.recommendation === "remodel" ? "4 2" : node.dataset.recommendation ? "" : "2 3";
-      } else if (activeLayer === "facility_locations") {
+      } else if (["facility_locations", "tourism_poi"].includes(activeLayer)) {
         node.style.fill = "#ffffff";
         node.style.fillOpacity = ".012";
         node.style.stroke = "";
@@ -259,6 +263,8 @@
       facility_density: "500m 안의 주소 확인 숙박시설 수입니다. 진한 지역을 클릭하면 정확한 개수와 객실·노후 표본을 확인합니다.",
       aged_facilities: "500m 안의 20년 이상 숙박시설 수입니다. 색상 영역을 클릭하면 건물연수 확인 표본을 함께 표시합니다.",
       facility_locations: "숙박시설 위치입니다. 15레벨 이상 확대하면 묶음 대신 개별 시설점을 표시합니다.",
+      transport_inflow: "목적지가 해당 읍면동인 타 자치구 대중교통 통행량입니다. 관광객 수가 아니며 통행 목적과 중복 이용자를 구분하지 못합니다.",
+      tourism_poi: "공식 관광정보 API에서 검토된 관광지 위치입니다. 관광지 점을 선택하면 명칭과 행정구역을 확인합니다.",
     };
     document.getElementById("layer-explainer").textContent = explanations[activeLayer];
     const legends = {
@@ -267,6 +273,8 @@
       facility_density: [["#6f1d91", "20개 이상"], ["#1769aa", "8–19개"], ["#168b89", "3–7개"], ["#d99b16", "1–2개"]],
       aged_facilities: [["#7f0000", "20년 이상 10개+"], ["#d1495b", "5–9개"], ["#e67e22", "2–4개"], ["#e5b839", "1개"]],
       facility_locations: [["#0d3b59", "저배율 · 읍면동 묶음"], ["#496173", "15레벨+ · 개별 시설"]],
+      transport_inflow: [["#8e0152", "유입량 상위"], ["#d95f02", "유입량 중상위"], ["#e6b800", "유입량 중하위"], ["#2b83ba", "유입량 하위"]],
+      tourism_poi: [["#0f8b8d", "공식 관광지 위치"]],
     };
     setLegend(legends[activeLayer]);
   }
@@ -640,6 +648,11 @@
   facilities.forEach((node) => node.addEventListener("click", (event) => {
     event.stopPropagation();
     renderFacilitySummary(node);
+  }));
+  tourismPois.forEach((node) => node.addEventListener("click", (event) => {
+    event.stopPropagation();
+    document.getElementById("region-summary-title").textContent = `${node.dataset.title || "관광지"} · 관광지 상세`;
+    document.getElementById("region-summary-text").textContent = `${node.dataset.district || "-"} ${node.dataset.dong || ""} · 숙박 투자 검토 시 인근 관광수요 유발시설로 참고하며 실제 방문량은 별도 확인이 필요합니다.`;
   }));
   filters.district.addEventListener("change", () => {
     refreshDongOptions();

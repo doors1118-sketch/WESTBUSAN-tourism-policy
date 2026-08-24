@@ -31,10 +31,11 @@ from westbusan.spatial.map import (
 from westbusan.spatial.opportunity import OpportunityMetrics, recommend_investment
 from westbusan.spatial.publish import spatial_manifest_is_valid
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _FILE_NAMES = (
     "grid_500m.geojson",
     "facility_priority.geojson",
+    "access_context.geojson",
     "grid_priority.csv",
     "facility_priority.csv",
     "spatial_evidence.parquet",
@@ -212,6 +213,10 @@ class SpatialExportBundle:
         return self.directory / "facility_priority.geojson"
 
     @property
+    def access_context_geojson(self) -> Path:
+        return self.directory / "access_context.geojson"
+
+    @property
     def grid_csv(self) -> Path:
         return self.directory / "grid_priority.csv"
 
@@ -246,6 +251,7 @@ class _PublicationIdentity:
     published_at: datetime
     table_counts: Mapping[str, int]
     table_digests: Mapping[str, str]
+    access_snapshot_id: UUID | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -446,6 +452,9 @@ def _load_current_identity(db: Database) -> _PublicationIdentity:
     )
     if len(boundary_rows) != 1:
         raise SpatialExportError("current spatial publication boundary is invalid")
+    access_snapshot_id = _load_current_access_snapshot_id(
+        db, run_id, run[0], pointer_date
+    )
     return _PublicationIdentity(
         spatial_run_id=run_id,
         base_run_id=run[0],
@@ -459,7 +468,54 @@ def _load_current_identity(db: Database) -> _PublicationIdentity:
         published_at=pointer_time,
         table_counts=counts,
         table_digests=digests,
+        access_snapshot_id=access_snapshot_id,
     )
+
+
+def _load_current_access_snapshot_id(
+    db: Database,
+    spatial_run_id: UUID,
+    core_run_id: UUID,
+    business_date: date,
+) -> UUID | None:
+    rows = db.query(
+        """select snapshot.snapshot_id,
+                  manifest.transport_row_count, manifest.tourism_poi_count
+           from accessibility_publication_current as pointer
+           join accessibility_snapshot as snapshot
+             on snapshot.snapshot_id = pointer.snapshot_id
+           join accessibility_completion_manifest as manifest
+             on manifest.snapshot_id = snapshot.snapshot_id
+           where pointer.publication_key = 'current'
+             and pointer.business_date = ?
+             and snapshot.status = 'COMPLETED'
+             and snapshot.spatial_run_id = ?
+             and snapshot.core_run_id = ?
+             and snapshot.business_date = ?
+             and manifest.spatial_run_id = snapshot.spatial_run_id
+             and manifest.core_run_id = snapshot.core_run_id
+             and manifest.business_date = snapshot.business_date""",
+        [business_date, spatial_run_id, core_run_id, business_date],
+    )
+    if not rows:
+        return None
+    if len(rows) != 1:
+        raise SpatialExportError("current accessibility publication is ambiguous")
+    snapshot_id, transport_count, tourism_count = rows[0]
+    actual_transport = db.scalar(
+        "select count(*) from mart_transport_dong_month where snapshot_id = ?",
+        [snapshot_id],
+    )
+    actual_tourism = db.scalar(
+        "select count(*) from dim_tourism_poi_snapshot where snapshot_id = ?",
+        [snapshot_id],
+    )
+    if (int(transport_count), int(tourism_count)) != (
+        int(actual_transport),
+        int(actual_tourism),
+    ):
+        raise SpatialExportError("current accessibility publication counts are invalid")
+    return snapshot_id
 
 
 def _build_artifacts(
@@ -468,6 +524,7 @@ def _build_artifacts(
     grids = _load_grids(db, identity)
     facilities, facility_keys = _load_facilities(db, identity)
     evidence = _load_evidence(db, identity, facility_keys, grids)
+    access_context = _load_access_context(db, identity)
     grid_collection = {
         "type": "FeatureCollection",
         "features": [
@@ -502,11 +559,17 @@ def _build_artifacts(
         grid_geojson=grid_collection,
         facility_geojson=facility_collection,
         evidence=tuple(evidence),
+        access_context=access_context,
         metadata={
             "boundary_source_organization": identity.boundary_source_organization,
             "boundary_version": identity.boundary_version,
             "business_date": identity.business_date.isoformat(),
             "policy_version": identity.policy_version,
+            "access_snapshot_id": (
+                str(identity.access_snapshot_id)
+                if identity.access_snapshot_id is not None
+                else None
+            ),
         },
     )
     evidence_table = _evidence_table(evidence)
@@ -518,6 +581,11 @@ def _build_artifacts(
             _json_bytes(facility_collection),
             len(facilities),
             _schema(_FACILITY_FIELDS),
+        ),
+        "access_context.geojson": _Artifact(
+            _json_bytes(access_context),
+            len(access_context["features"]),
+            "access-context-v1",
         ),
         "grid_priority.csv": _Artifact(
             _csv_bytes(grids, _GRID_FIELDS), len(grids), _schema(_GRID_FIELDS)
@@ -558,6 +626,8 @@ def _load_grids(
             [identity.spatial_run_id],
         )
     }
+
+
     rows = db.query(
         """select mart.grid_id, mart.district_code, mart.district_name,
                   mart.primary_dong_code, mart.primary_dong_name, mart.period,
@@ -698,6 +768,77 @@ def _load_grids(
         )
         values["opportunity_scope"] = "500m_grid_with_district_demand_context"
     return result
+
+
+def _load_access_context(
+    db: Database, identity: _PublicationIdentity
+) -> dict[str, Any]:
+    features: list[dict[str, Any]] = []
+    snapshot_id = identity.access_snapshot_id
+    if snapshot_id is None:
+        return {"type": "FeatureCollection", "features": features}
+    for row in db.query(
+        """select period, destination_district_code, destination_district_name,
+                  destination_dong_code, destination_dong_name,
+                  inbound_other_dong, inbound_other_district, unit, source_period
+           from mart_transport_dong_month where snapshot_id = ?
+           order by period, destination_district_code, destination_dong_code""",
+        [snapshot_id],
+    ):
+        features.append(
+            {
+                "type": "Feature",
+                "id": f"transport:{row[0]}:{row[3]}",
+                "geometry": None,
+                "properties": {
+                    "kind": "transport_dong",
+                    "period": str(row[0]),
+                    "district_code": str(row[1]),
+                    "district_name": str(row[2]),
+                    "dong_code": str(row[3]),
+                    "dong_name": str(row[4]),
+                    "inbound_other_dong": float(row[5]),
+                    "inbound_other_district": float(row[6]),
+                    "unit": str(row[7]),
+                    "source_id": "public_transport_od_usage",
+                    "source_period": str(row[8]),
+                    "interpretation": "대중교통 이용 건수이며 고유 방문객 수가 아님",
+                },
+            }
+        )
+    for row in db.query(
+        """select content_id, title, category_code, category_name,
+                  district_code, district_name, dong_code, dong_name,
+                  longitude, latitude, source_period
+           from dim_tourism_poi_snapshot where snapshot_id = ?
+           order by content_id""",
+        [snapshot_id],
+    ):
+        features.append(
+            {
+                "type": "Feature",
+                "id": f"poi:{row[0]}",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [float(row[8]), float(row[9])],
+                },
+                "properties": {
+                    "kind": "tourism_poi",
+                    "content_id": str(row[0]),
+                    "title": str(row[1]),
+                    "category_code": str(row[2] or ""),
+                    "category_name": str(row[3] or ""),
+                    "district_code": str(row[4] or ""),
+                    "district_name": str(row[5] or ""),
+                    "dong_code": str(row[6] or ""),
+                    "dong_name": str(row[7] or ""),
+                    "source_id": "tourism_poi_area",
+                    "source_period": str(row[10]),
+                    "interpretation": "공식 관광정보 위치",
+                },
+            }
+        )
+    return {"type": "FeatureCollection", "features": features}
 
 
 def _district_demand_scores(
@@ -967,6 +1108,11 @@ def _manifest(
         },
         "policy_version": identity.policy_version,
         "published_spatial_run_id": str(identity.spatial_run_id),
+        "access_snapshot_id": (
+            str(identity.access_snapshot_id)
+            if identity.access_snapshot_id is not None
+            else None
+        ),
         "schema_version": _SCHEMA_VERSION,
     }
 
