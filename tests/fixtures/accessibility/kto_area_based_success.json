@@ -1,0 +1,27 @@
+{
+  "response": {
+    "header": {"resultCode": "0000", "resultMsg": "OK"},
+    "body": {
+      "items": {
+        "item": [
+          {
+            "contentid": "126848",
+            "title": "구포시장",
+            "contenttypeid": "38",
+            "cat1": "A04",
+            "cat2": "A0401",
+            "cat3": "A04010200",
+            "addr1": "부산광역시 북구 구포시장길 1",
+            "addr2": "구포동",
+            "mapx": "129.0028",
+            "mapy": "35.2054",
+            "modifiedtime": "20260825090000"
+          }
+        ]
+      },
+      "numOfRows": 1000,
+      "pageNo": 1,
+      "totalCount": 1
+    }
+  }
+}

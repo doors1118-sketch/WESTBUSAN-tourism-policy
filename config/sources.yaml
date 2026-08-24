@@ -178,6 +178,23 @@ sources:
       dptre_sgg_cd: ["26380", "26110", "26140", "26170", "26200", "26230", "26260", "26290", "26320", "26350", "26410", "26440", "26470", "26500", "26530", "26710"]
       arvl_sgg_cd: ["26440", "26110", "26140", "26170", "26200", "26230", "26260", "26290", "26320", "26350", "26380", "26410", "26470", "26500", "26530", "26710"]
     inspection_required: true
+
+  # Official KTO tourism-place points. Credentials stay in the server-side
+  # collector; public bundles contain reviewed point fields only.
+  - source_id: tourism_poi_area
+    url: https://apis.data.go.kr/B551011/KorService2
+    operation: areaBasedList2
+    group: tourism_accessibility
+    cadence: monthly
+    page_size: 1000
+    format_parameter: _type
+    format_value: json
+    response_row_path: response.body.items.item
+    required_parameters:
+      areaCode: "6"
+      MobileOS: ETC
+      MobileApp: WestBusanPolicy
+    credential_env: KTO_SERVICE_KEY
   - source_id: busan_metro_odcloud_discovery
     url: https://api.odcloud.kr/api/3057229/v1
     portal_detail_url: https://www.data.go.kr/data/3057229/fileData.do

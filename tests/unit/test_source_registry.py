@@ -118,6 +118,22 @@ def test_registry_pins_server_only_vworld_address_geocode_contract() -> None:
     assert source.credential_env == "VWORLD_API_KEY"
 
 
+def test_registry_pins_official_kto_poi_contract() -> None:
+    """Catches public POI layers drifting to an unreviewed or client-side source."""
+    source = SourceRegistry.load(Path("config/sources.yaml")).get("tourism_poi_area")
+
+    assert source.url == "https://apis.data.go.kr/B551011/KorService2"
+    assert source.operation == "areaBasedList2"
+    assert source.cadence == "monthly"
+    assert source.page_size == 1000
+    assert source.credential_env == "KTO_SERVICE_KEY"
+    assert source.required_parameters == {
+        "areaCode": "6",
+        "MobileOS": "ETC",
+        "MobileApp": "WestBusanPolicy",
+    }
+
+
 def test_registry_loads_source_metadata_from_fixture() -> None:
     registry = SourceRegistry.load(Path("tests/fixtures/sources.yaml"))
     source = registry.get("ready_source")
