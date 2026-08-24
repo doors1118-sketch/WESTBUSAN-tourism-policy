@@ -103,6 +103,27 @@ def test_missing_demand_is_explicit_and_uses_area_as_deterministic_fallback() ->
     )
 
 
+def test_selector_accepts_reviewed_source_single_family_alias_only() -> None:
+    """Catches the production ``단독`` value being dropped or broadened to multiunit."""
+    cadastral = (
+        _cadastral("SOURCE-SINGLE", "26380", 128.9000, size=0.00035),
+        _cadastral("MULTIUNIT", "26380", 128.9100, size=0.00035),
+    )
+    inventory = {
+        "SOURCE-SINGLE": _inventory("SOURCE-SINGLE", "26380", ("단독",)),
+        "MULTIUNIT": _inventory("MULTIUNIT", "26380", ("다가구",)),
+    }
+
+    candidates = build_standalone_candidates(
+        cadastral,
+        inventory,
+        excluded_pnus=set(),
+        district_demand_scores={"26380": 50.0},
+    )
+
+    assert [item.pnu for item in candidates] == ["SOURCE-SINGLE"]
+
+
 def _cadastral(
     pnu: str,
     district_code: str,

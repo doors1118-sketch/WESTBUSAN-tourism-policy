@@ -18,7 +18,7 @@ from westbusan.vacant_house.hub_models import (
 )
 
 _WEST_BUSAN_DISTRICTS = frozenset({"26320", "26380", "26440", "26530"})
-_SINGLE_FAMILY_TYPES = frozenset({"단독주택"})
+_SINGLE_FAMILY_TYPES = frozenset({"단독", "단독주택"})
 _TO_METRES = Transformer.from_crs("EPSG:4326", "EPSG:5179", always_xy=True)
 
 
