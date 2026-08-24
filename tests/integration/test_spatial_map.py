@@ -220,6 +220,15 @@ def test_supply_gap_is_applied_without_selecting_a_filter() -> None:
     assert "숙박투자 v1" in rendered
 
 
+def test_existing_facility_candidate_exposes_both_funding_tracks_without_actor_data() -> None:
+    """Catches aged assets being limited to incumbent-owner improvements only."""
+    rendered = render_map(_map_data())
+
+    assert 'data-funding-tracks="track1,track2"' in rendered
+    assert "Track 1 민간투자 촉진형 · Track 2 기존시설 개선형" in rendered
+    assert "사업주체 자료가 없어 두 트랙을 중복 검토" in rendered
+
+
 def test_layer_controls_change_grid_encoding() -> None:
     """Catches visible layer buttons that do not update the mapped metric."""
     rendered = render_map(_map_data())

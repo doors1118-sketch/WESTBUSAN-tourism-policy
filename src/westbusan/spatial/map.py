@@ -272,6 +272,12 @@ def _render_svg(
         dong_rank = candidate_rankings["dong"].get(f"{district}|{dong}", {}).get(
             grid_key, ""
         )
+        mapped_facility_count = (
+            _optional_number(properties.get("mapped_facility_count")) or 0.0
+        )
+        funding_tracks = (
+            "track1,track2" if mapped_facility_count > 0 else "track1"
+        )
         geometry = feature.get("geometry", {})
         path_data = _geometry_path(geometry, project)
         min_x, min_y, max_x, max_y = _projected_geometry_bounds(geometry, project)
@@ -284,6 +290,7 @@ def _render_svg(
             'data-small-scale="{small}" data-aged="{aged}" '
             'data-context="{context}" data-tourism-supply-gap="{gap}" '
             'data-mapped-facility-count="{mapped_count}" '
+            'data-funding-tracks="{funding_tracks}" '
             'data-aged-count="{aged_count}" data-age-known="{age_known}" '
             'data-room-count="{room_count}" data-room-coverage="{room_coverage}" '
             'data-demand-score="{demand_score}" data-supply-score="{supply_score}" '
@@ -308,6 +315,7 @@ def _render_svg(
                 context=_attribute(properties.get("district_context_rating")),
                 gap=_attribute(properties.get("tourism_supply_gap")),
                 mapped_count=_attribute(properties.get("mapped_facility_count")),
+                funding_tracks=_attribute(funding_tracks),
                 aged_count=_attribute(properties.get("age_20y_facility_count")),
                 age_known=_attribute(properties.get("age_sample_size")),
                 room_count=_attribute(properties.get("room_sum")),

@@ -328,7 +328,18 @@
       content_first: "관광콘텐츠 선행",
       investment_caution: "공급 확대 신중 검토",
     }[node.dataset.recommendation] || "수요·노후 근거 보완";
-    document.getElementById("region-summary-text").textContent = `${name}의 500m 분석지역입니다. 현재 권고는 ${action}이며, 수요·공급·노후 지표를 함께 사용한 1차 검토 결과입니다.`;
+    const fundingTracks = fundingTrackLabel(node);
+    document.getElementById("region-summary-text").textContent = `${name}의 500m 분석지역입니다. 시장 신호는 ${action}이며, 지원방식은 ${fundingTracks}입니다. 사업주체·인수 가능성 자료가 없어 확정 배정이 아닌 1차 중복 검토 결과입니다.`;
+  }
+
+  function fundingTrackLabel(node) {
+    const tracks = new Set((node.dataset.fundingTracks || "").split(",").filter(Boolean));
+    if (tracks.has("track1") && tracks.has("track2")) {
+      return "Track 1 민간투자 촉진형 · Track 2 기존시설 개선형 중복 검토";
+    }
+    if (tracks.has("track1")) return "Track 1 민간투자 촉진형";
+    if (tracks.has("track2")) return "Track 2 기존시설 개선형";
+    return "지원트랙 판정 보류";
   }
 
   function renderFacilitySummary(node) {
@@ -385,6 +396,7 @@
           aged,
           facilities: facilityCount,
           action,
+          fundingTrack: fundingTrackLabel(node),
           rank: Number(activeRanks[node.dataset.key]),
         };
       }).sort((a, b) => a.rank - b.rank || a.gridKey.localeCompare(b.gridKey)).slice(0, 5);
@@ -419,7 +431,7 @@
       label.textContent = `${item.district} ${item.dong}`;
       const detail = document.createElement("small");
       const details = {
-        policy_priority: `${item.action} · 시설 ${formatNumber(item.facilities)}개 · 20년+ ${formatNumber(item.aged)}개`,
+        policy_priority: `${item.fundingTrack} · 시장 신호 ${item.action} · 시설 ${formatNumber(item.facilities)}개 · 20년+ ${formatNumber(item.aged)}개`,
         tourism_supply_gap: `공급부족도 ${formatNumber(item.gap, 1)}점 · 수요 대비 객실공급 취약`,
         facility_density: `500m 내 숙박시설 ${formatNumber(item.facilities)}개 · 밀집지역`,
         aged_facilities: `20년 이상 ${formatNumber(item.aged)}개 · 개선·전환 검토`,
