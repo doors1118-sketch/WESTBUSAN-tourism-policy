@@ -248,3 +248,33 @@ def test_vworld_ned_accepts_documented_empty_success_code_and_retries_502() -> N
 
     assert calls == 2
     assert fetched.status == "matched"
+
+
+def test_vworld_ned_maps_generic_zero_count_response_to_not_found() -> None:
+    client = VWorldNedParcelContextClient(
+        api_key="top-secret",
+        domain="tourism.busanproduct.co.kr",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={
+                        "response": {
+                            "resultCode": "",
+                            "resultMsg": "",
+                            "totalCount": "0",
+                            "pageNo": "1",
+                            "numOfRows": "1000",
+                        }
+                    },
+                )
+            )
+        ),
+        kind="land_use",
+        source_id="vworld_land_use",
+        minimum_interval_seconds=0,
+    )
+
+    fetched = client.fetch(PNU)
+
+    assert fetched.status == "not_found"

@@ -330,6 +330,13 @@ class VWorldNedParcelContextClient:
         redacted = _redact(document, self._api_key)
         container = document.get(self._root_key) if isinstance(document, dict) else None
         if not isinstance(container, dict):
+            generic = document.get("response") if isinstance(document, dict) else None
+            if isinstance(generic, dict) and str(
+                generic.get("totalCount", "")
+            ).strip() in {"0", "0.0"}:
+                return self._empty(
+                    pnu, "not_found", request_identity, digest, redacted
+                )
             return self._empty(pnu, "invalid_response", request_identity, digest, redacted)
         if str(container.get("resultCode", "")).strip() not in {"", "00", "0"}:
             return self._empty(pnu, "provider_error", request_identity, digest, redacted)
