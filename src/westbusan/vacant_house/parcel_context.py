@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any, ClassVar, Literal
@@ -219,6 +220,9 @@ class VWorldNedParcelContextClient:
         client: httpx.Client,
         kind: NedContextKind,
         source_id: str,
+        max_retries: int = 4,
+        retry_backoff_seconds: float = 1.0,
+        minimum_interval_seconds: float = 0.5,
     ) -> None:
         if not api_key:
             raise ValueError("vworld_api_key_required")
@@ -228,11 +232,17 @@ class VWorldNedParcelContextClient:
             raise ValueError("invalid_vworld_ned_context_kind")
         if _SOURCE_ID.fullmatch(source_id) is None:
             raise ValueError("invalid_parcel_context_source_id")
+        if max_retries < 0 or retry_backoff_seconds < 0 or minimum_interval_seconds < 0:
+            raise ValueError("invalid_vworld_retry_contract")
         self._api_key = api_key
         self._domain = domain
         self._client = client
         self._kind = kind
         self._source_id = source_id
+        self._max_retries = max_retries
+        self._retry_backoff_seconds = retry_backoff_seconds
+        self._minimum_interval_seconds = minimum_interval_seconds
+        self._last_request_at: float | None = None
         self._endpoint, self._dataset, self._root_key = self._OPERATIONS[kind]
         logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -256,18 +266,29 @@ class VWorldNedParcelContextClient:
         request_identity = _canonical(
             {"endpoint": self._endpoint, "operation": self._dataset, **public}
         )
-        try:
-            response = self._client.get(
-                self._endpoint, params={**public, "key": self._api_key}
-            )
-        except httpx.HTTPError:
-            return self._empty(
-                pnu,
-                "provider_error",
-                request_identity,
-                hashlib.sha256(b"").hexdigest(),
-                {"provider_status": "transport_error"},
-            )
+        response: httpx.Response | None = None
+        for attempt in range(self._max_retries + 1):
+            self._wait_for_request_slot()
+            try:
+                response = self._client.get(
+                    self._endpoint, params={**public, "key": self._api_key}
+                )
+            except httpx.HTTPError:
+                if attempt < self._max_retries:
+                    self._retry_wait(attempt)
+                    continue
+                return self._empty(
+                    pnu,
+                    "provider_error",
+                    request_identity,
+                    hashlib.sha256(b"").hexdigest(),
+                    {"provider_status": "transport_error"},
+                )
+            if response.status_code in {429, 502, 503, 504} and attempt < self._max_retries:
+                self._retry_wait(attempt)
+                continue
+            break
+        assert response is not None
         digest = hashlib.sha256(response.content).hexdigest()
         if response.status_code != 200:
             return self._empty(
@@ -278,6 +299,20 @@ class VWorldNedParcelContextClient:
                 {"provider_status": "http_error", "status_code": response.status_code},
             )
         return self._parse(pnu, response.content, request_identity, digest)
+
+    def _wait_for_request_slot(self) -> None:
+        if self._last_request_at is not None:
+            remaining = self._minimum_interval_seconds - (
+                time.monotonic() - self._last_request_at
+            )
+            if remaining > 0:
+                time.sleep(remaining)
+        self._last_request_at = time.monotonic()
+
+    def _retry_wait(self, attempt: int) -> None:
+        delay = self._retry_backoff_seconds * (2**attempt)
+        if delay > 0:
+            time.sleep(delay)
 
     def _parse(
         self, pnu: str, body: bytes, request_identity: str, digest: str
@@ -296,7 +331,7 @@ class VWorldNedParcelContextClient:
         container = document.get(self._root_key) if isinstance(document, dict) else None
         if not isinstance(container, dict):
             return self._empty(pnu, "invalid_response", request_identity, digest, redacted)
-        if str(container.get("resultCode", "")) not in {"00", "0"}:
+        if str(container.get("resultCode", "")).strip() not in {"", "00", "0"}:
             return self._empty(pnu, "provider_error", request_identity, digest, redacted)
         fields = container.get("field", [])
         if isinstance(fields, dict):

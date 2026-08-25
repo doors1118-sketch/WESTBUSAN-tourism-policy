@@ -209,3 +209,42 @@ def test_vworld_ned_land_use_aggregates_multiple_designations() -> None:
     assert normalized.zone_name == "일반상업지역"
     assert normalized.district_name == "방화지구"
     assert normalized.area_name is None
+
+
+def test_vworld_ned_accepts_documented_empty_success_code_and_retries_502() -> None:
+    calls = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(502, json={"message": "temporary"})
+        return httpx.Response(
+            200,
+            json={
+                "landUses": {
+                    "resultCode": "",
+                    "field": [
+                        {
+                            "pnu": PNU,
+                            "prposAreaDstrcCodeNm": "일반상업지역",
+                        }
+                    ],
+                }
+            },
+        )
+
+    client = VWorldNedParcelContextClient(
+        api_key="top-secret",
+        domain="tourism.busanproduct.co.kr",
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+        kind="land_use",
+        source_id="vworld_land_use",
+        max_retries=1,
+        retry_backoff_seconds=0,
+    )
+
+    fetched = client.fetch(PNU)
+
+    assert calls == 2
+    assert fetched.status == "matched"
