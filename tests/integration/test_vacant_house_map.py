@@ -240,10 +240,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert hubs["features"][0]["properties"]["candidate_rank"] == 1
     assert hubs["features"][1]["properties"]["candidate_rank"] == 2
     assert len(standalone["features"]) == 1
-    assert len(bukgu_supplemental["features"]) == 1
-    assert bukgu_supplemental["features"][0]["properties"]["candidate_class"] == (
-        "bukgu_supplemental_preliminary"
-    )
+    assert bukgu_supplemental["features"] == []
     assert standalone["features"][0]["properties"]["candidate_class"] == (
         "standalone_preliminary"
     )
@@ -286,7 +283,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert summary["district_candidate_counts"]["북구"] == {
         "contiguous_hubs": 2,
         "standalone_candidates": 1,
-        "supplemental_candidates": 1,
+        "supplemental_candidates": 0,
     }
     assert summary["district_candidate_counts"]["강서구"] == {
         "contiguous_hubs": 0,
@@ -295,9 +292,10 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     }
     assert summary["standalone_candidate_policy"] == {
         "candidate_label": "단독개발·숙박전환 예비후보",
-        "district_quota": False,
+        "district_quota": True,
         "housing_type": "단독주택",
-        "maximum_candidates": 6,
+        "maximum_candidates": 20,
+        "maximum_candidates_per_district": 5,
         "minimum_area_square_metres": 300.0,
         "scope": "서부산 4개 구",
     }
@@ -327,7 +325,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "개발후보" in html
     assert "연속필지 개발후보 0개" in script
     assert "현재 게시된 단독개발 상위후보 0개" in script
-    assert "C${Number(feature.properties.preliminary_rank)}" in script
+    assert "C${Number(feature.properties.preliminary_rank)}" not in script
     assert "nearby_attractions" in script
     assert "accessibility-context.geojson" in script
     assert "대중교통 유입량은 관광객 수가 아닙니다" in html
@@ -336,6 +334,9 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "자료 미결합" in script
     assert "A${Number(feature.properties.candidate_rank)}" in script
     assert "B${Number(feature.properties.preliminary_rank)}" in script
+    assert "function selectHouse(feature)" in script
+    assert '.on("click", () => selectHouse(feature))' in script
+    assert "일반 빈집" in script
 
 
 def test_vacant_map_manifest_detects_modified_exact_location_bytes(

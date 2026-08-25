@@ -3,7 +3,6 @@
   const mapElement = document.getElementById("vacant-slippy-map");
   const hubCandidateList = document.getElementById("hub-candidate-list");
   const standaloneCandidateList = document.getElementById("standalone-candidate-list");
-  const supplementalCandidateList = document.getElementById("supplemental-candidate-list");
   const districtFilter = document.getElementById("district-filter");
   const WEST_DISTRICTS = ["강서구", "북구", "사상구", "사하구"];
   const guide = document.getElementById("zoom-guide");
@@ -21,19 +20,18 @@
   }).addTo(map);
 
   const data = {
-    hubs: [], standalone: [], supplemental: [], parcels: [], houses: [], access: [], summary: null,
+    hubs: [], standalone: [], parcels: [], houses: [], access: [], summary: null,
   };
   const layers = {
     hubs: L.layerGroup().addTo(map),
     standalone: L.layerGroup().addTo(map),
-    supplemental: L.layerGroup().addTo(map),
     parcels: L.layerGroup(),
     houses: L.layerGroup(),
     transport: L.layerGroup().addTo(map),
     tourismPois: L.layerGroup().addTo(map),
   };
   const featureLayers = {
-    hubs: new Map(), standalone: new Map(), supplemental: new Map(),
+    hubs: new Map(), standalone: new Map(),
     parcels: new Map(), houses: new Map(),
   };
   const contextLabels = {
@@ -118,10 +116,6 @@
       fillOpacity: isSelected("standalone", candidateId) ? 0.52 : 0.24,
       weight: isSelected("standalone", candidateId) ? 4 : 2,
     }));
-    featureLayers.supplemental.forEach((entry, candidateId) => entry.shape.setStyle({
-      fillOpacity: isSelected("supplemental", candidateId) ? 0.56 : 0.28,
-      weight: isSelected("supplemental", candidateId) ? 4 : 2,
-    }));
   }
   function renderHouseCards(houses) {
     const list = document.getElementById("house-list");
@@ -147,6 +141,33 @@
       );
       list.append(card);
     });
+  }
+  function selectHouse(feature) {
+    const properties = feature.properties;
+    selected = selectionKey("house", properties.record_id);
+    updateSelectionStyles();
+    const area = Number(properties.land_area || 0);
+    const address = properties.exact_address
+      || properties.road_address
+      || `${properties.district_name} ${properties.dong_name}`;
+    document.getElementById("detail-title").textContent = address;
+    document.getElementById("detail-summary").textContent = (
+      "개발후보와 별도로 게시된 일반 빈집 전수현황입니다."
+    );
+    document.getElementById("detail-type").textContent = "일반 빈집";
+    document.getElementById("detail-rank").textContent = "미선정";
+    document.getElementById("detail-parcels").textContent = "1필지";
+    document.getElementById("detail-houses").textContent = "1개소";
+    document.getElementById("detail-area").textContent = area > 0
+      ? `${area.toLocaleString("ko-KR")}㎡(원천)`
+      : "자료 없음";
+    document.getElementById("detail-evidence").textContent = (
+      `PNU ${properties.pnu || "미확인"} · 건물면적 ${properties.building_area || "자료 없음"}㎡. `
+      + "현재 A형 연속필지군 또는 B형 자치구별 상위 5개에 포함되지 않은 빈집입니다. "
+      + "B형은 검증 지적면적 300㎡ 이상 단독주택형 가운데 자치구별로 최대 5개를 게시합니다. "
+      + "교통·관광지 근거가 완결되지 않은 경우 면적과 자치구 방문수요로 잠정 선별합니다."
+    );
+    renderHouseCards([feature]);
   }
   function selectHub(feature) {
     const properties = feature.properties;
@@ -212,34 +233,6 @@
     entry.shape.bringToFront();
     map.fitBounds(entry.shape.getBounds(), { padding: [65, 65], maxZoom: 18 });
   }
-  function selectSupplemental(feature) {
-    const properties = feature.properties;
-    selected = selectionKey("supplemental", properties.candidate_id);
-    updateSelectionStyles();
-    const houses = candidateHouses("supplemental", feature);
-    document.getElementById("detail-title").textContent = (
-      `${properties.district_name} ${properties.dong_name || "단일필지"}`
-    );
-    document.getElementById("detail-summary").textContent = (
-      "북구의 300㎡ 이상 단독주택형 비연속 필지에 역·관광지 접근성과 자치구 방문수요를 결합한 C형 보완검토 후보입니다."
-    );
-    document.getElementById("detail-type").textContent = "C형";
-    document.getElementById("detail-rank").textContent = (
-      `C${properties.preliminary_rank} 예비`
-    );
-    document.getElementById("detail-parcels").textContent = "1필지";
-    document.getElementById("detail-houses").textContent = `${houses.length}개소`;
-    document.getElementById("detail-area").textContent = (
-      `${Math.round(properties.parcel_area).toLocaleString("ko-KR")}㎡`
-    );
-    document.getElementById("detail-evidence").textContent = (
-      `종합점수 ${Number(properties.composite_score).toFixed(1)}점 · ${properties.nearest_station} 직선거리 ${Math.round(properties.station_distance_metres).toLocaleString("ko-KR")}m · ${properties.nearest_attraction} 직선거리 ${Math.round(properties.attraction_distance_metres).toLocaleString("ko-KR")}m · 자치구 방문수요 ${Number(properties.district_demand_score).toFixed(1)}점. ${properties.limitation}`
-    );
-    renderHouseCards(houses);
-    const entry = featureLayers.supplemental.get(properties.candidate_id);
-    entry.shape.bringToFront();
-    map.fitBounds(entry.shape.getBounds(), { padding: [65, 65], maxZoom: 18 });
-  }
   function candidateButton(kind, feature) {
     const properties = feature.properties;
     const isHub = kind === "hub";
@@ -256,19 +249,14 @@
       : `${properties.district_name} ${properties.dong_name || "단일필지"}`;
     const evidence = isHub
       ? `${properties.parcel_count}개 연속필지 · ${Math.round(area).toLocaleString("ko-KR")}㎡`
-      : kind === "supplemental"
-        ? `${properties.nearest_station} ${Math.round(properties.station_distance_metres).toLocaleString("ko-KR")}m · ${Math.round(area).toLocaleString("ko-KR")}㎡`
-        : `단독주택형 · ${Math.round(area).toLocaleString("ko-KR")}㎡ · 예비검토`;
+      : `단독주택형 · ${Math.round(area).toLocaleString("ko-KR")}㎡ · 자치구 내 예비 ${properties.preliminary_rank}순위`;
     label.append(textElement("strong", place), textElement("small", evidence));
     const markerLabel = isHub
       ? `A${Number(feature.properties.candidate_rank)}`
-      : kind === "supplemental"
-        ? `C${Number(feature.properties.preliminary_rank)}`
-        : `B${Number(feature.properties.preliminary_rank)}`;
+      : `B${Number(feature.properties.preliminary_rank)}`;
     button.append(textElement("b", markerLabel), label);
     button.addEventListener("click", () => {
       if (isHub) selectHub(feature);
-      else if (kind === "supplemental") selectSupplemental(feature);
       else selectStandalone(feature);
     });
     item.append(button);
@@ -277,23 +265,15 @@
   function renderCandidates() {
     hubCandidateList.replaceChildren();
     standaloneCandidateList.replaceChildren();
-    supplementalCandidateList.replaceChildren();
     const hubs = data.hubs.filter(featureMatches);
     const standalone = data.standalone.filter(featureMatches);
-    const supplemental = data.supplemental.filter(featureMatches);
     hubs.forEach((feature) => hubCandidateList.append(candidateButton("hub", feature)));
     standalone.forEach((feature) => (
       standaloneCandidateList.append(candidateButton("standalone", feature))
     ));
-    supplemental.forEach((feature) => (
-      supplementalCandidateList.append(candidateButton("supplemental", feature))
-    ));
     document.getElementById("hub-candidate-count").textContent = `${hubs.length}개`;
     document.getElementById("standalone-candidate-count").textContent = (
       `${standalone.length}개`
-    );
-    document.getElementById("supplemental-candidate-count").textContent = (
-      `${supplemental.length}개`
     );
     renderInventoryStatus();
   }
@@ -317,7 +297,7 @@
       : {
         contiguous_hubs: data.summary.candidate_count,
         standalone_candidates: data.summary.standalone_candidate_count,
-        supplemental_candidates: data.summary.bukgu_supplemental_candidate_count,
+        supplemental_candidates: 0,
       };
     const noPrimaryCandidates = (
       "연속필지 개발후보 0개 / 현재 게시된 단독개발 상위후보 0개"
@@ -326,14 +306,11 @@
       && counts.standalone_candidates === 0
       ? noPrimaryCandidates
       : `연속필지 개발후보 ${counts.contiguous_hubs}개 / 현재 게시된 단독개발 상위후보 ${counts.standalone_candidates}개`;
-    const supplementStatus = counts.supplemental_candidates
-      ? ` / 북구 보완검토 후보 ${counts.supplemental_candidates}개`
-      : "";
     const reason = district && counts.contiguous_hubs === 0
       ? " 연속필지 후보는 3개 이상 지적필지의 경계 접촉 기준을 충족하지 못해 미선정되었습니다."
       : "";
     document.getElementById("district-candidate-status").textContent = (
-      `${district || "서부산 전체"}: ${primaryStatus}${supplementStatus}.${reason}`
+      `${district || "서부산 전체"}: ${primaryStatus}.${reason}`
     );
   }
   function refreshLayers() {
@@ -365,31 +342,14 @@
         feature.properties.candidate_id, { shape, marker },
       );
     });
-    data.supplemental.filter(featureMatches).forEach((feature) => {
-      const shape = L.geoJSON(feature, { style: {
-        color: "#4d2a91", weight: 2, fillColor: "#7a5bc7", fillOpacity: 0.28,
-      } }).on("click", () => selectSupplemental(feature));
-      const marker = L.marker(shape.getBounds().getCenter(), { icon: L.divIcon({
-        className: "supplemental-marker",
-        html: `<span>C${Number(feature.properties.preliminary_rank)}</span>`,
-        iconSize: [38, 38], iconAnchor: [19, 19],
-      }) }).on("click", () => selectSupplemental(feature));
-      shape.addTo(layers.supplemental); marker.addTo(layers.supplemental);
-      featureLayers.supplemental.set(
-        feature.properties.candidate_id, { shape, marker },
-      );
-    });
     data.parcels.filter(featureMatches).forEach((feature) => {
       const standalone = data.standalone.find(
         (item) => item.properties.pnu === feature.properties.pnu,
       );
-      const supplemental = data.supplemental.find(
-        (item) => item.properties.pnu === feature.properties.pnu,
-      );
       const shape = L.geoJSON(feature, { style: {
-        color: supplemental ? "#4d2a91" : standalone ? "#9b6400" : "#a64613",
+        color: standalone ? "#9b6400" : "#a64613",
         weight: 2,
-        fillColor: supplemental ? "#7a5bc7" : standalone ? "#e5a61f" : "#ed7d31",
+        fillColor: standalone ? "#e5a61f" : "#ed7d31",
         fillOpacity: 0.5,
       } });
       shape.on("click", () => {
@@ -397,8 +357,13 @@
           (item) => item.properties.hub_id === feature.properties.hub_id,
         );
         if (hub) selectHub(hub);
-        else if (supplemental) selectSupplemental(supplemental);
         else if (standalone) selectStandalone(standalone);
+        else {
+          const house = data.houses.find(
+            (item) => item.properties.pnu === feature.properties.pnu,
+          );
+          if (house) selectHouse(house);
+        }
       });
       shape.addTo(layers.parcels);
       featureLayers.parcels.set(feature.properties.pnu, shape);
@@ -410,7 +375,7 @@
           radius: 7, color: "#fff", weight: 2,
           fillColor: "#d9475a", fillOpacity: 1,
         },
-      ).bindPopup(houseDetailNode(feature));
+      ).bindPopup(houseDetailNode(feature)).on("click", () => selectHouse(feature));
       marker.addTo(layers.houses);
       featureLayers.houses.set(feature.properties.record_id, marker);
     });
@@ -438,7 +403,6 @@
     const zoom = map.getZoom();
     if (!map.hasLayer(layers.hubs)) layers.hubs.addTo(map);
     if (!map.hasLayer(layers.standalone)) layers.standalone.addTo(map);
-    if (!map.hasLayer(layers.supplemental)) layers.supplemental.addTo(map);
     if (zoom >= 14 && !map.hasLayer(layers.parcels)) layers.parcels.addTo(map);
     if (zoom < 14 && map.hasLayer(layers.parcels)) map.removeLayer(layers.parcels);
     const showHouses = zoom >= 17 || Boolean(districtFilter.value);
@@ -448,14 +412,14 @@
     mapElement.classList.toggle("parcel-detail-mode", zoom >= 14);
     mapElement.classList.toggle("street-detail-mode", zoom >= 17);
     [
-      featureLayers.hubs, featureLayers.standalone, featureLayers.supplemental,
+      featureLayers.hubs, featureLayers.standalone,
     ].forEach((entries) => {
       entries.forEach((entry) => {
         const layer = entries === featureLayers.hubs
           ? layers.hubs
           : entries === featureLayers.standalone
             ? layers.standalone
-            : layers.supplemental;
+            : layers.standalone;
         if (zoom >= 17) layer.removeLayer(entry.marker);
         else if (!layer.hasLayer(entry.marker)) layer.addLayer(entry.marker);
       });
@@ -469,7 +433,7 @@
         : "A형 또는 B형 후보를 선택하면 해당 필지로 확대됩니다.";
   }
   function visibleCandidateFeatures() {
-    return [...data.hubs, ...data.standalone, ...data.supplemental].filter(featureMatches);
+    return [...data.hubs, ...data.standalone].filter(featureMatches);
   }
   function fitVisibleCandidates(maxZoom = 12) {
     const visible = visibleCandidateFeatures();
@@ -541,10 +505,9 @@
       if (!response.ok) throw new Error("map_data_failed");
       return response.json();
     })),
-  ).then(([hubs, standalone, supplemental, parcels, houses, access, summary]) => {
+  ).then(([hubs, standalone, _supplemental, parcels, houses, access, summary]) => {
     data.hubs = hubs.features;
     data.standalone = standalone.features;
-    data.supplemental = supplemental.features;
     data.parcels = parcels.features;
     data.houses = houses.features;
     data.access = access.features;
@@ -556,6 +519,5 @@
   }).catch(() => {
     hubCandidateList.textContent = "게시 지도자료를 불러오지 못했습니다.";
     standaloneCandidateList.textContent = "게시 지도자료를 불러오지 못했습니다.";
-    supplementalCandidateList.textContent = "게시 지도자료를 불러오지 못했습니다.";
   });
 })();

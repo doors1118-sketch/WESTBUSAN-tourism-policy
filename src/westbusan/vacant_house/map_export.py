@@ -19,10 +19,6 @@ from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 
 from westbusan.spatial.export import _demand_scores_from_rows
-from westbusan.vacant_house.bukgu_candidates import (
-    build_bukgu_supplemental_candidates,
-    load_bukgu_context_anchors,
-)
 from westbusan.vacant_house.hub_models import CadastralParcel, VacantParcel
 from westbusan.vacant_house.standalone_candidates import (
     build_standalone_candidates,
@@ -51,8 +47,7 @@ _DISTRICT_CODES_BY_NAME = {
     name: code for code, name in _WEST_DISTRICTS.items()
 }
 _STANDALONE_MINIMUM_AREA = 300.0
-_STANDALONE_LIMIT = 6
-_BUKGU_SUPPLEMENTAL_LIMIT = 5
+_STANDALONE_PER_DISTRICT_LIMIT = 5
 
 
 class QueryConnection(Protocol):
@@ -512,21 +507,13 @@ def _map_data(
         excluded_pnus=frozenset(member_by_pnu),
         district_demand_scores=district_demand_scores,
         minimum_area=_STANDALONE_MINIMUM_AREA,
-        limit=_STANDALONE_LIMIT,
+        per_district_limit=_STANDALONE_PER_DISTRICT_LIMIT,
     )
-    station_anchors, attraction_anchors, anchor_provenance = (
-        load_bukgu_context_anchors()
-    )
-    bukgu_supplemental_candidates = build_bukgu_supplemental_candidates(
-        reviewed_cadastral,
-        inventory_by_pnu,
-        excluded_pnus=frozenset(member_by_pnu),
-        district_demand_scores=district_demand_scores,
-        station_anchors=station_anchors,
-        attraction_anchors=attraction_anchors,
-        minimum_area=_STANDALONE_MINIMUM_AREA,
-        limit=_BUKGU_SUPPLEMENTAL_LIMIT,
-    )
+    # The former Buk-gu-only C group is retained as an empty compatibility
+    # collection. Valid 300㎡+ parcels from every West Busan district now
+    # compete within their own district's B group.
+    bukgu_supplemental_candidates = ()
+    anchor_provenance: dict[str, object] = {}
 
     hub_features: list[dict[str, object]] = []
     hub_rank_by_id: dict[str, int] = {}
@@ -772,15 +759,20 @@ def _map_data(
             "candidate_label": "단독개발·숙박전환 예비후보",
             "housing_type": "단독주택",
             "minimum_area_square_metres": _STANDALONE_MINIMUM_AREA,
-            "maximum_candidates": _STANDALONE_LIMIT,
-            "district_quota": False,
+            "maximum_candidates": (
+                len(_WEST_DISTRICTS) * _STANDALONE_PER_DISTRICT_LIMIT
+            ),
+            "maximum_candidates_per_district": (
+                _STANDALONE_PER_DISTRICT_LIMIT
+            ),
+            "district_quota": True,
         },
         "bukgu_supplemental_candidate_policy": {
             "scope": "북구",
             "candidate_label": "북구 관광·교통 보완검토 후보",
             "housing_type": "단독주택",
             "minimum_area_square_metres": _STANDALONE_MINIMUM_AREA,
-            "maximum_candidates": _BUKGU_SUPPLEMENTAL_LIMIT,
+            "maximum_candidates": 0,
             "excluded_from_global_b_rank": True,
             "score_weights": {
                 "reviewed_parcel_area": 0.35,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+from collections import defaultdict
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import replace
 
@@ -29,12 +30,12 @@ def build_standalone_candidates(
     excluded_pnus: Collection[str],
     district_demand_scores: Mapping[str, float],
     minimum_area: float = 300.0,
-    limit: int = 6,
+    per_district_limit: int = 5,
 ) -> tuple[StandaloneCandidate, ...]:
-    """Return preliminary standalone candidates from reviewed non-hub parcels."""
+    """Return up to ``per_district_limit`` reviewed candidates per district."""
     if not math.isfinite(minimum_area) or minimum_area <= 0:
         raise ValueError("invalid_standalone_minimum_area")
-    if not 1 <= limit <= 6:
+    if not 1 <= per_district_limit <= 5:
         raise ValueError("invalid_standalone_candidate_limit")
 
     excluded = frozenset(excluded_pnus)
@@ -86,11 +87,20 @@ def build_standalone_candidates(
                 missing_context=missing,
             )
         )
-    ordered = sorted(eligible, key=_rank_key)[:limit]
-    return tuple(
-        replace(candidate, preliminary_rank=rank)
-        for rank, candidate in enumerate(ordered, start=1)
-    )
+    by_district: dict[str, list[StandaloneCandidate]] = defaultdict(list)
+    for candidate in eligible:
+        by_district[candidate.district_code].append(candidate)
+
+    ranked: list[StandaloneCandidate] = []
+    for district_code in sorted(by_district):
+        ordered = sorted(by_district[district_code], key=_rank_key)
+        ranked.extend(
+            replace(candidate, preliminary_rank=rank)
+            for rank, candidate in enumerate(
+                ordered[:per_district_limit], start=1
+            )
+        )
+    return tuple(ranked)
 
 
 def _single_family_only(parcel: VacantParcel) -> bool:

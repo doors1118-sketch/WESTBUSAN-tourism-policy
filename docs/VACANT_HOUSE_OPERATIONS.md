@@ -338,8 +338,8 @@ do not print addresses, PNUs, raw provider payloads, or credentials.
 ## 11. Supplemental standalone candidate map
 
 Map schema `vacant-map-v3` preserves the hub publication unchanged and adds a
-separate `standalone-candidates.geojson`. This file contains at most six
-non-hub, single-family vacant PNUs in the four West Busan districts whose
+separate `standalone-candidates.geojson`. This file contains at most five per
+district (twenty total) non-hub, single-family vacant PNUs in the four West Busan districts whose
 reviewed cadastral area in EPSG:5179 is at least 300 square metres. The 300
 square-metre line is a preliminary screening threshold derived from the current
 non-hub single-family parcel distribution; it is not a statutory development
@@ -347,26 +347,19 @@ minimum or proof of site feasibility.
 
 The B-type preliminary order uses current district visitor-demand evidence when
 the spatial publication is available, then reviewed parcel area and PNU for
-stable tie-breaking. It has no district quota. B-type records keep nearby
+stable tie-breaking within each district. It has a five-candidate maximum per
+district so one district cannot exclude another district entirely. B-type records keep nearby
 attraction and transport evidence as missing; missing evidence must not be
 converted to zero. The map therefore labels these records `standalone
 development / lodging-conversion preliminary candidates`, not contiguous hubs
 or final investment priorities.
 
-Schema v3 also adds `bukgu-supplemental-candidates.geojson`. The C-type list is
-an explicitly separate North District supplement, not a republished B-type
-rank. It uses the same non-hub, single-family, reviewed-area threshold and then
-combines reviewed parcel area (35%), straight-line station proximity to Gupo or
-Deokcheon station (25%), straight-line proximity to reviewed North District
-tourism places (25%), and current published district visitor-demand score
-(15%). The station and tourism-place points are pinned VWorld place-search
-results with verification date and CRS in the packaged reference file.
-
-C-type station proximity is not transit ridership, service frequency, network
-travel time, or pedestrian access. Raw public-transport OD observations must
-not enter the score while the current core publication has no transport fact
-membership. District visitor demand is context and does not prove parcel-level
-demand. All C-type rows remain preliminary feasibility-screening candidates.
+`bukgu-supplemental-candidates.geojson` remains an empty compatibility file for
+older clients. The former North-District-only C group is no longer published;
+eligible North District parcels now use the same B-type rule as the other three
+districts. Transport and tourism proximity may be displayed only when the
+shared accessibility snapshot contains reviewed evidence. Missing evidence is
+reported as missing and does not become a zero score.
 
 Before deploying a v3 bundle verify:
 
@@ -374,16 +367,17 @@ Before deploying a v3 bundle verify:
 - every B-type PNU is outside the hub-member set and has only `단독주택` source
   types;
 - every B-type reviewed projected parcel area is at least 300 square metres;
-- the B-type count is no greater than six and its order is deterministic;
+- the B-type count is no greater than five per district (twenty total) and its
+  order is deterministic within each district;
 - `standalone-candidates.geojson` is bound by the manifest hash and byte count;
-- the C-type count is no greater than five, every row is in North District, and
-  its pinned station/attraction provenance is present;
+- the legacy C-type compatibility collection is empty;
 - `bukgu-supplemental-candidates.geojson` is bound by the manifest hash and byte
   count;
 - all four district filters remain visible even when a district has no A/B
   candidates; and
-- the UI distinguishes the full inventory from A/B/C candidates and states the
-  straight-line distance and unpublished transport-flow limitations.
+- the UI distinguishes the full inventory from A/B candidates, updates the
+  persistent detail panel when an ordinary vacant house is selected, and
+  states the missing transport/tourism evidence limitations.
 
 ## 12. Shared transport and tourism context
 
@@ -403,7 +397,7 @@ The context file has two independent feature types:
   footfall, quality, or business feasibility.
 
 The map keeps the full 805-house inventory, all four West Busan district
-filters, and the existing A/B/C candidate IDs unchanged. Transport and tourism
+filters, and the existing A candidate IDs unchanged. Transport and tourism
 evidence is supplemental: a missing join is displayed as unavailable and must
 not be coerced to zero or used to demote an existing candidate. Exact addresses
 remain internal operational data. Candidate confirmation still requires land

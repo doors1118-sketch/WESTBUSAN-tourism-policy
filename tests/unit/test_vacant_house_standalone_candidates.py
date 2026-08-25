@@ -43,8 +43,8 @@ def test_selector_excludes_hubs_small_and_multiunit_parcels() -> None:
     )
 
 
-def test_selector_orders_by_demand_then_area_then_pnu_and_caps_at_six() -> None:
-    """Catches area or district quotas overriding the declared evidence order."""
+def test_selector_orders_within_each_district_and_caps_each_at_five() -> None:
+    """Catches one high-demand district excluding another district entirely."""
     cadastral = tuple(
         [
             _cadastral("G-SMALL", "26440", 128.9000, size=0.00025),
@@ -68,10 +68,59 @@ def test_selector_orders_by_demand_then_area_then_pnu_and_caps_at_six() -> None:
     )
 
     assert len(candidates) == 6
-    assert [item.preliminary_rank for item in candidates] == list(range(1, 7))
-    assert candidates[0].district_code == "26440"
-    assert all(item.district_code == "26440" for item in candidates)
-    assert candidates[-1].pnu != "S-LARGE"
+    assert [item.district_code for item in candidates].count("26440") == 5
+    assert [item.district_code for item in candidates].count("26530") == 1
+    assert [
+        item.preliminary_rank
+        for item in candidates
+        if item.district_code == "26440"
+    ] == [1, 2, 3, 4, 5]
+    assert [
+        item.preliminary_rank
+        for item in candidates
+        if item.district_code == "26530"
+    ] == [1]
+    assert candidates[-1].pnu == "S-LARGE"
+
+
+def test_selector_keeps_up_to_five_candidates_per_west_district() -> None:
+    """Catches a citywide cap excluding a district with valid 300㎡ parcels."""
+    district_codes = ("26320", "26380", "26440", "26530")
+    cadastral = tuple(
+        _cadastral(
+            f"{district_code}-{index}",
+            district_code,
+            128.70 + district_offset * 0.08 + index * 0.001,
+            size=0.00030 + index * 0.00001,
+        )
+        for district_offset, district_code in enumerate(district_codes)
+        for index in range(1, 7)
+    )
+    inventory = {
+        item.pnu: _inventory(item.pnu, item.district_code, ("단독주택",))
+        for item in cadastral
+    }
+
+    candidates = build_standalone_candidates(
+        tuple(reversed(cadastral)),
+        inventory,
+        excluded_pnus=set(),
+        district_demand_scores={
+            "26320": 10.0,
+            "26380": 30.0,
+            "26440": 100.0,
+            "26530": 60.0,
+        },
+        per_district_limit=5,
+    )
+
+    assert len(candidates) == 20
+    for district_code in district_codes:
+        district_candidates = [
+            item for item in candidates if item.district_code == district_code
+        ]
+        assert len(district_candidates) == 5
+        assert [item.preliminary_rank for item in district_candidates] == [1, 2, 3, 4, 5]
 
 
 def test_missing_demand_is_explicit_and_uses_area_as_deterministic_fallback() -> None:
