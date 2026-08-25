@@ -313,12 +313,18 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert standalone["features"][0]["properties"]["weighted_score"] == 57.5
     assert standalone["features"][0]["properties"][
         "development_review_status"
-    ] == "conditional"
+    ] == "passed"
     assert standalone["features"][0]["properties"][
         "development_exclusion_reasons"
     ] == []
     assert standalone["features"][0]["properties"][
         "development_conditional_reasons"
+    ] == []
+    assert standalone["features"][0]["properties"][
+        "data_review_status"
+    ] == "needs_review"
+    assert standalone["features"][0]["properties"][
+        "data_review_gaps"
     ] == ["building_register_not_linked"]
     assert standalone["features"][0]["properties"]["missing_context"] == [
         "nearby_attractions",
@@ -403,21 +409,22 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert summary["development_screening_counts"] == {
         "contiguous_hubs": {
             "excluded": 0,
-            "passed": 0,
+            "passed": 2,
             "published": 2,
             "reviewed": 2,
-            "conditional": 2,
+            "conditional": 0,
         },
         "standalone_candidates": {
             "excluded": 0,
-            "passed": 0,
+            "passed": 1,
             "published": 1,
             "reviewed": 1,
-            "conditional": 1,
+            "conditional": 0,
         },
     }
     assert summary["development_screening_reason_counts"] == {
-        "conditional": {"building_register_not_linked": 3},
+        "conditional": {},
+        "data_gap": {"building_register_not_linked": 3},
         "exclusion": {},
     }
     assert summary["standalone_screening_district_counts"]["북구"] == {
@@ -425,7 +432,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "published": 1,
         "reviewed": 1,
     }
-    assert summary["schema_version"] == "vacant-map-v4"
+    assert summary["schema_version"] == "vacant-map-v5"
     assert summary["access_snapshot_id"] == str(ACCESS_SNAPSHOT_ID)
     assert summary["parcel_context_run_id"] == str(PARCEL_CONTEXT_RUN_ID)
     assert summary["context_availability"]["parcel_planning"] == "available"
@@ -467,6 +474,13 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert 'id="detail-nearest-poi"' in html
     assert 'id="detail-transport-inflow"' in html
     assert 'id="detail-access-signal"' in html
+    assert 'id="detail-overall-review"' in html
+    assert 'id="detail-project-type"' in html
+    assert 'id="detail-strengths"' in html
+    assert 'id="detail-constraints"' in html
+    assert 'id="detail-next-actions"' in html
+    assert 'id="detail-business-status"' in html
+    assert 'id="detail-data-status"' in html
     assert "자료 미결합" in script
     assert "function accessibilityForFeature" in script
     assert "function renderAccessibility" in script
@@ -487,6 +501,10 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "도로접면" in script
     assert "조건부 검토" in script
     assert "기본조건 통과" in script
+    assert "자료 보완" in script
+    assert "function policyInterpretation" in script
+    assert "추천 사업방식" in html
+    assert "다음 조치" in html
     assert "B형 검토" in script
     assert "사전 제외조건" in html
     assert "max-height: calc(100vh - 78px)" in css

@@ -1000,7 +1000,7 @@ def _map_data(
     }
 
     summary = {
-        "schema_version": "vacant-map-v4",
+        "schema_version": "vacant-map-v5",
         "hub_run_id": str(hub_run_id),
         "inventory_run_id": str(inventory_run_id),
         "source_snapshot_date": snapshot_date,
@@ -1087,6 +1087,10 @@ def _map_data(
             "conditional": _development_reason_counts(
                 hub_review_results + list(standalone_review_by_id.values()),
                 reason_type="conditional",
+            ),
+            "data_gap": _development_reason_counts(
+                hub_review_results + list(standalone_review_by_id.values()),
+                reason_type="data_gap",
             ),
         },
         "standalone_screening_district_counts": dict(
@@ -1177,6 +1181,8 @@ def _development_review_properties(
         "development_review_status": review.status,
         "development_exclusion_reasons": list(review.exclusion_reasons),
         "development_conditional_reasons": list(review.conditional_reasons),
+        "data_review_status": review.data_status,
+        "data_review_gaps": list(review.data_gaps),
     }
 
 
@@ -1195,15 +1201,15 @@ def _development_review_counts(
 def _development_reason_counts(
     reviews: list[DevelopmentReview], *, reason_type: str
 ) -> dict[str, int]:
-    if reason_type not in {"exclusion", "conditional"}:
+    if reason_type not in {"exclusion", "conditional", "data_gap"}:
         raise ValueError("invalid_development_reason_type")
     counts: dict[str, int] = {}
     for review in reviews:
-        reasons = (
-            review.exclusion_reasons
-            if reason_type == "exclusion"
-            else review.conditional_reasons
-        )
+        reasons = {
+            "exclusion": review.exclusion_reasons,
+            "conditional": review.conditional_reasons,
+            "data_gap": review.data_gaps,
+        }[reason_type]
         for reason in reasons:
             counts[reason] = counts.get(reason, 0) + 1
     return dict(sorted(counts.items()))
@@ -1262,7 +1268,7 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
     for name, body in bodies.items():
         (directory / name).write_bytes(body)
     manifest = {
-        "schema_version": "vacant-map-v4",
+        "schema_version": "vacant-map-v5",
         "hub_run_id": str(data["hub_run_id"]),
         "inventory_run_id": str(data["inventory_run_id"]),
         "access_snapshot_id": summary["access_snapshot_id"],

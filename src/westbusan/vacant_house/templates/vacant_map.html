@@ -31,7 +31,8 @@
       <section class="screening-guide">
         <h3>개발후보 사전심사</h3>
         <p><strong>사전 제외조건</strong> 맹지, 개발행위허가제한지역, 지적경계·도로접면 미확인, 명시적 숙박·업무시설 입지 제한</p>
-        <p><strong>조건부 검토</strong> 취약·미지정 도로접면, 건축물대장 미연계, 자연녹지·공업·역사문화환경보존 등 추가 인허가 검토지역</p>
+        <p><strong>사업조건</strong> 취약·미지정 도로접면, 자연녹지·공업·역사문화환경보존 등 추가 인허가 검토지역</p>
+        <p><strong>자료 보완</strong> 건축물대장·건축연도·건축구조 미연계 또는 미확인</p>
         <small>정책상 1차 검토이며 법적 입지·인허가 가능성을 확정하지 않습니다.</small>
       </section>
       <h2 class="candidate-heading">개발후보</h2>
@@ -47,6 +48,14 @@
       </div>
       <section class="selected-detail" id="selected-detail" aria-live="polite">
         <div><span>SELECTED VACANT HOUSE</span><h2 id="detail-title">서부산 빈집 상세</h2><p id="detail-summary">지도 또는 후보 목록을 선택하면 후보 여부와 상세 빈집 주소를 확인할 수 있습니다.</p></div>
+        <div class="review-state-row"><span id="detail-business-status">사업조건: 후보 미선택</span><span id="detail-data-status">자료 보완: 후보 미선택</span></div>
+        <div class="policy-review-grid">
+          <article class="overall"><span>종합판단</span><strong id="detail-overall-review">—</strong><p>정책 검토 단계의 판단이며 사업성 확정판정이 아닙니다.</p></article>
+          <article><span>추천 사업방식</span><strong id="detail-project-type">—</strong></article>
+          <article><span>강점</span><strong id="detail-strengths">—</strong></article>
+          <article><span>제약조건</span><strong id="detail-constraints">—</strong></article>
+          <article><span>다음 조치</span><strong id="detail-next-actions">—</strong></article>
+        </div>
         <div class="detail-kpis"><article><span>후보유형</span><strong id="detail-type">—</strong></article><article><span>검토순서</span><strong id="detail-rank">—</strong></article><article><span>필지</span><strong id="detail-parcels">—</strong></article><article><span>개별 빈집</span><strong id="detail-houses">—</strong></article><article><span>필지면적</span><strong id="detail-area">—</strong></article></div>
         <div class="access-kpis"><article><span>최근접 관광지</span><strong id="detail-nearest-poi">—</strong><small id="detail-poi-count">1km 내 관광지 —</small></article><article><span>동 단위 대중교통 유입</span><strong id="detail-transport-inflow">—</strong><small id="detail-transport-period">자료기간 —</small></article><article><span>사업성 추가검토 신호</span><strong id="detail-access-signal">—</strong><small>수익성·인허가 확정판정 아님</small></article></div>
         <p id="detail-evidence" class="detail-evidence">후보를 선택하면 적용 기준과 미결합 근거를 표시합니다.</p>
@@ -57,7 +66,7 @@
         <form id="address-analysis-form"><input name="address" id="address-input" maxlength="160" required placeholder="부산광역시 북구 구포동 123-4"><button type="submit">빈집 거점개발 판정</button></form>
         <div id="address-analysis-result" hidden></div>
       </section>
-      <p class="map-note">A형은 연속필지 거점개발 후보, B형은 사전 제외조건을 통과한 검증 지적면적 300㎡ 이상 단독주택형 가운데 자치구별 최대 5개를 선별한 예비후보입니다. 조건부 후보는 순위에 포함되지만 접도·토지이용·건축물대장·인허가를 추가 확인해야 합니다. 교통·관광지 근거가 미완결이면 면적과 자치구 방문수요 기반의 잠정 순위이며, 관광숙박 전환은 소유권·구조안전·소방·주차·위생·수익성을 별도 검토해야 합니다.</p>
+      <p class="map-note">A형은 연속필지 거점개발 후보, B형은 사전 제외조건을 통과한 검증 지적면적 300㎡ 이상 단독주택형 가운데 자치구별 최대 5개를 선별한 예비후보입니다. 사업조건은 접도·토지이용·인허가 제약을, 자료 보완은 건축물대장 등 미연계 항목을 뜻합니다. 교통·관광지 근거가 미완결이면 면적과 자치구 방문수요 기반의 잠정 순위이며, 관광숙박 전환은 소유권·구조안전·소방·주차·위생·수익성을 별도 검토해야 합니다.</p>
     </section>
   </main>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>

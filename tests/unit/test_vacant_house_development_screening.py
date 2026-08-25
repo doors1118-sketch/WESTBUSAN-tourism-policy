@@ -51,8 +51,26 @@ def test_conditional_reasons_keep_candidate_eligible() -> None:
     assert review.conditional_reasons == (
         "weak_road_condition",
         "additional_land_use_review_required",
-        "building_register_not_linked",
     )
+    assert review.data_status == "needs_review"
+    assert review.data_gaps == ("building_register_not_linked",)
+
+
+def test_missing_building_register_is_data_gap_not_business_condition() -> None:
+    review = assess_development_review(
+        road_sides=("중로한면",),
+        land_use_zones=("제2종일반주거지역",),
+        has_cadastral_geometry=True,
+        building_register_linked=False,
+        construction_year_known=False,
+        building_structure_known=False,
+    )
+
+    assert review.eligible is True
+    assert review.status == "passed"
+    assert review.conditional_reasons == ()
+    assert review.data_status == "needs_review"
+    assert review.data_gaps == ("building_register_not_linked",)
 
 
 def test_partial_landlocked_hub_is_conditional_not_excluded() -> None:
@@ -83,6 +101,8 @@ def test_complete_candidate_passes_basic_screening() -> None:
     assert review.status == "passed"
     assert review.exclusion_reasons == ()
     assert review.conditional_reasons == ()
+    assert review.data_status == "complete"
+    assert review.data_gaps == ()
 
 
 def test_explicit_lodging_use_restriction_is_excluded() -> None:

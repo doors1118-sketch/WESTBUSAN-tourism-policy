@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 DevelopmentReviewStatus = Literal["excluded", "conditional", "passed"]
+DataReviewStatus = Literal["complete", "needs_review"]
 
 _ADDITIONAL_LAND_USE_REVIEW_TERMS = (
     "자연녹지",
@@ -28,6 +29,8 @@ class DevelopmentReview:
     status: DevelopmentReviewStatus
     exclusion_reasons: tuple[str, ...]
     conditional_reasons: tuple[str, ...]
+    data_status: DataReviewStatus
+    data_gaps: tuple[str, ...]
 
 
 def assess_development_review(
@@ -58,6 +61,7 @@ def assess_development_review(
     )
     exclusion_reasons: list[str] = []
     conditional_reasons: list[str] = []
+    data_gaps: list[str] = []
 
     if not has_cadastral_geometry:
         exclusion_reasons.append("cadastral_geometry_unconfirmed")
@@ -87,20 +91,26 @@ def assess_development_review(
         conditional_reasons.append("additional_land_use_review_required")
 
     if not building_register_linked:
-        conditional_reasons.append("building_register_not_linked")
+        data_gaps.append("building_register_not_linked")
     else:
         if not construction_year_known:
-            conditional_reasons.append("construction_year_unconfirmed")
+            data_gaps.append("construction_year_unconfirmed")
         if not building_structure_known:
-            conditional_reasons.append("building_structure_unconfirmed")
+            data_gaps.append("building_structure_unconfirmed")
 
     exclusions = _ordered_unique(exclusion_reasons)
     conditions = _ordered_unique(conditional_reasons)
+    gaps = _ordered_unique(data_gaps)
+    data_status: DataReviewStatus = "needs_review" if gaps else "complete"
     if exclusions:
-        return DevelopmentReview(False, "excluded", exclusions, conditions)
+        return DevelopmentReview(
+            False, "excluded", exclusions, conditions, data_status, gaps
+        )
     if conditions:
-        return DevelopmentReview(True, "conditional", (), conditions)
-    return DevelopmentReview(True, "passed", (), ())
+        return DevelopmentReview(
+            True, "conditional", (), conditions, data_status, gaps
+        )
+    return DevelopmentReview(True, "passed", (), (), data_status, gaps)
 
 
 def _normalized(value: object) -> str:
@@ -114,5 +124,6 @@ def _ordered_unique(values: Sequence[str]) -> tuple[str, ...]:
 __all__ = [
     "DevelopmentReview",
     "DevelopmentReviewStatus",
+    "DataReviewStatus",
     "assess_development_review",
 ]

@@ -68,6 +68,94 @@
     return "개발후보 사전심사 미적용";
   }
 
+  function dataReviewText(properties) {
+    const gaps = (properties.data_review_gaps || []).map(
+      (reason) => developmentReasonLabels[reason] || reason,
+    );
+    if (properties.data_review_status === "complete") return "자료 확인 완료";
+    if (gaps.length) return `자료 보완: ${gaps.join("·")}`;
+    return "자료 보완 여부 미확인";
+  }
+
+  function policyInterpretation(feature, kind, identifier) {
+    const properties = feature.properties || {};
+    const access = accessibilityForFeature(feature, identifier);
+    const isHub = kind === "hub";
+    const isStandalone = kind === "standalone";
+    const area = Number(isHub ? properties.union_area : properties.parcel_area || properties.land_area || 0);
+    const businessReasons = (properties.development_conditional_reasons || []).map(
+      (reason) => developmentReasonLabels[reason] || reason,
+    );
+    const dataGaps = (properties.data_review_gaps || []).map(
+      (reason) => developmentReasonLabels[reason] || reason,
+    );
+
+    let overall = "개별 활용 사전검토";
+    if (isHub || isStandalone) {
+      if (properties.development_review_status === "conditional") {
+        overall = "조건부 현장검토";
+      } else if (access.rankingEligible && Number(access.weightedScore) >= 60) {
+        overall = "우선 현장검토";
+      } else {
+        overall = "일반 현장검토";
+      }
+    }
+
+    let projectType = "기존 건축물 활용 가능성 검토";
+    if (isHub) {
+      projectType = area >= 1000 ? "연속필지 복합개발" : "연속필지 통합개발";
+    } else if (isStandalone) {
+      if (area >= 1000) projectType = "단독필지 복합형 워케이션 개발";
+      else if (area >= 500) projectType = "중소형 숙박·워케이션 개발";
+      else projectType = "기존 건축물 전환·소규모 개발";
+    }
+
+    const strengths = [];
+    if (isHub) strengths.push(`${Number(properties.parcel_count || 0)}개 연속필지 통합 가능성`);
+    else if (area >= 1000) strengths.push("1,000㎡ 이상 단독필지");
+    else if (area >= 500) strengths.push("500㎡ 이상 단독필지");
+    else if (area > 0) strengths.push(`${Math.round(area).toLocaleString("ko-KR")}㎡ 필지`);
+    if (access.hasTransport && access.hasTourism) strengths.push("관광·교통 접근성 신호 동시 확인");
+    else if (access.hasTransport) strengths.push("동 단위 교통유입 신호 확인");
+    else if (access.hasTourism) strengths.push("1km 내 관광지 확인");
+    if (!strengths.length) strengths.push("추가 현장근거 확인 필요");
+
+    const constraints = businessReasons.length
+      ? businessReasons
+      : [isHub || isStandalone ? "공개자료상 명시적 입지 제약 미확인" : "상위 개발후보 미선정"];
+    const nextActions = [];
+    if (businessReasons.some((reason) => reason.includes("도로") || reason.includes("맹지"))) {
+      nextActions.push("현장 접도·도로폭 확인");
+    }
+    if (businessReasons.some((reason) => reason.includes("인허가"))) {
+      nextActions.push("토지이용계획·입지 가능 여부 검토");
+    }
+    if (dataGaps.length) nextActions.push("건축물대장·건축구조 확인");
+    nextActions.push("소유권·사업비·수익성 검토");
+
+    return {
+      overall,
+      projectType,
+      strengths: strengths.slice(0, 2).join(" · "),
+      constraints: constraints.slice(0, 2).join(" · "),
+      nextActions: [...new Set(nextActions)].slice(0, 3).join(" · "),
+      businessStatus: `사업조건: ${developmentReviewText(properties)}`,
+      dataStatus: dataReviewText(properties),
+    };
+  }
+
+  function renderPolicyInterpretation(feature, kind, identifier) {
+    const policy = policyInterpretation(feature, kind, identifier);
+    document.getElementById("detail-overall-review").textContent = policy.overall;
+    document.getElementById("detail-project-type").textContent = policy.projectType;
+    document.getElementById("detail-strengths").textContent = policy.strengths;
+    document.getElementById("detail-constraints").textContent = policy.constraints;
+    document.getElementById("detail-next-actions").textContent = policy.nextActions;
+    document.getElementById("detail-business-status").textContent = policy.businessStatus;
+    document.getElementById("detail-data-status").textContent = policy.dataStatus;
+    return policy;
+  }
+
   function candidateAccess(identifier) {
     return data.access.find((item) => item.properties.kind === "candidate_accessibility"
       && item.properties.candidate_id === identifier)?.properties || null;
@@ -319,6 +407,7 @@
     document.getElementById("detail-area").textContent = area > 0
       ? `${area.toLocaleString("ko-KR")}㎡(원천)`
       : "자료 없음";
+    renderPolicyInterpretation(feature, "house", properties.record_id);
     renderAccessibility(feature, properties.record_id);
     document.getElementById("detail-evidence").textContent = (
       `PNU ${properties.pnu || "미확인"} · 건물면적 ${properties.building_area || "자료 없음"}㎡. `
@@ -335,11 +424,12 @@
     selected = selectionKey("hub", properties.hub_id);
     updateSelectionStyles();
     const houses = candidateHouses("hub", feature);
+    const policy = renderPolicyInterpretation(feature, "hub", properties.hub_id);
     document.getElementById("detail-title").textContent = (
       `${properties.district_names.join("·")} ${properties.dong_names.join("·") || "연속필지군"}`
     );
     document.getElementById("detail-summary").textContent = (
-      `${properties.parcel_count}개 빈집 필지가 경계를 맞댄 A형 거점개발 후보입니다. ${developmentReviewText(properties)}. ${accessScoreBreakdown(feature, properties.hub_id)}`
+      `${policy.overall} · ${policy.projectType}. ${properties.parcel_count}개 빈집 필지가 경계를 맞댄 A형 후보입니다.`
     );
     document.getElementById("detail-type").textContent = "A형";
     document.getElementById("detail-rank").textContent = (
@@ -366,6 +456,9 @@
     selected = selectionKey("standalone", properties.candidate_id);
     updateSelectionStyles();
     const houses = candidateHouses("standalone", feature);
+    const policy = renderPolicyInterpretation(
+      feature, "standalone", properties.candidate_id,
+    );
     const demand = properties.district_demand_score === null
       ? "자치구 방문수요 자료 미결합"
       : `자치구 방문수요 점수 ${Number(properties.district_demand_score).toFixed(1)}점`;
@@ -381,7 +474,7 @@
       `${properties.district_name} ${properties.dong_name || "단일필지"}`
     );
     document.getElementById("detail-summary").textContent = (
-      `연속필지군은 아니지만 검증 지적면적 300㎡ 이상인 단독주택형 B형 예비후보입니다. ${developmentReviewText(properties)}. ${accessScoreBreakdown(feature, properties.candidate_id)}`
+      `${policy.overall} · ${policy.projectType}. 검증 지적면적 300㎡ 이상인 단독주택형 B형 예비후보입니다.`
     );
     document.getElementById("detail-type").textContent = "B형";
     document.getElementById("detail-rank").textContent = (
@@ -417,23 +510,21 @@
     const baseEvidence = isHub
       ? `${properties.parcel_count}개 연속필지 · ${Math.round(area).toLocaleString("ko-KR")}㎡`
       : `단독주택형 · ${Math.round(area).toLocaleString("ko-KR")}㎡ · 자치구 내 예비 ${properties.preliminary_rank}순위`;
-    const access = accessibilityForFeature(feature, identifier);
-    const accessEvidence = access.hasTransport && access.hasTourism
-      ? ` · 관광·교통 근거 확인`
-      : access.hasTransport || access.hasTourism ? " · 접근성 일부 확인" : " · 접근성 보완 필요";
-    const scoreEvidence = access.rankingEligible && access.weightedScore !== null
-      ? ` · 보완점수 ${Number(access.weightedScore).toFixed(1)}점`
-      : "";
-    const reviewText = developmentReviewText(properties);
-    const evidence = `${baseEvidence}${accessEvidence}${scoreEvidence}`;
-    const reviewStatus = textElement(
-      "small", reviewText,
-      `review-status ${properties.development_review_status || ""}`,
+    const policy = policyInterpretation(feature, kind, identifier);
+    const statusRow = document.createElement("span");
+    statusRow.className = "candidate-status-row";
+    statusRow.append(
+      textElement(
+        "small", policy.businessStatus.replace("사업조건: ", ""),
+        `review-status ${properties.development_review_status || ""}`,
+      ),
+      textElement("small", policy.dataStatus, "data-review-status"),
     );
     label.append(
       textElement("strong", place),
-      textElement("small", evidence),
-      reviewStatus,
+      textElement("small", baseEvidence),
+      textElement("small", policy.projectType, "candidate-project-type"),
+      statusRow,
     );
     const markerLabel = isHub
       ? `A${Number(feature.properties.candidate_rank)}`
