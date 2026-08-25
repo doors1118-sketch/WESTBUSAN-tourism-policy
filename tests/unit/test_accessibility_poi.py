@@ -54,3 +54,12 @@ def test_review_poi_accepts_busan_point_with_matching_district() -> None:
 
     assert review.status == "accepted"
     assert review.accepted is True
+
+
+def test_kto_publisher_never_uses_httpx_url_bearing_status_error() -> None:
+    source = Path("scripts/publish_accessibility_snapshot.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "raise_for_status" not in source
+    assert "kto_http_status:{response.status_code}" in source

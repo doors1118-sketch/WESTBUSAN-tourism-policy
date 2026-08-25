@@ -128,7 +128,9 @@ def _fetch_all(key: str, *, timeout: float) -> tuple[tuple[TourismPoi, ...], str
                     "pageNo": str(page),
                 },
             )
-            response.raise_for_status()
+            if response.status_code >= 400:
+                # Never let httpx render the credential-bearing request URL.
+                raise RuntimeError(f"kto_http_status:{response.status_code}")
             body = response.content
             response_hashes.append(hashlib.sha256(body).hexdigest())
             payload = response.json()
