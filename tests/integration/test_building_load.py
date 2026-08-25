@@ -9,6 +9,7 @@ from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.buildings import load as building_load
 from westbusan.buildings.load import (
+    backfill_building_investment_profiles,
     collect_buildings_for_licenses,
     load_legal_dong_codes,
     record_building_link_adjudication,
@@ -19,6 +20,54 @@ from westbusan.http import QuotaError
 from westbusan.models import ApiPage, RunContext
 from westbusan.sources.registry import SourceRegistry
 from westbusan.storage import RawStore
+
+
+def test_backfill_building_investment_profiles_replays_versioned_payloads(
+    tmp_path: Path,
+) -> None:
+    db = Database(tmp_path / "profile-backfill.duckdb", Path("sql"))
+    db.migrate()
+    version_run_id = uuid4()
+    db.connection.execute(
+        """insert into pipeline_run (
+               run_id, mode, started_at, status, business_date, rebuildable
+           ) values (?, 'test', ?, 'PUBLISHED', '2026-08-01', true)""",
+        [version_run_id, datetime.now(UTC)],
+    )
+    payload = json.dumps(
+        {
+            "building_register_title": [
+                {
+                    "mgmBldrgstPk": "B-BACKFILL-1",
+                    "jiyukCdNm": "준주거지역",
+                    "platArea": "700",
+                    "mainPurpsCdNm": "숙박시설",
+                    "totPkngCnt": "8",
+                }
+            ]
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    db.connection.execute(
+        """insert into staging_building_snapshot_version (
+               version_run_id, building_id, observed_on, parcel_hash,
+               is_closed, source_payload_json
+           ) values (?, 'B-BACKFILL-1', '2026-08-01', repeat('b', 64), false, ?)""",
+        [version_run_id, payload],
+    )
+
+    first = backfill_building_investment_profiles(db)
+    second = backfill_building_investment_profiles(db)
+
+    assert first.scanned_rows == 1
+    assert first.profile_rows == 1
+    assert first.invalid_payload_rows == 0
+    assert second.profile_rows == 0
+    assert db.query(
+        """select land_use_zone, site_area, main_use, parking_total
+           from building_investment_profile_observation"""
+    ) == [("준주거지역", 700.0, "숙박시설", 8)]
 
 
 def test_same_parcel_is_requested_once_and_links_each_license(
@@ -357,6 +406,55 @@ def test_same_day_building_correction_appends_system_time_version(
         (first_run.run_id, date(2020, 1, 1)),
         (corrected_run.run_id, date(2021, 1, 1)),
     ]
+
+
+def test_store_building_persists_versioned_investment_profile(tmp_path: Path) -> None:
+    db = Database(tmp_path / "building-profile.duckdb", Path("sql"))
+    db.migrate()
+    run = RunContext(
+        uuid4(), "test", datetime(2026, 8, 25, tzinfo=UTC), business_date=date(2026, 8, 25)
+    )
+    record = BuildingRecord(
+        building_id="B-PROFILE-1",
+        sigungu_cd="26320",
+        bjdong_cd="10100",
+        plat_gb_cd="0",
+        bun="0001",
+        ji="0000",
+        road_address="부산광역시 북구 구포동 1",
+        lot_address="부산광역시 북구 구포동 1",
+        approval_date=date(1990, 1, 1),
+        use_approval_date=date(1990, 1, 1),
+        permit_date=None,
+        main_use="숙박시설",
+        total_area=1000.0,
+        ground_floor_count=5,
+        underground_floor_count=1,
+        closed_indicator=None,
+        is_closed=False,
+    )
+    responses = {
+        "building_register_title": [
+            {
+                "mgmBldrgstPk": "B-PROFILE-1",
+                "jiyukCdNm": "일반상업지역",
+                "platArea": "400",
+                "totArea": "1000",
+                "strctCdNm": "철근콘크리트구조",
+                "totPkngCnt": "7",
+            }
+        ]
+    }
+
+    building_load._store_building(
+        db, record, "parcel-profile", run, responses, lambda: None
+    )
+
+    assert db.query(
+        """select land_use_zone, site_area, total_area, structure, parking_total,
+                  field_coverage
+           from building_investment_profile_observation"""
+    ) == [("일반상업지역", 400.0, 1000.0, "철근콘크리트구조", 7, pytest.approx(5 / 15))]
 
 
 def test_same_run_building_correction_appends_revision(tmp_path: Path) -> None:

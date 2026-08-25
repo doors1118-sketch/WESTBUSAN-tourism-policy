@@ -169,6 +169,10 @@ def validate_vacant_house_map_bundle(bundle: VacantHouseMapBundle) -> bool:
         return False
     if manifest.get("access_snapshot_id") != summary.get("access_snapshot_id"):
         return False
+    if manifest.get("parcel_context_run_id") != summary.get(
+        "parcel_context_run_id"
+    ):
+        return False
     entries = manifest.get("files")
     if not isinstance(entries, dict) or set(entries) != set(_FILES) - {
         "manifest.json"
@@ -256,6 +260,11 @@ def _read_current(connection: QueryConnection) -> dict[str, object]:
     access_snapshot_id, access_context, access_status = _read_optional_access_context(
         connection
     )
+    (
+        parcel_context_run_id,
+        parcel_context_by_pnu,
+        parcel_context_status,
+    ) = _read_optional_parcel_context(connection, UUID(str(inventory_run_id)))
 
     return _map_data(
         hub_run_id=UUID(str(hub_run_id)),
@@ -271,7 +280,66 @@ def _read_current(connection: QueryConnection) -> dict[str, object]:
         access_snapshot_id=access_snapshot_id,
         access_context=access_context,
         access_status=access_status,
+        parcel_context_run_id=parcel_context_run_id,
+        parcel_context_by_pnu=parcel_context_by_pnu,
+        parcel_context_status=parcel_context_status,
     )
+
+
+def _read_optional_parcel_context(
+    connection: QueryConnection,
+    inventory_run_id: UUID,
+) -> tuple[UUID | None, dict[str, dict[str, object]], str]:
+    """Load only parcel context published against the current inventory pointer."""
+    try:
+        pointer = connection.execute(
+            """select current.context_run_id, current.inventory_run_id
+               from vacant_house_parcel_context_publication_current as current
+               join vacant_house_parcel_context_run as run
+                 on run.context_run_id = current.context_run_id
+                and run.inventory_run_id = current.inventory_run_id
+               where current.singleton_key=1 and run.status='COMPLETED'
+                 and current.inventory_run_id=?""",
+            [inventory_run_id],
+        ).fetchall()
+        if len(pointer) != 1:
+            return None, {}, "not_published"
+        context_run_id = UUID(str(pointer[0][0]))
+        rows = connection.execute(
+            """select pnu,
+                      max(land_use_zone) filter (where land_use_zone is not null),
+                      max(land_use_district) filter (where land_use_district is not null),
+                      max(land_use_area) filter (where land_use_area is not null),
+                      max(land_category) filter (where land_category is not null),
+                      max(parcel_area) filter (where parcel_area is not null),
+                      max(road_side) filter (where road_side is not null),
+                      max(terrain_height) filter (where terrain_height is not null),
+                      max(terrain_shape) filter (where terrain_shape is not null),
+                      max(land_use_situation) filter (
+                          where land_use_situation is not null
+                      )
+               from vacant_house_parcel_context_observation
+               where context_run_id=? and provider_status='matched'
+               group by pnu order by pnu""",
+            [context_run_id],
+        ).fetchall()
+    except duckdb.Error:
+        return None, {}, "not_published"
+    fields = (
+        "land_use_zone",
+        "land_use_district",
+        "land_use_area",
+        "land_category",
+        "parcel_area",
+        "road_side",
+        "terrain_height",
+        "terrain_shape",
+        "land_use_situation",
+    )
+    by_pnu = {
+        str(row[0]): dict(zip(fields, row[1:], strict=True)) for row in rows
+    }
+    return context_run_id, by_pnu, "available" if by_pnu else "published_empty"
 
 
 def _read_optional_access_context(
@@ -471,6 +539,9 @@ def _map_data(
     access_snapshot_id: UUID | None,
     access_context: dict[str, object],
     access_status: dict[str, str],
+    parcel_context_run_id: UUID | None,
+    parcel_context_by_pnu: dict[str, dict[str, object]],
+    parcel_context_status: str,
 ) -> dict[str, object]:
     geometry_by_pnu = {
         str(row[0]): from_wkb(bytes(row[3])) for row in evidence_rows
@@ -531,6 +602,16 @@ def _map_data(
                 if source[3]
             }
         )
+        hub_pnus = sorted(
+            pnu
+            for pnu, member in member_by_pnu.items()
+            if member.get("hub_id") == hub_id
+        )
+        hub_context = [
+            parcel_context_by_pnu[pnu]
+            for pnu in hub_pnus
+            if pnu in parcel_context_by_pnu
+        ]
         hub_features.append(
             _feature(
                 from_wkb(bytes(row[4])),
@@ -546,6 +627,16 @@ def _map_data(
                     "dong_names": dong_names,
                     "context": _json_object(row[7]),
                     "reason_codes": _json_list(row[8]),
+                    "land_use_zones": _distinct_context_values(
+                        hub_context, "land_use_zone"
+                    ),
+                    "land_use_districts": _distinct_context_values(
+                        hub_context, "land_use_district"
+                    ),
+                    "road_sides": _distinct_context_values(
+                        hub_context, "road_side"
+                    ),
+                    "parcel_planning_parcel_count": len(hub_context),
                 },
             )
         )
@@ -556,6 +647,7 @@ def _map_data(
         district_name = _WEST_DISTRICTS.get(
             candidate.district_code, candidate.district_code
         )
+        parcel_context = parcel_context_by_pnu.get(candidate.pnu, {})
         standalone_features.append(
             _feature(
                 candidate.geometry,
@@ -586,6 +678,7 @@ def _map_data(
                         "reviewed_parcel_area",
                         "pnu",
                     ],
+                    **parcel_context,
                 },
             )
         )
@@ -657,6 +750,7 @@ def _map_data(
         evidence = evidence_by_pnu[pnu]
         member = member_by_pnu.get(pnu)
         sources = address_by_pnu.get(pnu, [])
+        parcel_context = parcel_context_by_pnu.get(pnu, {})
         district_name = (
             str(sources[0][2])
             if sources and sources[0][2]
@@ -682,6 +776,7 @@ def _map_data(
                         member["source_record_count"] if member else len(sources)
                     ),
                     "source_date": str(evidence[4]) if evidence[4] else None,
+                    **parcel_context,
                 },
             )
         )
@@ -708,6 +803,7 @@ def _map_data(
                             if member
                             else None
                         ),
+                        **parcel_context,
                     },
                 )
             )
@@ -731,12 +827,15 @@ def _map_data(
         district_candidate_counts[district_name]["supplemental_candidates"] += 1
 
     summary = {
-        "schema_version": "vacant-map-v3",
+        "schema_version": "vacant-map-v4",
         "hub_run_id": str(hub_run_id),
         "inventory_run_id": str(inventory_run_id),
         "source_snapshot_date": snapshot_date,
         "published_date": published_date,
         "access_snapshot_id": str(access_snapshot_id) if access_snapshot_id else None,
+        "parcel_context_run_id": (
+            str(parcel_context_run_id) if parcel_context_run_id else None
+        ),
         "candidate_count": len(hub_features),
         "standalone_candidate_count": len(standalone_features),
         "bukgu_supplemental_candidate_count": len(
@@ -788,6 +887,7 @@ def _map_data(
             "station_proximity": "available",
             "transport_flow": access_status["transport"],
             "official_tourism_poi": access_status["tourism"],
+            "parcel_planning": parcel_context_status,
         },
     }
     return {
@@ -836,10 +936,11 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
     for name, body in bodies.items():
         (directory / name).write_bytes(body)
     manifest = {
-        "schema_version": "vacant-map-v3",
+        "schema_version": "vacant-map-v4",
         "hub_run_id": str(data["hub_run_id"]),
         "inventory_run_id": str(data["inventory_run_id"]),
         "access_snapshot_id": summary["access_snapshot_id"],
+        "parcel_context_run_id": summary["parcel_context_run_id"],
         "source_snapshot_date": summary["source_snapshot_date"],
         "files": {
             name: {
@@ -881,6 +982,18 @@ def _unique_values(
     rows: list[tuple[object, ...]], index: int
 ) -> list[object]:
     return sorted({row[index] for row in rows if row[index] is not None})
+
+
+def _distinct_context_values(
+    contexts: list[dict[str, object]], key: str
+) -> list[str]:
+    return sorted(
+        {
+            str(context[key])
+            for context in contexts
+            if context.get(key) not in (None, "")
+        }
+    )
 
 
 def _feature(geometry: BaseGeometry, properties: dict[str, object]) -> dict[str, object]:

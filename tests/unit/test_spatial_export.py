@@ -140,6 +140,29 @@ def _published_fixture(
                 ),
             ],
         )
+    building_id = UUID("00000000-0000-0000-0000-000000000011")
+    db.connection.execute(
+        "insert into dim_building (building_id, building_key) values (?, 'B-EXPORT-1')",
+        [building_id],
+    )
+    db.connection.execute(
+        "insert into run_facility_building values (?, ?, ?)",
+        [base_run_id, facility_ids[1], building_id],
+    )
+    db.connection.execute(
+        """insert into building_investment_profile_observation (
+               version_run_id, building_id, observed_on, land_use_zone,
+               land_use_district, land_use_area, land_category, site_area,
+               building_area, total_area, building_coverage_ratio,
+               floor_area_ratio, main_use, structure, height, parking_total,
+               elevator_total, earthquake_design_applied, field_coverage,
+               source_payload_sha256, evidence_json
+           ) values (?, 'B-EXPORT-1', '2026-08-01', '일반상업지역',
+                     '방화지구', null, '대', 500.0, 300.0, 1200.0, 60.0,
+                     240.0, '숙박시설', '철근콘크리트구조', 18.5, 12, 2,
+                     true, 0.8666666666666667, repeat('a', 64), '{}')""",
+        [base_run_id],
+    )
     db.connection.execute(
         """insert into mart_grid_month (
                spatial_run_id, base_published_run_id, grid_id, district_code,
@@ -265,6 +288,17 @@ def test_spatial_bundle_has_exact_files_schemas_counts_and_hashes(
         feature["properties"]["public_address"]
         for feature in facilities["features"]
     ] == ["부산 공개로 2/상가", "부산 공개로 1/상가"]
+    first_profile = facilities["features"][0]["properties"]
+    second_profile = facilities["features"][1]["properties"]
+    assert first_profile["land_use_zone"] == "일반상업지역"
+    assert first_profile["site_area"] == 500.0
+    assert first_profile["floor_area_ratio"] == 240.0
+    assert first_profile["parking_total"] == 12
+    assert first_profile["earthquake_design_applied"] is True
+    assert first_profile["profile_coverage"] == pytest.approx(13 / 15)
+    assert first_profile["profile_observed_on"] == "2026-08-01"
+    assert second_profile["land_use_zone"] is None
+    assert second_profile["profile_coverage"] is None
     evidence = parquet.ParquetFile(bundle.evidence_parquet).read()
     assert evidence.num_rows == 1
     assert evidence.column_names == [

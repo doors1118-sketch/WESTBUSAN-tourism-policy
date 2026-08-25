@@ -15,7 +15,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from westbusan.buildings.normalize import BuildingRecord, normalize_building_title
+from westbusan.buildings.normalize import (
+    BuildingRecord,
+    normalize_building_investment_profile,
+    normalize_building_title,
+)
 from westbusan.db import Database
 from westbusan.entity_resolution.normalize import NormalizedAddress
 from westbusan.http import SafeHttpClient
@@ -65,6 +69,65 @@ class BuildingCollectionResult:
     parcel_queries: int
     building_rows: int
     bridge_rows: int
+
+
+@dataclass(frozen=True, slots=True)
+class BuildingProfileBackfillResult:
+    """Deterministic counts for replaying immutable building snapshot payloads."""
+
+    scanned_rows: int
+    profile_rows: int
+    invalid_payload_rows: int
+
+
+def backfill_building_investment_profiles(
+    db: Database, *, version_run_id: UUID | None = None
+) -> BuildingProfileBackfillResult:
+    """Populate missing profiles from immutable versioned source payloads."""
+    parameters: list[object] = []
+    run_filter = ""
+    if version_run_id is not None:
+        run_filter = "and snapshot.version_run_id = ?"
+        parameters.append(version_run_id)
+    rows = db.query(
+        f"""select snapshot.version_run_id, snapshot.building_id,
+                   snapshot.observed_on, snapshot.source_payload_json
+            from staging_building_snapshot_version as snapshot
+            left join building_investment_profile_observation as profile
+              on profile.version_run_id = snapshot.version_run_id
+             and profile.building_id = snapshot.building_id
+             and profile.observed_on = snapshot.observed_on
+            where profile.building_id is null {run_filter}
+            order by snapshot.version_run_id, snapshot.building_id,
+                     snapshot.observed_on""",
+        parameters,
+    )
+    inserted = 0
+    invalid = 0
+    for run_id, building_id, observed_on, payload_value in rows:
+        payload = str(payload_value)
+        try:
+            decoded = json.loads(payload)
+            if not isinstance(decoded, dict):
+                raise TypeError("payload root is not an object")
+            responses = {
+                str(source_id): [row for row in source_rows if isinstance(row, dict)]
+                for source_id, source_rows in decoded.items()
+                if isinstance(source_rows, list)
+            }
+        except (TypeError, ValueError):
+            invalid += 1
+            continue
+        _persist_building_investment_profile(
+            db,
+            version_run_id=run_id,
+            building_id=str(building_id),
+            observed_on=observed_on,
+            responses=responses,
+            payload=payload,
+        )
+        inserted += 1
+    return BuildingProfileBackfillResult(len(rows), inserted, invalid)
 
 
 def load_legal_dong_codes(csv_path: Path, db: Database) -> int:
@@ -867,6 +930,91 @@ def _store_building(
             *building_values[:2],
             run.run_id,
             *building_values[2:],
+        ],
+    )
+    _store_building_investment_profile(db, record, run, responses, payload)
+
+
+def _store_building_investment_profile(
+    db: Database,
+    record: BuildingRecord,
+    run: RunContext,
+    responses: dict[str, list[dict[str, object]]],
+    payload: str,
+) -> None:
+    assert record.building_id is not None
+    _persist_building_investment_profile(
+        db,
+        version_run_id=run.run_id,
+        building_id=record.building_id,
+        observed_on=run.cutoff_date,
+        responses=responses,
+        payload=payload,
+    )
+
+
+def _persist_building_investment_profile(
+    db: Database,
+    *,
+    version_run_id: UUID,
+    building_id: str,
+    observed_on: object,
+    responses: dict[str, list[dict[str, object]]],
+    payload: str,
+) -> None:
+    profile = normalize_building_investment_profile(
+        [row for rows in responses.values() for row in rows],
+        building_id=building_id,
+    )
+    profile_fields = tuple(profile.__dataclass_fields__)
+    observed_fields = [
+        field for field in profile_fields if getattr(profile, field) is not None
+    ]
+    db.connection.execute(
+        """insert into building_investment_profile_observation (
+               version_run_id, building_id, observed_on, land_use_zone,
+               land_use_district, land_use_area, land_category, site_area,
+               building_area, total_area, building_coverage_ratio,
+               floor_area_ratio, main_use, structure, height, parking_total,
+               elevator_total, earthquake_design_applied, field_coverage,
+               source_payload_sha256, evidence_json
+           ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           on conflict (version_run_id, building_id, observed_on) do update set
+               land_use_zone = excluded.land_use_zone,
+               land_use_district = excluded.land_use_district,
+               land_use_area = excluded.land_use_area,
+               land_category = excluded.land_category,
+               site_area = excluded.site_area,
+               building_area = excluded.building_area,
+               total_area = excluded.total_area,
+               building_coverage_ratio = excluded.building_coverage_ratio,
+               floor_area_ratio = excluded.floor_area_ratio,
+               main_use = excluded.main_use,
+               structure = excluded.structure,
+               height = excluded.height,
+               parking_total = excluded.parking_total,
+               elevator_total = excluded.elevator_total,
+               earthquake_design_applied = excluded.earthquake_design_applied,
+               field_coverage = excluded.field_coverage,
+               source_payload_sha256 = excluded.source_payload_sha256,
+               evidence_json = excluded.evidence_json""",
+        [
+            version_run_id,
+            building_id,
+            observed_on,
+            *(getattr(profile, field) for field in profile_fields),
+            profile.coverage,
+            hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+            json.dumps(
+                {
+                    "observed_fields": observed_fields,
+                    "source_ids": sorted(responses),
+                    "scope": "investment_screening_only",
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
         ],
     )
 

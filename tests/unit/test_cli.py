@@ -129,12 +129,19 @@ def test_cli_help_lists_all_operational_commands() -> None:
         "vacant-house-profile",
         "vacant-house-stage",
         "vacant-house-import",
+        "building-profile-backfill",
+        "vacant-house-parcel-context",
     } <= set(result.stdout.split())
 
 
 @pytest.mark.parametrize(
     "command",
-    ("vacant-house-profile", "vacant-house-stage", "vacant-house-import"),
+    (
+        "vacant-house-profile",
+        "vacant-house-stage",
+        "vacant-house-import",
+        "vacant-house-parcel-context",
+    ),
 )
 def test_vacant_house_cli_help_constructs_safe_operator_commands(command: str) -> None:
     """Catches an unusable vacant-house command before private input is opened."""

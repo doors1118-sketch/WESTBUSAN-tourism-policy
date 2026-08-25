@@ -3,7 +3,11 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from westbusan.buildings.load import load_legal_dong_codes, parcel_query
-from westbusan.buildings.normalize import building_age, normalize_building_title
+from westbusan.buildings.normalize import (
+    building_age,
+    normalize_building_investment_profile,
+    normalize_building_title,
+)
 from westbusan.db import Database
 from westbusan.entity_resolution.normalize import normalize_address
 
@@ -86,3 +90,67 @@ def test_ordinary_title_register_type_is_not_closure_evidence() -> None:
 
     assert title.is_closed is False
     assert title.closed_indicator is None
+
+
+def test_building_investment_profile_normalizes_review_fields() -> None:
+    profile = normalize_building_investment_profile(
+        [
+            {
+                "mgmBldrgstPk": "26140-1001",
+                "jiyukCdNm": "일반상업지역",
+                "jiguCdNm": "방화지구",
+                "guyukCdNm": "도시지역",
+                "jimokCdNm": "대",
+                "platArea": "412.5",
+                "archArea": "220.1",
+                "totArea": "1,028.4",
+                "bcRat": "53.36",
+                "vlRat": "249.31",
+                "mainPurpsCdNm": "숙박시설",
+                "strctCdNm": "철근콘크리트구조",
+                "heit": "18.4",
+                "totPkngCnt": "8",
+                "rideUseElvtCnt": "1",
+                "emgenUseElvtCnt": "0",
+                "rserthqkDsgnApplyYn": "Y",
+            }
+        ],
+        building_id="26140-1001",
+    )
+
+    assert profile.land_use_zone == "일반상업지역"
+    assert profile.land_use_district == "방화지구"
+    assert profile.land_use_area == "도시지역"
+    assert profile.land_category == "대"
+    assert profile.site_area == 412.5
+    assert profile.building_area == 220.1
+    assert profile.total_area == 1028.4
+    assert profile.building_coverage_ratio == 53.36
+    assert profile.floor_area_ratio == 249.31
+    assert profile.structure == "철근콘크리트구조"
+    assert profile.height == 18.4
+    assert profile.parking_total == 8
+    assert profile.elevator_total == 1
+    assert profile.earthquake_design_applied is True
+    assert profile.coverage == 1.0
+
+
+def test_building_investment_profile_does_not_cross_contaminate_buildings() -> None:
+    profile = normalize_building_investment_profile(
+        [
+            {
+                "mgmBldrgstPk": "B-OTHER",
+                "jiyukCdNm": "일반상업지역",
+                "platArea": "999",
+            },
+            {
+                "mgmBldrgstPk": "B-TARGET",
+                "jiyukCdNm": "준주거지역",
+                "platArea": "120",
+            },
+        ],
+        building_id="B-TARGET",
+    )
+
+    assert profile.land_use_zone == "준주거지역"
+    assert profile.site_area == 120.0

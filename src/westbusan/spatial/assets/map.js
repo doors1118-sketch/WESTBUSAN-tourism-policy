@@ -360,6 +360,20 @@
   function renderFacilitySummary(node) {
     const rooms = numeric(node, "roomCount");
     const age = numeric(node, "buildingAge");
+    const siteArea = numeric(node, "siteArea");
+    const totalArea = numeric(node, "totalArea");
+    const coverageRatio = numeric(node, "buildingCoverageRatio");
+    const floorAreaRatio = numeric(node, "floorAreaRatio");
+    const parking = numeric(node, "parkingTotal");
+    const profileParts = [
+      node.dataset.landUseZone ? `용도지역 ${node.dataset.landUseZone}` : null,
+      siteArea === null ? null : `대지 ${formatNumber(siteArea, 1)}㎡`,
+      totalArea === null ? null : `연면적 ${formatNumber(totalArea, 1)}㎡`,
+      coverageRatio === null ? null : `건폐율 ${formatNumber(coverageRatio, 1)}%`,
+      floorAreaRatio === null ? null : `용적률 ${formatNumber(floorAreaRatio, 1)}%`,
+      node.dataset.mainUse ? `주용도 ${node.dataset.mainUse}` : null,
+      parking === null ? null : `주차 ${formatNumber(parking)}대`,
+    ].filter(Boolean);
     setRegionMetricLabels({
       first: ["선택 시설", "지도에 표시된 개별 숙박시설"],
       second: ["건축연령", "사용승인일 기반 확인값"],
@@ -371,7 +385,10 @@
     document.getElementById("region-aged-count").textContent = age === null ? "자료 없음" : `${formatNumber(age, 1)}년`;
     document.getElementById("region-room-count").textContent = rooms === null ? "자료 없음" : `${formatNumber(rooms)}실`;
     document.getElementById("region-gap-score").textContent = `${node.dataset.district || "-"} ${node.dataset.dong || ""}`.trim();
-    document.getElementById("region-summary-text").textContent = `${node.dataset.publicAddress || "주소 자료 없음"} · 개별 시설의 적합성·권리관계·사업성은 별도 확인이 필요합니다.`;
+    const profileText = profileParts.length
+      ? ` · 건축물대장 투자검토 정보: ${profileParts.join(" · ")}`
+      : " · 건축물대장 투자검토 정보는 확인되지 않았습니다.";
+    document.getElementById("region-summary-text").textContent = `${node.dataset.publicAddress || "주소 자료 없음"}${profileText} · 법적 적합성·권리관계·사업성은 별도 확인이 필요합니다.`;
     document.getElementById("region-ai-result").hidden = true;
   }
 

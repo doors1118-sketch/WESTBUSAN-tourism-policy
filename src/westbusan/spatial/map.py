@@ -404,7 +404,12 @@ def _render_svg(
             'data-period="{period}" data-small-scale="{small}" data-aged="{aged}" '
             'data-context="{context}" data-public-name="{public_name}" '
             'data-public-address="{public_address}" data-room-count="{room_count}" '
-            'data-building-age="{building_age}"><title>{title}</title></circle>'.format(
+            'data-building-age="{building_age}" data-land-use-zone="{land_use_zone}" '
+            'data-site-area="{site_area}" data-total-area="{total_area}" '
+            'data-building-coverage-ratio="{building_coverage_ratio}" '
+            'data-floor-area-ratio="{floor_area_ratio}" data-main-use="{main_use}" '
+            'data-parking-total="{parking_total}" '
+            'data-profile-coverage="{profile_coverage}"><title>{title}</title></circle>'.format(
                 grade=_attribute(grade),
                 x=x,
                 y=y,
@@ -422,6 +427,16 @@ def _render_svg(
                 public_address=_attribute(properties.get("public_address")),
                 room_count=_attribute(properties.get("room_count")),
                 building_age=_attribute(properties.get("use_approval_age_years")),
+                land_use_zone=_attribute(properties.get("land_use_zone")),
+                site_area=_attribute(properties.get("site_area")),
+                total_area=_attribute(properties.get("total_area")),
+                building_coverage_ratio=_attribute(
+                    properties.get("building_coverage_ratio")
+                ),
+                floor_area_ratio=_attribute(properties.get("floor_area_ratio")),
+                main_use=_attribute(properties.get("main_use")),
+                parking_total=_attribute(properties.get("parking_total")),
+                profile_coverage=_attribute(properties.get("profile_coverage")),
                 title=html.escape(
                     " · ".join(
                         (

@@ -108,6 +108,23 @@ _FACILITY_FIELDS = (
     "composite_grade",
     "display_status",
     "source_dates",
+    "land_use_zone",
+    "land_use_district",
+    "land_use_area",
+    "land_category",
+    "site_area",
+    "building_area",
+    "total_area",
+    "building_coverage_ratio",
+    "floor_area_ratio",
+    "main_use",
+    "structure",
+    "height",
+    "parking_total",
+    "elevator_total",
+    "earthquake_design_applied",
+    "profile_coverage",
+    "profile_observed_on",
 )
 _EVIDENCE_FIELDS = (
     "subject_type",
@@ -919,7 +936,24 @@ def _load_facilities(
     db: Database, identity: _PublicationIdentity
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
     rows = db.query(
-        """select facility.facility_id, facility.grid_id,
+        """with single_building as (
+               select facility_id, min(building_id) as building_id
+               from run_facility_building
+               where run_id = ?
+               group by facility_id having count(*) = 1
+           ), eligible_profile as (
+               select profile.*, row_number() over (
+                   partition by profile.building_id
+                   order by profile.observed_on desc, profile.recorded_at desc,
+                            profile.version_run_id desc
+               ) as profile_rank
+               from building_investment_profile_observation as profile
+               join pipeline_run_input as lineage
+                 on lineage.run_id = ?
+                and lineage.input_run_id = profile.version_run_id
+               where profile.observed_on <= ?
+           )
+           select facility.facility_id, facility.grid_id,
                   facility.public_name, facility.public_address,
                   facility.public_longitude, facility.public_latitude,
                   facility.room_count, facility.use_approval_age_years,
@@ -929,13 +963,34 @@ def _load_facilities(
                   facility.district_context_rating,
                   facility.district_context_points, facility.composite_score,
                   facility.composite_grade, facility.display_status,
-                  grid.primary_dong_name
+                  grid.primary_dong_name,
+                  profile.land_use_zone, profile.land_use_district,
+                  profile.land_use_area, profile.land_category,
+                  profile.site_area, profile.building_area, profile.total_area,
+                  profile.building_coverage_ratio, profile.floor_area_ratio,
+                  profile.main_use, profile.structure, profile.height,
+                  profile.parking_total, profile.elevator_total,
+                  profile.earthquake_design_applied, profile.field_coverage,
+                  profile.observed_on
            from mart_facility_priority_current as facility
            join dim_spatial_grid_500m as grid
              on grid.boundary_version_id = ?
             and grid.grid_id = facility.grid_id
+           left join single_building as link
+             on link.facility_id = facility.facility_id
+           left join dim_building as building
+             on building.building_id = link.building_id
+           left join eligible_profile as profile
+             on profile.building_id = building.building_key
+            and profile.profile_rank = 1
            where facility.spatial_run_id = ? order by facility.facility_id""",
-        [identity.boundary_version_id, identity.spatial_run_id],
+        [
+            identity.base_run_id,
+            identity.base_run_id,
+            identity.business_date,
+            identity.boundary_version_id,
+            identity.spatial_run_id,
+        ],
     )
     expected = identity.table_counts.get("mart_facility_priority_current")
     if expected != len(rows):
@@ -999,6 +1054,25 @@ def _load_facilities(
                 row[18], "display_status", allowed=_DISPLAY_VALUES
             ),
             "source_dates": source_dates,
+            "land_use_zone": row[20],
+            "land_use_district": row[21],
+            "land_use_area": row[22],
+            "land_category": row[23],
+            "site_area": row[24],
+            "building_area": row[25],
+            "total_area": row[26],
+            "building_coverage_ratio": row[27],
+            "floor_area_ratio": row[28],
+            "main_use": row[29],
+            "structure": row[30],
+            "height": row[31],
+            "parking_total": row[32],
+            "elevator_total": row[33],
+            "earthquake_design_applied": row[34],
+            "profile_coverage": row[35],
+            "profile_observed_on": (
+                row[36].isoformat() if row[36] is not None else None
+            ),
         }
         result.append(values)
     return result, keys

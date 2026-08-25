@@ -138,9 +138,30 @@
             ? `${house.properties.vacant_grade}등급`
             : "등급 미확인",
         ].join(" · ")),
+        textElement("span", parcelPlanningText(house.properties)),
       );
       list.append(card);
     });
+  }
+  function parcelPlanningText(properties) {
+    const planning = [
+      properties.land_use_zone,
+      properties.land_use_district,
+      properties.land_use_area,
+    ].filter(Boolean).join(" · ") || "용도지역·지구 미확인";
+    const parcelArea = properties.parcel_area === null
+      || properties.parcel_area === undefined
+      ? "필지면적 미확인"
+      : `필지 ${Number(properties.parcel_area).toLocaleString("ko-KR")}㎡`;
+    const road = properties.road_side
+      ? `도로접면 ${properties.road_side}`
+      : "도로접면 미확인";
+    const terrain = [properties.terrain_height, properties.terrain_shape]
+      .filter(Boolean).join("·") || "지형 미확인";
+    const use = properties.land_use_situation
+      ? `토지이용 ${properties.land_use_situation}`
+      : "토지이용상황 미확인";
+    return `${planning} · ${properties.land_category || "지목 미확인"} · ${parcelArea} · ${road} · ${terrain} · ${use}`;
   }
   function selectHouse(feature) {
     const properties = feature.properties;
@@ -163,6 +184,7 @@
       : "자료 없음";
     document.getElementById("detail-evidence").textContent = (
       `PNU ${properties.pnu || "미확인"} · 건물면적 ${properties.building_area || "자료 없음"}㎡. `
+      + `${parcelPlanningText(properties)}. `
       + "현재 A형 연속필지군 또는 B형 자치구별 상위 5개에 포함되지 않은 빈집입니다. "
       + "B형은 검증 지적면적 300㎡ 이상 단독주택형 가운데 자치구별로 최대 5개를 게시합니다. "
       + "교통·관광지 근거가 완결되지 않은 경우 면적과 자치구 방문수요로 잠정 선별합니다."
@@ -192,7 +214,7 @@
       `${Math.round(properties.union_area).toLocaleString("ko-KR")}㎡`
     );
     document.getElementById("detail-evidence").textContent = (
-      `지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. ${accessibilityText(properties.hub_id)}. 소유권·접도·용도지역·구조안전·소방·주차와 사업성은 별도 검토 대상입니다.`
+      `지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. 용도지역 ${properties.land_use_zones.join("·") || "미확인"}, 용도지구 ${properties.land_use_districts.join("·") || "미확인"}, 도로접면 ${properties.road_sides.join("·") || "미확인"}입니다. ${accessibilityText(properties.hub_id)}. 소유권·구조안전·소방·주차와 사업성은 별도 검토 대상입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.hubs.get(properties.hub_id);
@@ -226,7 +248,7 @@
       `${Math.round(properties.parcel_area).toLocaleString("ko-KR")}㎡`
     );
     document.getElementById("detail-evidence").textContent = (
-      `${demand}. ${gaps.join(" · ")}. ${accessibilityText(properties.candidate_id)}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
+      `${demand}. ${parcelPlanningText(properties)}. ${gaps.join(" · ")}. ${accessibilityText(properties.candidate_id)}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.standalone.get(properties.candidate_id);

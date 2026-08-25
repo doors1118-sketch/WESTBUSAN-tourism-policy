@@ -69,6 +69,14 @@ def _map_data() -> PublicSpatialData:
                     "period": "2026-08",
                     "room_count": 10.0,
                     "use_approval_age_years": 31.0,
+                    "land_use_zone": "일반상업지역",
+                    "site_area": 500.0,
+                    "total_area": 1200.0,
+                    "building_coverage_ratio": 60.0,
+                    "floor_area_ratio": 240.0,
+                    "main_use": "숙박시설",
+                    "parking_total": 12,
+                    "profile_coverage": 0.8,
                     "small_scale_rating": "high",
                     "aged_building_rating": "high",
                     "district_context_rating": "medium",
@@ -523,7 +531,12 @@ def test_facility_location_click_exposes_public_address_rooms_and_age() -> None:
     assert 'data-public-address="부산 공개로 1"' in rendered
     assert 'data-room-count="10.0"' in rendered
     assert 'data-building-age="31.0"' in rendered
+    assert 'data-land-use-zone="일반상업지역"' in rendered
+    assert 'data-site-area="500.0"' in rendered
+    assert 'data-floor-area-ratio="240.0"' in rendered
+    assert 'data-parking-total="12"' in rendered
     assert "function renderFacilitySummary" in rendered
+    assert "건축물대장 투자검토 정보" in rendered
     assert 'id="region-metric-1-label"' in rendered
     assert 'id="region-metric-2-label"' in rendered
     assert "개별 시설 상세" in rendered

@@ -16,6 +16,7 @@ from westbusan.vacant_house.map_export import (
 HUB_RUN_ID = UUID("11111111-1111-1111-1111-111111111111")
 INVENTORY_RUN_ID = UUID("22222222-2222-2222-2222-222222222222")
 ACCESS_SNAPSHOT_ID = UUID("44444444-4444-4444-4444-444444444444")
+PARCEL_CONTEXT_RUN_ID = UUID("55555555-5555-5555-5555-555555555555")
 
 
 class _Result:
@@ -53,6 +54,26 @@ class _PublishedVacantMapConnection:
             )
         if "from accessibility_publication_current" in query:
             return _Result([(ACCESS_SNAPSHOT_ID, "available", "available")])
+        if "from vacant_house_parcel_context_publication_current" in query:
+            return _Result([(PARCEL_CONTEXT_RUN_ID, INVENTORY_RUN_ID)])
+        if "from vacant_house_parcel_context_observation" in query:
+            return _Result(
+                [
+                    (
+                        f"26320050001000{index:04d}",
+                        "일반상업지역",
+                        "방화지구",
+                        None,
+                        "대",
+                        700.0 + index,
+                        "중로한면",
+                        "평지",
+                        "사다리형",
+                        "상업용",
+                    )
+                    for index in range(1, 8)
+                ]
+            )
         if "from mart_transport_dong_month" in query:
             return _Result(
                 [
@@ -257,6 +278,9 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert houses["features"][0]["properties"]["exact_address"].startswith(
         "부산광역시 북구"
     )
+    assert houses["features"][0]["properties"]["land_use_zone"] == "일반상업지역"
+    assert houses["features"][0]["properties"]["parcel_area"] == 701.0
+    assert houses["features"][0]["properties"]["road_side"] == "중로한면"
     assert summary["candidate_count"] == 2
     assert summary["standalone_candidate_count"] == 1
     assert summary["distinct_parcel_count"] == 7
@@ -265,6 +289,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "district_visitor_demand": "available",
         "nearby_attractions": "reviewed_place_proximity_available",
         "official_tourism_poi": "available",
+        "parcel_planning": "available",
         "station_proximity": "available",
         "transport_flow": "available",
     }
@@ -299,8 +324,10 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "minimum_area_square_metres": 300.0,
         "scope": "서부산 4개 구",
     }
-    assert summary["schema_version"] == "vacant-map-v3"
+    assert summary["schema_version"] == "vacant-map-v4"
     assert summary["access_snapshot_id"] == str(ACCESS_SNAPSHOT_ID)
+    assert summary["parcel_context_run_id"] == str(PARCEL_CONTEXT_RUN_ID)
+    assert summary["context_availability"]["parcel_planning"] == "available"
     assert {item["properties"]["kind"] for item in access["features"]} == {
         "transport_dong",
         "tourism_poi",
@@ -337,6 +364,8 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "function selectHouse(feature)" in script
     assert '.on("click", () => selectHouse(feature))' in script
     assert "일반 빈집" in script
+    assert "용도지역·지구 미확인" in script
+    assert "도로접면" in script
 
 
 def test_vacant_map_manifest_detects_modified_exact_location_bytes(

@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import typer
 
+from westbusan.buildings.load import backfill_building_investment_profiles
 from westbusan.db import migrate_legacy_run
 from westbusan.orchestrator import Pipeline, RunSummary, export_current, redact_for_log
 from westbusan.quality.checks import approve_schema_baseline, observed_schema_contracts
@@ -37,6 +38,14 @@ from westbusan.vacant_house.importer import (
 from westbusan.vacant_house.models import (
     StagedVacantBundleError,
     VacantHouseSourceError,
+)
+from westbusan.vacant_house.parcel_context import VWorldNedParcelContextClient
+from westbusan.vacant_house.parcel_context_store import (
+    ParcelContextCollectionError,
+    ParcelContextPublicationError,
+    ParcelContextSource,
+    collect_current_parcel_context,
+    publish_parcel_context,
 )
 from westbusan.vacant_house.publish import (
     VacantPublicationError,
@@ -397,6 +406,105 @@ def vacant_house_import(
             "source_row_count": summary.source_row_count,
             "accepted_record_count": summary.current_count,
             "exception_count": summary.exception_count,
+        }
+    )
+
+
+@app.command("building-profile-backfill")
+def building_profile_backfill(
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Replay immutable building payloads into versioned investment profiles."""
+    pipeline = _pipeline(root)
+    pipeline.db.migrate()
+    result = backfill_building_investment_profiles(pipeline.db)
+    _print_json(
+        {
+            "status": "COMPLETED" if not result.invalid_payload_rows else "WARNING",
+            "scanned_rows": result.scanned_rows,
+            "profile_rows": result.profile_rows,
+            "invalid_payload_rows": result.invalid_payload_rows,
+        }
+    )
+    if result.invalid_payload_rows:
+        raise typer.Exit(2)
+
+
+@app.command("vacant-house-parcel-context")
+def vacant_house_parcel_context(
+    actor: Annotated[str, typer.Argument(help="Internal operator identity.")],
+    reason: Annotated[str, typer.Argument(help="Approved publication reason.")],
+    domain: Annotated[
+        str,
+        typer.Option(help="Domain registered to the VWorld API key."),
+    ] = "tourism.busanproduct.co.kr",
+    minimum_coverage: Annotated[
+        float,
+        typer.Option(help="Minimum matched share required per source."),
+    ] = 0.8,
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Collect and publish PNU-bound VWorld planning and land characteristics."""
+    pipeline = _pipeline(root)
+    pipeline.db.migrate()
+    key = os.environ.get("VWORLD_API_KEY", "")
+    if not key:
+        _print_json({"status": "BLOCKED", "reason": "vworld_api_key_required"})
+        raise typer.Exit(1)
+    current = pipeline.db.query(
+        "select vacant_run_id from vacant_house_publication_current where singleton_key=1"
+    )
+    if len(current) != 1:
+        _print_json({"status": "BLOCKED", "reason": "vacant_pointer_missing"})
+        raise typer.Exit(1)
+    inventory_run_id = current[0][0]
+    try:
+        with httpx.Client(timeout=30.0, follow_redirects=False) as client:
+            result = collect_current_parcel_context(
+                pipeline.db,
+                inventory_run_id=inventory_run_id,
+                sources=(
+                    ParcelContextSource(
+                        "land_use",
+                        VWorldNedParcelContextClient(
+                            api_key=key,
+                            domain=domain,
+                            client=client,
+                            kind="land_use",
+                            source_id="vworld_land_use",
+                        ),
+                    ),
+                    ParcelContextSource(
+                        "land_characteristics",
+                        VWorldNedParcelContextClient(
+                            api_key=key,
+                            domain=domain,
+                            client=client,
+                            kind="land_characteristics",
+                            source_id="vworld_land_characteristics",
+                        ),
+                    ),
+                ),
+            )
+        if result.status != "COMPLETED":
+            raise ParcelContextCollectionError("provider_quality_blocked")
+        publish_parcel_context(
+            pipeline.db,
+            context_run_id=result.context_run_id,
+            publisher=actor,
+            reason=reason,
+            minimum_matched_coverage=minimum_coverage,
+        )
+    except (ParcelContextCollectionError, ParcelContextPublicationError) as error:
+        _print_json({"status": "BLOCKED", "reason": str(error)})
+        raise typer.Exit(1) from error
+    _print_json(
+        {
+            "status": "COMPLETED",
+            "context_run_id": result.context_run_id,
+            "inventory_run_id": result.inventory_run_id,
+            "observation_count": result.observation_count,
+            "matched_count": result.matched_count,
         }
     )
 

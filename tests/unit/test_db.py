@@ -10,6 +10,30 @@ import pytest
 from westbusan.db import Database
 
 
+def test_investment_profile_migrations_create_versioned_tables(tmp_path: Path) -> None:
+    db = Database(tmp_path / "investment-profile.duckdb", Path("sql"))
+    db.migrate()
+
+    assert db.query(
+        "select version from schema_migrations where version like '043_%'"
+    ) == [("043_building_investment_profile",)]
+    assert db.query(
+        "select version from schema_migrations where version like '044_%'"
+    ) == [("044_vacant_house_parcel_context",)]
+    assert db.query(
+        "select count(*) from information_schema.tables "
+        "where table_name='building_investment_profile_observation'"
+    ) == [(1,)]
+    assert db.query(
+        "select count(*) from information_schema.tables "
+        "where table_name='vacant_house_parcel_context_observation'"
+    ) == [(1,)]
+    assert db.query(
+        "select count(*) from information_schema.tables "
+        "where table_name='vacant_house_parcel_context_response'"
+    ) == [(1,)]
+
+
 def test_accessibility_migration_creates_shared_snapshot_schema(
     tmp_path: Path,
 ) -> None:
