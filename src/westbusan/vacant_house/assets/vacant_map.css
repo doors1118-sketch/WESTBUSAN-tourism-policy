@@ -9,7 +9,7 @@ body { margin: 0; color: var(--ink); font-family: Pretendard,"Noto Sans KR",Aria
 .map-header h1 { margin: 4px 0 0; font-size: 24px; }
 .map-header p { margin: 0; font-size: 12px; }
 main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: calc(100vh - 78px); }
-.map-sidebar { padding: 22px; overflow: auto; border-right: 1px solid var(--line); background: #fff; }
+.map-sidebar { max-height: calc(100vh - 78px); padding: 22px; overflow: auto; border-right: 1px solid var(--line); background: #fff; }
 .map-sidebar h2 { margin: 0 0 8px; font-size: 21px; }
 .map-sidebar>p { margin: 0 0 18px; color: var(--muted); font-size: 12px; line-height: 1.65; }
 .map-sidebar label { display: grid; gap: 6px; font-size: 12px; font-weight: 800; }
@@ -73,6 +73,10 @@ main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: ca
 .detail-kpis article { padding: 13px; border-radius: 11px; background: var(--panel); }
 .detail-kpis span { display: block; color: var(--muted); font-size: 10px; }
 .detail-kpis strong { display: block; margin-top: 5px; font-size: 20px; }
+.access-kpis { display: grid; grid-template-columns: repeat(3,1fr); gap: 10px; margin-top: 10px; }
+.access-kpis article { min-height: 94px; padding: 13px; border: 1px solid #cfe5e2; border-radius: 11px; background: #eff9f7; }
+.access-kpis span,.access-kpis small { display: block; color: var(--muted); font-size: 10px; }
+.access-kpis strong { display: block; margin: 6px 0 4px; color: #0b5961; font-size: 16px; line-height: 1.35; }
 .detail-evidence { margin: 12px 0 0; padding: 11px 13px; border-radius: 10px; background: #fff8e9; color: #624b15; font-size: 11px; line-height: 1.55; }
 .house-list { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 14px; }
 .house-list article { padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
@@ -84,5 +88,5 @@ main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: ca
 .address-analysis button { padding: 12px 16px; border: 0; border-radius: 9px; background: var(--blue); color: #fff; font-weight: 900; cursor: pointer; }
 #address-analysis-result { grid-column: 1/-1; padding: 13px; border-radius: 10px; background: #eef6ff; color: #234a6b; font-size: 12px; }
 .map-note { margin: 10px 3px 0; color: var(--muted); font-size: 10px; }
-@media(max-width:960px) { main { grid-template-columns: 1fr; } .map-sidebar { border-right: 0; border-bottom: 1px solid var(--line); } .candidate-list { grid-template-columns: repeat(2,1fr); } .detail-kpis { grid-template-columns: repeat(3,1fr); } #vacant-slippy-map { height: 540px; } }
+@media(max-width:960px) { main { grid-template-columns: 1fr; } .map-sidebar { max-height: none; border-right: 0; border-bottom: 1px solid var(--line); } .candidate-list { grid-template-columns: repeat(2,1fr); } .detail-kpis,.access-kpis { grid-template-columns: repeat(3,1fr); } #vacant-slippy-map { height: 540px; } }
 @media(max-width:650px) { .map-header { align-items: flex-start; flex-direction: column; } .candidate-list,.house-list { grid-template-columns: 1fr; } .detail-kpis { grid-template-columns: repeat(2,1fr); } .address-analysis { grid-template-columns: 1fr; } .address-analysis form { flex-direction: column; } #vacant-slippy-map { height: 470px; } }

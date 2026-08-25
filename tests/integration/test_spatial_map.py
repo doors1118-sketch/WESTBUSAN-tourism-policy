@@ -179,7 +179,13 @@ def test_map_exposes_transport_and_tourism_context_layers() -> None:
 
     assert 'data-layer="transport_inflow"' in rendered
     assert 'data-layer="tourism_poi"' in rendered
+    assert 'id="tourism-poi-overlay"' in rendered
+    assert 'type="checkbox" checked' in rendered
     assert 'class="tourism-poi-marker"' in rendered
+    assert "function accessibilityContext" in rendered
+    assert "1km 내 관광지와 교통유입 신호" in rendered
+    assert "context.poiCount1000m > 0" in rendered
+    assert 'node.classList.contains("tourism-poi-marker")' in rendered
     assert "대중교통 유입량은 관광객 수가 아닙니다" in rendered
     payload = json.loads(
         rendered.split('<script id="bundle-data" type="application/json">', 1)[1]

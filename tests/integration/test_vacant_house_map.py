@@ -255,6 +255,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     summary = json.loads(first.summary.read_text(encoding="utf-8"))
     access = json.loads(first.accessibility_context.read_text(encoding="utf-8"))
     html = first.index_html.read_text(encoding="utf-8")
+    css = first.stylesheet.read_text(encoding="utf-8")
     script = first.script.read_text(encoding="utf-8")
 
     assert len(hubs["features"]) == 2
@@ -358,7 +359,14 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "대중교통 유입량은 관광객 수가 아닙니다" in html
     assert 'data-layer="tourism_poi"' in html
     assert 'data-layer="transport_inflow"' in html
+    assert 'id="detail-nearest-poi"' in html
+    assert 'id="detail-transport-inflow"' in html
+    assert 'id="detail-access-signal"' in html
     assert "자료 미결합" in script
+    assert "function accessibilityForFeature" in script
+    assert "function renderAccessibility" in script
+    assert "1km 내 관광지와 교통유입 신호가 함께 확인" in script
+    assert "hasTourism: poiCount1000m > 0" in script
     assert "A${Number(feature.properties.candidate_rank)}" in script
     assert "B${Number(feature.properties.preliminary_rank)}" in script
     assert "function selectHouse(feature)" in script
@@ -366,6 +374,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "일반 빈집" in script
     assert "용도지역·지구 미확인" in script
     assert "도로접면" in script
+    assert "max-height: calc(100vh - 78px)" in css
 
 
 def test_vacant_map_manifest_detects_modified_exact_location_bytes(

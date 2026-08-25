@@ -14,6 +14,7 @@
   const clusters = [...document.querySelectorAll(".facility-cluster")];
   const policyLabels = [...document.querySelectorAll(".district-policy-label")];
   const tourismPois = [...document.querySelectorAll(".tourism-poi-marker")];
+  const tourismPoiOverlay = document.getElementById("tourism-poi-overlay");
   const filterable = [...grids, ...facilities, ...clusters, ...policyLabels, ...tourismPois];
   const westDistricts = new Set(["강서구", "사하구", "북구", "사상구"]);
   const eastDistricts = new Set(["해운대구", "수영구", "기장군"]);
@@ -174,8 +175,11 @@
   refreshDongOptions();
 
   function visible(node) {
+    const isTourismPoi = node.classList.contains("tourism-poi-marker");
     if (filters.district.value && node.dataset.district !== filters.district.value) return false;
-    if (filters.dong.value && node.dataset.dong !== filters.dong.value) return false;
+    // POI 읍면동 값은 도로명주소 정규화 결과와 분석격자의 법정동이 다를 수 있다.
+    // 후보 선택 시에는 해당 자치구 POI를 유지하고 실제 거리는 선택지점에서 계산한다.
+    if (!isTourismPoi && filters.dong.value && node.dataset.dong !== filters.dong.value) return false;
     if (filters.period.value && node.dataset.period && node.dataset.period !== filters.period.value) return false;
     return true;
   }
@@ -187,6 +191,58 @@
 
   function formatNumber(value, digits = 0) {
     return Number.isFinite(value) ? value.toLocaleString("ko-KR", { maximumFractionDigits: digits }) : "자료 없음";
+  }
+
+  function haversineMetres(left, right) {
+    const radians = (value) => value * Math.PI / 180;
+    const earthRadius = 6371008.8;
+    const latitudeDelta = radians(right[1] - left[1]);
+    const longitudeDelta = radians(right[0] - left[0]);
+    const a = Math.sin(latitudeDelta / 2) ** 2
+      + Math.cos(radians(left[1])) * Math.cos(radians(right[1]))
+      * Math.sin(longitudeDelta / 2) ** 2;
+    return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function accessibilityContext(node) {
+    const bounds = (node.dataset.geoBounds || "").split(",").map(Number);
+    const center = bounds.length === 4 && bounds.every(Number.isFinite)
+      ? [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2]
+      : null;
+    const features = bundle.access_context?.features || [];
+    const transport = features.filter((item) => {
+      const properties = item.properties || {};
+      return properties.kind === "transport_dong"
+        && properties.district_name === node.dataset.district
+        && properties.dong_name === node.dataset.dong;
+    }).sort((a, b) => String(b.properties.period || "").localeCompare(String(a.properties.period || "")))[0];
+    const pois = center ? features.filter((item) => item.properties?.kind === "tourism_poi"
+      && item.geometry?.type === "Point").map((item) => ({
+        item,
+        distance: haversineMetres(center, item.geometry.coordinates.map(Number)),
+      })).sort((a, b) => a.distance - b.distance) : [];
+    const nearest = pois[0] || null;
+    return {
+      transportInbound: transport
+        ? Number(transport.properties.inbound_other_district || transport.properties.inbound_other_dong || 0)
+        : null,
+      transportPeriod: transport?.properties.period || null,
+      nearestPoiName: nearest?.item.properties.title || null,
+      nearestPoiDistance: nearest?.distance ?? null,
+      poiCount1000m: pois.filter((item) => item.distance <= 1000).length,
+    };
+  }
+
+  function accessibilitySummary(context) {
+    const parts = [];
+    const hasTourism = context.poiCount1000m > 0;
+    if (context.nearestPoiName) parts.push(`최근접 관광지 ${context.nearestPoiName} ${formatNumber(Math.round(context.nearestPoiDistance))}m`);
+    if (context.nearestPoiName) parts.push(`1km 내 관광지 ${formatNumber(context.poiCount1000m)}개`);
+    if (context.transportInbound !== null) parts.push(`동 단위 타 자치구 대중교통 유입 ${formatNumber(context.transportInbound)}통행 (${context.transportPeriod})`);
+    if (hasTourism && context.transportInbound !== null) parts.push("1km 내 관광지와 교통유입 신호가 함께 확인되어 사업성 추가검토 가치가 있음");
+    else if (parts.length) parts.push("접근성 신호가 일부 확인되어 추가 자료와 함께 사업성을 검토할 필요가 있음");
+    else parts.push("관광·교통 접근성 자료가 없어 사업성 신호를 판단할 수 없음");
+    return parts.join(" · ");
   }
 
   function policyColour(kind) {
@@ -232,7 +288,10 @@
   function setLayerEncoding() {
     document.body.classList.toggle("policy-layer", activeLayer === "policy_priority");
     document.body.classList.toggle("facility-layer", activeLayer === "facility_locations");
-    document.body.classList.toggle("tourism-poi-layer", activeLayer === "tourism_poi");
+    document.body.classList.toggle(
+      "tourism-poi-layer",
+      activeLayer === "tourism_poi" || tourismPoiOverlay.checked,
+    );
     document.body.classList.toggle("candidate-layer", !["facility_locations", "tourism_poi"].includes(activeLayer));
     document.body.dataset.activeLayer = activeLayer;
     grids.forEach((node) => {
@@ -344,7 +403,8 @@
       investment_caution: "공급 확대 신중 검토",
     }[node.dataset.recommendation] || "수요·노후 근거 보완";
     const fundingTracks = fundingTrackLabel(node);
-    document.getElementById("region-summary-text").textContent = `선택한 500m 격자 내 숙박시설은 ${formatNumber(facilityCount)}개이며, ${node.dataset.dong} 전체는 ${formatNumber(dongFacilityCount)}개입니다. 격자 시장 신호는 ${action}이며, 지원방식은 ${fundingTracks}입니다. 사업주체·인수 가능성 자료가 없어 확정 배정이 아닌 1차 중복 검토 결과입니다.`;
+    const access = accessibilityContext(node);
+    document.getElementById("region-summary-text").textContent = `선택한 500m 격자 내 숙박시설은 ${formatNumber(facilityCount)}개이며, ${node.dataset.dong} 전체는 ${formatNumber(dongFacilityCount)}개입니다. ${accessibilitySummary(access)}. 격자 시장 신호는 ${action}이며, 지원방식은 ${fundingTracks}입니다. 사업주체·인수 가능성 자료가 없어 확정 배정이 아닌 1차 중복 검토 결과입니다.`;
   }
 
   function fundingTrackLabel(node) {
@@ -540,6 +600,7 @@
 
   function buildSelectionContext(node) {
     const safe = (key) => numeric(node, key);
+    const access = accessibilityContext(node);
     return {
       grid_id: node.dataset.key,
       district: node.dataset.district,
@@ -552,6 +613,11 @@
       demand_score: safe("demandScore"),
       supply_score: safe("supplyScore"),
       recommendation_kind: node.dataset.recommendation || "investment_caution",
+      transport_inbound: access.transportInbound,
+      transport_period: access.transportPeriod,
+      nearest_tourism_poi_name: access.nearestPoiName,
+      nearest_tourism_poi_distance_m: access.nearestPoiDistance,
+      tourism_poi_count_1000m: access.poiCount1000m,
     };
   }
 
@@ -689,6 +755,7 @@
     layerButtons.forEach((node) => node.classList.toggle("is-active", node === button));
     apply();
   }));
+  tourismPoiOverlay.addEventListener("change", apply);
   document.getElementById("region-ai-button").addEventListener("click", () => requestRegionInsight());
   document.getElementById("lot-investment-form").addEventListener("submit", async (event) => {
     event.preventDefault();

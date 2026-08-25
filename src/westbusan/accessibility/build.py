@@ -20,6 +20,8 @@ from westbusan.accessibility.transport import (
 )
 from westbusan.db import Database
 
+_TOURISM_DISTRICT_CLASSIFIER_VERSION = "longest-official-name-v2"
+
 
 @dataclass(frozen=True)
 class AccessibilityBuildSummary:
@@ -315,7 +317,10 @@ def _tourism_poi_revision(tourism_pois: tuple[TourismPoi, ...]) -> str:
         for poi in sorted(tourism_pois, key=lambda item: item.content_id)
     ]
     payload = json.dumps(
-        rows,
+        {
+            "district_classifier_version": _TOURISM_DISTRICT_CLASSIFIER_VERSION,
+            "rows": rows,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -329,7 +334,14 @@ def _district_from_address(address: str) -> str | None:
         "북구", "해운대구", "사하구", "금정구", "강서구", "연제구",
         "수영구", "사상구", "기장군",
     )
-    return next((name for name in districts if name in address), None)
+    return next(
+        (
+            name
+            for name in sorted(districts, key=len, reverse=True)
+            if name in address
+        ),
+        None,
+    )
 
 
 def _build_spatial_context(

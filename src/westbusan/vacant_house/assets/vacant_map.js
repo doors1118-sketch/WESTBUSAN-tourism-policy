@@ -46,15 +46,95 @@
     return data.access.find((item) => item.properties.kind === "candidate_accessibility"
       && item.properties.candidate_id === identifier)?.properties || null;
   }
-  function accessibilityText(identifier) {
-    const access = candidateAccess(identifier);
-    if (!access) return "교통·관광지 접근성 자료 미결합으로 기존 후보순위를 유지합니다.";
+  function haversineMetres(left, right) {
+    const radians = (value) => value * Math.PI / 180;
+    const earthRadius = 6371008.8;
+    const latitudeDelta = radians(right[1] - left[1]);
+    const longitudeDelta = radians(right[0] - left[0]);
+    const a = Math.sin(latitudeDelta / 2) ** 2
+      + Math.cos(radians(left[1])) * Math.cos(radians(right[1]))
+      * Math.sin(longitudeDelta / 2) ** 2;
+    return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+  function geometryCoordinate(feature) {
+    if (feature.geometry?.type === "Point") return feature.geometry.coordinates.map(Number);
+    const coordinates = [];
+    const collect = (value) => {
+      if (Array.isArray(value) && value.length >= 2
+        && Number.isFinite(Number(value[0])) && Number.isFinite(Number(value[1]))) {
+        coordinates.push([Number(value[0]), Number(value[1])]);
+      } else if (Array.isArray(value)) value.forEach(collect);
+    };
+    collect(feature.geometry?.coordinates || []);
+    if (!coordinates.length) return null;
+    return [
+      (Math.min(...coordinates.map((item) => item[0])) + Math.max(...coordinates.map((item) => item[0]))) / 2,
+      (Math.min(...coordinates.map((item) => item[1])) + Math.max(...coordinates.map((item) => item[1]))) / 2,
+    ];
+  }
+  function accessibilityForFeature(feature, identifier) {
+    const direct = candidateAccess(identifier);
+    const properties = feature.properties || {};
+    const coordinate = geometryCoordinate(feature);
+    const pois = coordinate ? data.access.filter((item) => item.properties.kind === "tourism_poi"
+      && item.geometry?.type === "Point").map((item) => ({
+        feature: item,
+        distance: haversineMetres(coordinate, item.geometry.coordinates.map(Number)),
+      })).sort((a, b) => a.distance - b.distance) : [];
+    const nearest = pois[0] || null;
+    const transport = data.access.filter((item) => {
+      const context = item.properties || {};
+      return context.kind === "transport_dong"
+        && context.district_name === properties.district_name
+        && context.dong_name === properties.dong_name;
+    }).sort((a, b) => String(b.properties.period || "").localeCompare(String(a.properties.period || "")))[0];
+    const transportInbound = direct?.transport_inbound ?? (transport
+      ? Number(transport.properties.inbound_other_district || transport.properties.inbound_other_dong || 0)
+      : null);
+    const nearestPoiName = direct?.nearest_tourism_poi_name || nearest?.feature.properties.title || null;
+    const nearestPoiDistance = direct?.nearest_tourism_poi_distance_m ?? nearest?.distance ?? null;
+    const poiCount1000m = direct?.tourism_poi_count_1000m ?? pois.filter((item) => item.distance <= 1000).length;
+    return {
+      transportInbound,
+      transportPeriod: direct?.transport_period || transport?.properties.period || null,
+      nearestPoiName,
+      nearestPoiDistance,
+      poiCount1000m,
+      hasTransport: transportInbound !== null,
+      hasTourism: poiCount1000m > 0,
+      rankingEligible: Boolean(direct?.ranking_eligible),
+    };
+  }
+  function accessibilityText(feature, identifier) {
+    const access = accessibilityForFeature(feature, identifier);
     const parts = [];
-    if (access.transport_inbound !== null) parts.push(`대중교통 유입 ${Number(access.transport_inbound).toLocaleString("ko-KR")}통행 (${access.transport_period})`);
-    if (access.tourism_poi_count_1000m !== null) parts.push(`1km 내 관광지 ${Number(access.tourism_poi_count_1000m).toLocaleString("ko-KR")}개`);
-    if (access.nearest_tourism_poi_name) parts.push(`최근접 관광지 ${access.nearest_tourism_poi_name} ${Math.round(access.nearest_tourism_poi_distance_m).toLocaleString("ko-KR")}m`);
-    parts.push(access.ranking_eligible ? "접근성 근거가 완결되어 보완순위에 반영됨" : "근거가 일부 미완결되어 기존 후보순위 유지");
+    if (access.transportInbound !== null) parts.push(`동 단위 타 자치구 대중교통 유입 ${Number(access.transportInbound).toLocaleString("ko-KR")}통행 (${access.transportPeriod})`);
+    if (access.nearestPoiName) parts.push(`1km 내 관광지 ${Number(access.poiCount1000m).toLocaleString("ko-KR")}개`);
+    if (access.nearestPoiName) parts.push(`최근접 관광지 ${access.nearestPoiName} ${Math.round(access.nearestPoiDistance).toLocaleString("ko-KR")}m`);
+    if (access.hasTransport && access.hasTourism) parts.push("1km 내 관광지와 교통유입 신호가 함께 확인되어 사업성 추가검토 가치가 있음");
+    else if (access.hasTransport || access.hasTourism) parts.push("접근성 신호가 일부 확인되어 추가 자료와 함께 사업성을 검토할 필요가 있음");
+    else parts.push("교통·관광지 접근성 자료 미결합으로 사업성 신호를 판단할 수 없음");
+    if (!access.rankingEligible) parts.push("현재 후보순위에는 접근성 근거가 완전 반영되지 않음");
     return parts.join(" · ");
+  }
+  function renderAccessibility(feature, identifier) {
+    const access = accessibilityForFeature(feature, identifier);
+    document.getElementById("detail-nearest-poi").textContent = access.nearestPoiName
+      ? `${access.nearestPoiName} · ${Math.round(access.nearestPoiDistance).toLocaleString("ko-KR")}m`
+      : "자료 없음";
+    document.getElementById("detail-poi-count").textContent = access.nearestPoiName
+      ? `1km 내 관광지 ${Number(access.poiCount1000m).toLocaleString("ko-KR")}개`
+      : "관광지 자료 미결합";
+    document.getElementById("detail-transport-inflow").textContent = access.transportInbound === null
+      ? "자료 없음"
+      : `${Number(access.transportInbound).toLocaleString("ko-KR")}통행`;
+    document.getElementById("detail-transport-period").textContent = access.transportPeriod
+      ? `${access.transportPeriod} · 타 자치구 유입`
+      : "교통 자료 미결합";
+    document.getElementById("detail-access-signal").textContent = access.hasTransport && access.hasTourism
+      ? "추가검토 가치 있음"
+      : access.hasTransport || access.hasTourism ? "보완검토" : "판단 보류";
+    return access;
   }
 
   function textElement(tagName, text, className = "") {
@@ -182,12 +262,14 @@
     document.getElementById("detail-area").textContent = area > 0
       ? `${area.toLocaleString("ko-KR")}㎡(원천)`
       : "자료 없음";
+    renderAccessibility(feature, properties.record_id);
     document.getElementById("detail-evidence").textContent = (
       `PNU ${properties.pnu || "미확인"} · 건물면적 ${properties.building_area || "자료 없음"}㎡. `
       + `${parcelPlanningText(properties)}. `
       + "현재 A형 연속필지군 또는 B형 자치구별 상위 5개에 포함되지 않은 빈집입니다. "
       + "B형은 검증 지적면적 300㎡ 이상 단독주택형 가운데 자치구별로 최대 5개를 게시합니다. "
-      + "교통·관광지 근거가 완결되지 않은 경우 면적과 자치구 방문수요로 잠정 선별합니다."
+      + `${accessibilityText(feature, properties.record_id)}. `
+      + "접근성은 사업성 추가검토 신호이며 수익성·인허가의 확정 판정이 아닙니다."
     );
     renderHouseCards([feature]);
   }
@@ -213,8 +295,9 @@
     document.getElementById("detail-area").textContent = (
       `${Math.round(properties.union_area).toLocaleString("ko-KR")}㎡`
     );
+    renderAccessibility(feature, properties.hub_id);
     document.getElementById("detail-evidence").textContent = (
-      `지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. 용도지역 ${properties.land_use_zones.join("·") || "미확인"}, 용도지구 ${properties.land_use_districts.join("·") || "미확인"}, 도로접면 ${properties.road_sides.join("·") || "미확인"}입니다. ${accessibilityText(properties.hub_id)}. 소유권·구조안전·소방·주차와 사업성은 별도 검토 대상입니다.`
+      `지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. 용도지역 ${properties.land_use_zones.join("·") || "미확인"}, 용도지구 ${properties.land_use_districts.join("·") || "미확인"}, 도로접면 ${properties.road_sides.join("·") || "미확인"}입니다. ${accessibilityText(feature, properties.hub_id)}. 소유권·구조안전·소방·주차와 수익성은 별도 검토 대상입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.hubs.get(properties.hub_id);
@@ -229,7 +312,12 @@
     const demand = properties.district_demand_score === null
       ? "자치구 방문수요 자료 미결합"
       : `자치구 방문수요 점수 ${Number(properties.district_demand_score).toFixed(1)}점`;
-    const gaps = properties.missing_context.map(
+    const access = renderAccessibility(feature, properties.candidate_id);
+    const resolved = new Set([
+      ...(access.hasTourism ? ["nearby_attractions"] : []),
+      ...(access.hasTransport ? ["transport_access", "station_proximity", "transport_flow"] : []),
+    ]);
+    const gaps = properties.missing_context.filter((code) => !resolved.has(code)).map(
       (code) => `${contextLabels[code] || code} 자료 미결합`,
     );
     document.getElementById("detail-title").textContent = (
@@ -248,7 +336,7 @@
       `${Math.round(properties.parcel_area).toLocaleString("ko-KR")}㎡`
     );
     document.getElementById("detail-evidence").textContent = (
-      `${demand}. ${parcelPlanningText(properties)}. ${gaps.join(" · ")}. ${accessibilityText(properties.candidate_id)}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
+      `${demand}. ${parcelPlanningText(properties)}. ${gaps.length ? `${gaps.join(" · ")}. ` : ""}${accessibilityText(feature, properties.candidate_id)}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.standalone.get(properties.candidate_id);
@@ -269,9 +357,14 @@
     const place = isHub
       ? `${properties.district_names.join("·")} ${properties.dong_names.join("·") || "후보지"}`
       : `${properties.district_name} ${properties.dong_name || "단일필지"}`;
-    const evidence = isHub
+    const baseEvidence = isHub
       ? `${properties.parcel_count}개 연속필지 · ${Math.round(area).toLocaleString("ko-KR")}㎡`
       : `단독주택형 · ${Math.round(area).toLocaleString("ko-KR")}㎡ · 자치구 내 예비 ${properties.preliminary_rank}순위`;
+    const access = accessibilityForFeature(feature, identifier);
+    const accessEvidence = access.hasTransport && access.hasTourism
+      ? ` · 관광·교통 근거 확인`
+      : access.hasTransport || access.hasTourism ? " · 접근성 일부 확인" : " · 접근성 보완 필요";
+    const evidence = `${baseEvidence}${accessEvidence}`;
     label.append(textElement("strong", place), textElement("small", evidence));
     const markerLabel = isHub
       ? `A${Number(feature.properties.candidate_rank)}`

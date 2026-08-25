@@ -23,6 +23,15 @@ _DISTRICTS = (
     "북구", "해운대구", "사하구", "금정구", "강서구", "연제구",
     "수영구", "사상구", "기장군",
 )
+_BUSAN_SIGUNGU_CODES = tuple(str(code) for code in range(1, 17))
+
+
+def _district_name_from_address(address: str) -> str | None:
+    """Match the longest official name so 강서구 cannot collapse to 서구."""
+    return next(
+        (name for name in sorted(_DISTRICTS, key=len, reverse=True) if name in address),
+        None,
+    )
 
 
 def main() -> None:
@@ -44,7 +53,7 @@ def main() -> None:
         accepted: list[TourismPoi] = []
         rejected: dict[str, int] = {}
         for poi in rows:
-            expected = next((name for name in _DISTRICTS if name in poi.address), None)
+            expected = _district_name_from_address(poi.address)
             review = review_poi(poi, boundary, expected)
             if review.accepted:
                 accepted.append(poi)
@@ -109,42 +118,56 @@ def _current_busan_boundary(db: Database, spatial_run_id):
 
 
 def _fetch_all(key: str, *, timeout: float) -> tuple[tuple[TourismPoi, ...], str]:
-    page = 1
-    total = None
     all_rows: list[TourismPoi] = []
     response_hashes: list[str] = []
+    expected_total = 0
     with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-        while total is None or len(all_rows) < total:
-            response = client.get(
-                _KTO_ENDPOINT,
-                params={
-                    "serviceKey": key,
-                    "MobileOS": "ETC",
-                    "MobileApp": "WestBusanPolicy",
-                    "_type": "json",
-                    "areaCode": "6",
-                    "arrange": "A",
-                    "numOfRows": "1000",
-                    "pageNo": str(page),
-                },
-            )
-            if response.status_code >= 400:
-                # Never let httpx render the credential-bearing request URL.
-                raise RuntimeError(f"kto_http_status:{response.status_code}")
-            body = response.content
-            response_hashes.append(hashlib.sha256(body).hexdigest())
-            payload = response.json()
-            provider_body = payload.get("response", {}).get("body", {})
-            total = int(provider_body.get("totalCount") or 0)
-            parsed = parse_kto_poi_rows(body)
-            all_rows.extend(parsed)
-            if not parsed or page > 100:
-                break
-            page += 1
+        for sigungu_code in _BUSAN_SIGUNGU_CODES:
+            page = 1
+            district_total = None
+            district_rows: list[TourismPoi] = []
+            while district_total is None or len(district_rows) < district_total:
+                response = client.get(
+                    _KTO_ENDPOINT,
+                    params={
+                        "serviceKey": key,
+                        "MobileOS": "ETC",
+                        "MobileApp": "WestBusanPolicy",
+                        "_type": "json",
+                        "areaCode": "6",
+                        "sigunguCode": sigungu_code,
+                        "arrange": "A",
+                        "numOfRows": "1000",
+                        "pageNo": str(page),
+                    },
+                )
+                if response.status_code >= 400:
+                    # Never let httpx render the credential-bearing request URL.
+                    raise RuntimeError(f"kto_http_status:{response.status_code}")
+                body = response.content
+                response_hashes.append(hashlib.sha256(body).hexdigest())
+                payload = response.json()
+                provider_body = payload.get("response", {}).get("body", {})
+                district_total = int(provider_body.get("totalCount") or 0)
+                parsed = parse_kto_poi_rows(body)
+                district_rows.extend(parsed)
+                if not parsed or page > 100:
+                    break
+                page += 1
+            district_unique = {poi.content_id: poi for poi in district_rows}
+            if district_total is None or len(district_unique) != district_total:
+                raise RuntimeError(
+                    "kto_pagination_incomplete:"
+                    f"sigungu={sigungu_code}:expected={district_total}:"
+                    f"actual={len(district_unique)}"
+                )
+            expected_total += district_total
+            all_rows.extend(district_unique.values())
     unique = {poi.content_id: poi for poi in all_rows}
-    if total is None or len(unique) != total:
+    if len(unique) != expected_total:
         raise RuntimeError(
-            f"kto_pagination_incomplete:expected={total}:actual={len(unique)}"
+            "kto_cross_sigungu_duplicate:"
+            f"expected={expected_total}:actual={len(unique)}"
         )
     combined = hashlib.sha256("".join(response_hashes).encode()).hexdigest()
     return tuple(unique[key] for key in sorted(unique)), combined
