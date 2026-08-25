@@ -725,7 +725,8 @@ def test_vacant_house_tab_lazy_loads_exact_internal_map_without_embedding_source
     assert 'target === "vacant"' in script
     assert "연속 필지군" in html
     assert "A형 연속필지 거점개발 후보 4곳" in html
-    assert "B형 단독개발·숙박전환 예비후보 6곳" in html
+    assert "B형 자치구별 단독개발·숙박전환 예비후보 19곳" in html
+    assert "총 23곳" in html
     assert "주소·지번 분석" in html
     assert "vacantHouses" not in document
     assert "parcel" not in json.dumps(document).lower()
@@ -777,5 +778,6 @@ def test_vacant_house_tab_distinguishes_contiguous_and_standalone_candidates() -
     html = _asset("index.html")
 
     assert "A형 연속필지 거점개발 후보 4곳" in html
-    assert "B형 단독개발·숙박전환 예비후보 6곳" in html
+    assert "B형 자치구별 단독개발·숙박전환 예비후보 19곳" in html
+    assert "총 23곳" in html
     assert "빈집 개발 후보지 10개" not in html
