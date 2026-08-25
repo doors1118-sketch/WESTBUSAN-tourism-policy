@@ -231,6 +231,21 @@ class _PublishedVacantMapWithoutAccess(_PublishedVacantMapConnection):
         return super().execute(query, parameters)
 
 
+class _PublishedVacantMapWithExcludedStandalone(_PublishedVacantMapConnection):
+    def execute(
+        self, query: str, parameters: list[object] | None = None
+    ) -> _Result:
+        if "from vacant_house_parcel_context_observation" in query:
+            rows = super().execute(query, parameters).fetchall()
+            return _Result(
+                [
+                    (*row[:6], "맹지", *row[7:]) if index == 7 else row
+                    for index, row in enumerate(rows, start=1)
+                ]
+            )
+        return super().execute(query, parameters)
+
+
 def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     tmp_path: Path,
 ) -> None:
@@ -296,6 +311,15 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert standalone["features"][0]["properties"]["transport_score"] == 50.0
     assert standalone["features"][0]["properties"]["tourism_score"] == 50.0
     assert standalone["features"][0]["properties"]["weighted_score"] == 57.5
+    assert standalone["features"][0]["properties"][
+        "development_review_status"
+    ] == "conditional"
+    assert standalone["features"][0]["properties"][
+        "development_exclusion_reasons"
+    ] == []
+    assert standalone["features"][0]["properties"][
+        "development_conditional_reasons"
+    ] == ["building_register_not_linked"]
     assert standalone["features"][0]["properties"]["missing_context"] == [
         "nearby_attractions",
         "transport_access",
@@ -363,6 +387,44 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "contiguous_hubs": 2,
         "standalone_candidates": 1,
     }
+    assert summary["development_screening_policy"] == {
+        "building_register_linked": False,
+        "conditional_candidates_remain_rankable": True,
+        "hard_exclusions": [
+            "cadastral_geometry_unconfirmed",
+            "road_contact_unconfirmed",
+            "landlocked_parcel",
+            "development_activity_restricted_area",
+            "lodging_use_explicitly_restricted",
+        ],
+        "legal_determination": False,
+        "scope": "A형·B형 빈집 개발후보",
+    }
+    assert summary["development_screening_counts"] == {
+        "contiguous_hubs": {
+            "excluded": 0,
+            "passed": 0,
+            "published": 2,
+            "reviewed": 2,
+            "conditional": 2,
+        },
+        "standalone_candidates": {
+            "excluded": 0,
+            "passed": 0,
+            "published": 1,
+            "reviewed": 1,
+            "conditional": 1,
+        },
+    }
+    assert summary["development_screening_reason_counts"] == {
+        "conditional": {"building_register_not_linked": 3},
+        "exclusion": {},
+    }
+    assert summary["standalone_screening_district_counts"]["북구"] == {
+        "excluded": 0,
+        "published": 1,
+        "reviewed": 1,
+    }
     assert summary["schema_version"] == "vacant-map-v4"
     assert summary["access_snapshot_id"] == str(ACCESS_SNAPSHOT_ID)
     assert summary["parcel_context_run_id"] == str(PARCEL_CONTEXT_RUN_ID)
@@ -423,6 +485,10 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "일반 빈집" in script
     assert "용도지역·지구 미확인" in script
     assert "도로접면" in script
+    assert "조건부 검토" in script
+    assert "기본조건 통과" in script
+    assert "B형 검토" in script
+    assert "사전 제외조건" in html
     assert "max-height: calc(100vh - 78px)" in css
 
 
@@ -458,3 +524,30 @@ def test_missing_accessibility_keeps_existing_candidate_order(
     assert summary["access_snapshot_id"] is None
     assert summary["context_availability"]["transport_flow"] == "not_published"
     assert access == {"features": [], "type": "FeatureCollection"}
+
+
+def test_landlocked_standalone_candidate_is_excluded_before_ranking(
+    tmp_path: Path,
+) -> None:
+    bundle = export_vacant_house_map_current(
+        _PublishedVacantMapWithExcludedStandalone(), tmp_path / "landlocked"
+    )
+
+    standalone = json.loads(
+        bundle.standalone_candidates.read_text(encoding="utf-8")
+    )
+    summary = json.loads(bundle.summary.read_text(encoding="utf-8"))
+
+    assert standalone["features"] == []
+    assert summary["development_screening_counts"]["standalone_candidates"] == {
+        "excluded": 1,
+        "passed": 0,
+        "published": 0,
+        "reviewed": 1,
+        "conditional": 0,
+    }
+    assert summary["standalone_screening_district_counts"]["북구"] == {
+        "excluded": 1,
+        "published": 0,
+        "reviewed": 1,
+    }

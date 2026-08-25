@@ -29,6 +29,10 @@ from westbusan.spatial.export import (
     _demand_scores_from_rows,
     _set_public_bundle_permissions,
 )
+from westbusan.vacant_house.development_screening import (
+    DevelopmentReview,
+    assess_development_review,
+)
 from westbusan.vacant_house.hub_models import CadastralParcel, VacantParcel
 from westbusan.vacant_house.standalone_candidates import (
     build_standalone_candidates,
@@ -585,13 +589,27 @@ def _map_data(
         )
         for row in evidence_rows
     )
-    standalone_pool = build_standalone_candidates(
+    standalone_review_pool = build_standalone_candidates(
         reviewed_cadastral,
         inventory_by_pnu,
         excluded_pnus=frozenset(member_by_pnu),
         district_demand_scores=district_demand_scores,
         minimum_area=_STANDALONE_MINIMUM_AREA,
         per_district_limit=None,
+    )
+    standalone_review_by_id = {
+        candidate.candidate_id: _candidate_development_review(
+            pnus=(candidate.pnu,),
+            geometry_by_pnu=geometry_by_pnu,
+            address_by_pnu=address_by_pnu,
+            parcel_context_by_pnu=parcel_context_by_pnu,
+        )
+        for candidate in standalone_review_pool
+    }
+    standalone_pool = tuple(
+        candidate
+        for candidate in standalone_review_pool
+        if standalone_review_by_id[candidate.candidate_id].eligible
     )
     access_features = tuple(
         feature
@@ -655,11 +673,10 @@ def _map_data(
     anchor_provenance: dict[str, object] = {}
 
     hub_features: list[dict[str, object]] = []
-    hub_rank_by_id: dict[str, int] = {}
+    hub_review_results: list[DevelopmentReview] = []
     for row in hub_rows:
         hub_id = str(row[0])
         rank = int(row[1])
-        hub_rank_by_id[hub_id] = rank
         districts = _json_list(row[5])
         dong_names = sorted(
             {
@@ -680,6 +697,15 @@ def _map_data(
             for pnu in hub_pnus
             if pnu in parcel_context_by_pnu
         ]
+        development_review = _candidate_development_review(
+            pnus=tuple(hub_pnus),
+            geometry_by_pnu=geometry_by_pnu,
+            address_by_pnu=address_by_pnu,
+            parcel_context_by_pnu=parcel_context_by_pnu,
+        )
+        hub_review_results.append(development_review)
+        if not development_review.eligible:
+            continue
         hub_features.append(
             _feature(
                 from_wkb(bytes(row[4])),
@@ -705,6 +731,7 @@ def _map_data(
                         hub_context, "road_side"
                     ),
                     "parcel_planning_parcel_count": len(hub_context),
+                    **_development_review_properties(development_review),
                 },
             )
         )
@@ -756,6 +783,12 @@ def _map_data(
         score = hub_score_by_id.get(str(feature["properties"]["hub_id"]))
         if score is not None:
             feature["properties"].update(_access_score_properties(score))
+    hub_rank_by_id = {
+        str(feature["properties"]["hub_id"]): int(
+            feature["properties"]["candidate_rank"]
+        )
+        for feature in hub_features
+    }
 
     standalone_features: list[dict[str, object]] = []
     for candidate in standalone_candidates:
@@ -765,6 +798,7 @@ def _map_data(
         )
         parcel_context = parcel_context_by_pnu.get(candidate.pnu, {})
         access_score = standalone_score_by_id[candidate.candidate_id]
+        development_review = standalone_review_by_id[candidate.candidate_id]
         standalone_features.append(
             _feature(
                 candidate.geometry,
@@ -797,6 +831,7 @@ def _map_data(
                         "district_visitor_demand",
                     ],
                     **_access_score_properties(access_score),
+                    **_development_review_properties(development_review),
                     **parcel_context,
                 },
             )
@@ -944,6 +979,25 @@ def _map_data(
     for feature in bukgu_supplemental_features:
         district_name = str(feature["properties"]["district_name"])
         district_candidate_counts[district_name]["supplemental_candidates"] += 1
+    standalone_screening_district_counts = {
+        name: {
+            "reviewed": sum(
+                candidate.district_code == code
+                for candidate in standalone_review_pool
+            ),
+            "excluded": sum(
+                candidate.district_code == code
+                and standalone_review_by_id[candidate.candidate_id].status
+                == "excluded"
+                for candidate in standalone_review_pool
+            ),
+            "published": sum(
+                feature["properties"]["district_name"] == name
+                for feature in standalone_features
+            ),
+        }
+        for code, name in _WEST_DISTRICTS.items()
+    }
 
     summary = {
         "schema_version": "vacant-map-v4",
@@ -1003,6 +1057,41 @@ def _map_data(
                 for feature in standalone_features
             ),
         },
+        "development_screening_policy": {
+            "scope": "A형·B형 빈집 개발후보",
+            "hard_exclusions": [
+                "cadastral_geometry_unconfirmed",
+                "road_contact_unconfirmed",
+                "landlocked_parcel",
+                "development_activity_restricted_area",
+                "lodging_use_explicitly_restricted",
+            ],
+            "conditional_candidates_remain_rankable": True,
+            "building_register_linked": False,
+            "legal_determination": False,
+        },
+        "development_screening_counts": {
+            "contiguous_hubs": _development_review_counts(
+                hub_review_results, published=len(hub_features)
+            ),
+            "standalone_candidates": _development_review_counts(
+                list(standalone_review_by_id.values()),
+                published=len(standalone_features),
+            ),
+        },
+        "development_screening_reason_counts": {
+            "exclusion": _development_reason_counts(
+                hub_review_results + list(standalone_review_by_id.values()),
+                reason_type="exclusion",
+            ),
+            "conditional": _development_reason_counts(
+                hub_review_results + list(standalone_review_by_id.values()),
+                reason_type="conditional",
+            ),
+        },
+        "standalone_screening_district_counts": dict(
+            sorted(standalone_screening_district_counts.items())
+        ),
         "bukgu_supplemental_candidate_policy": {
             "scope": "북구",
             "candidate_label": "북구 관광·교통 보완검토 후보",
@@ -1040,6 +1129,84 @@ def _map_data(
         "accessibility_context": access_context,
         "summary": summary,
     }
+
+
+def _candidate_development_review(
+    *,
+    pnus: tuple[str, ...],
+    geometry_by_pnu: dict[str, BaseGeometry],
+    address_by_pnu: dict[str, list[tuple[object, ...]]],
+    parcel_context_by_pnu: dict[str, dict[str, object]],
+) -> DevelopmentReview:
+    contexts = [
+        parcel_context_by_pnu[pnu]
+        for pnu in pnus
+        if pnu in parcel_context_by_pnu
+    ]
+    sources = [row for pnu in pnus for row in address_by_pnu.get(pnu, [])]
+    road_sides = tuple(
+        str(context["road_side"])
+        for context in contexts
+        if context.get("road_side")
+    )
+    land_use_zones = tuple(
+        str(value)
+        for context in contexts
+        for key in ("land_use_zone", "land_use_district", "land_use_area")
+        if (value := context.get(key))
+    )
+    return assess_development_review(
+        road_sides=road_sides,
+        land_use_zones=land_use_zones,
+        has_cadastral_geometry=bool(pnus)
+        and all(pnu in geometry_by_pnu for pnu in pnus),
+        # The current publication has not linked the official building-register
+        # assessment. Inventory year/area fields are useful context but do not
+        # replace that authoritative linkage.
+        building_register_linked=False,
+        construction_year_known=bool(sources)
+        and all(row[7] is not None for row in sources),
+        building_structure_known=False,
+    )
+
+
+def _development_review_properties(
+    review: DevelopmentReview,
+) -> dict[str, object]:
+    return {
+        "development_review_status": review.status,
+        "development_exclusion_reasons": list(review.exclusion_reasons),
+        "development_conditional_reasons": list(review.conditional_reasons),
+    }
+
+
+def _development_review_counts(
+    reviews: list[DevelopmentReview], *, published: int
+) -> dict[str, int]:
+    return {
+        "excluded": sum(review.status == "excluded" for review in reviews),
+        "passed": sum(review.status == "passed" for review in reviews),
+        "published": published,
+        "reviewed": len(reviews),
+        "conditional": sum(review.status == "conditional" for review in reviews),
+    }
+
+
+def _development_reason_counts(
+    reviews: list[DevelopmentReview], *, reason_type: str
+) -> dict[str, int]:
+    if reason_type not in {"exclusion", "conditional"}:
+        raise ValueError("invalid_development_reason_type")
+    counts: dict[str, int] = {}
+    for review in reviews:
+        reasons = (
+            review.exclusion_reasons
+            if reason_type == "exclusion"
+            else review.conditional_reasons
+        )
+        for reason in reasons:
+            counts[reason] = counts.get(reason, 0) + 1
+    return dict(sorted(counts.items()))
 
 
 def _access_score_properties(score: CandidateAccessScore) -> dict[str, object]:

@@ -40,7 +40,33 @@
     station_proximity: "역 접근성",
     transport_flow: "교통량",
   };
+  const developmentReasonLabels = {
+    cadastral_geometry_unconfirmed: "지적경계 미확인",
+    road_contact_unconfirmed: "도로접면 미확인",
+    landlocked_parcel: "맹지",
+    development_activity_restricted_area: "개발행위허가제한지역",
+    lodging_use_explicitly_restricted: "숙박·업무시설 입지 제한",
+    partially_landlocked_parcels: "일부 필지 맹지",
+    weak_road_condition: "취약 도로조건",
+    road_contact_not_designated: "도로접면 미지정",
+    additional_land_use_review_required: "추가 인허가 검토 용도지역",
+    building_register_not_linked: "건축물대장 미연계",
+    construction_year_unconfirmed: "건축연도 미확인",
+    building_structure_unconfirmed: "건축구조 미확인",
+  };
   let selected = null;
+
+  function developmentReviewText(properties) {
+    const status = properties.development_review_status;
+    const reasons = (properties.development_conditional_reasons || []).map(
+      (reason) => developmentReasonLabels[reason] || reason,
+    );
+    if (status === "passed") return "기본조건 통과";
+    if (status === "conditional") {
+      return `조건부 검토${reasons.length ? `: ${reasons.join("·")}` : ""}`;
+    }
+    return "개발후보 사전심사 미적용";
+  }
 
   function candidateAccess(identifier) {
     return data.access.find((item) => item.properties.kind === "candidate_accessibility"
@@ -313,7 +339,7 @@
       `${properties.district_names.join("·")} ${properties.dong_names.join("·") || "연속필지군"}`
     );
     document.getElementById("detail-summary").textContent = (
-      `${properties.parcel_count}개 빈집 필지가 경계를 맞댄 A형 거점개발 후보입니다. ${accessScoreBreakdown(feature, properties.hub_id)}`
+      `${properties.parcel_count}개 빈집 필지가 경계를 맞댄 A형 거점개발 후보입니다. ${developmentReviewText(properties)}. ${accessScoreBreakdown(feature, properties.hub_id)}`
     );
     document.getElementById("detail-type").textContent = "A형";
     document.getElementById("detail-rank").textContent = (
@@ -328,7 +354,7 @@
     );
     renderAccessibility(feature, properties.hub_id);
     document.getElementById("detail-evidence").textContent = (
-      `지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. 용도지역 ${properties.land_use_zones.join("·") || "미확인"}, 용도지구 ${properties.land_use_districts.join("·") || "미확인"}, 도로접면 ${properties.road_sides.join("·") || "미확인"}입니다. ${accessibilityText(feature, properties.hub_id)}. 소유권·구조안전·소방·주차와 수익성은 별도 검토 대상입니다.`
+      `${developmentReviewText(properties)}. 지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. 용도지역 ${properties.land_use_zones.join("·") || "미확인"}, 용도지구 ${properties.land_use_districts.join("·") || "미확인"}, 도로접면 ${properties.road_sides.join("·") || "미확인"}입니다. ${accessibilityText(feature, properties.hub_id)}. 소유권·구조안전·소방·주차와 수익성은 별도 검토 대상입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.hubs.get(properties.hub_id);
@@ -355,7 +381,7 @@
       `${properties.district_name} ${properties.dong_name || "단일필지"}`
     );
     document.getElementById("detail-summary").textContent = (
-      `연속필지군은 아니지만 검증 지적면적 300㎡ 이상인 단독주택형 B형 예비후보입니다. ${accessScoreBreakdown(feature, properties.candidate_id)}`
+      `연속필지군은 아니지만 검증 지적면적 300㎡ 이상인 단독주택형 B형 예비후보입니다. ${developmentReviewText(properties)}. ${accessScoreBreakdown(feature, properties.candidate_id)}`
     );
     document.getElementById("detail-type").textContent = "B형";
     document.getElementById("detail-rank").textContent = (
@@ -367,7 +393,7 @@
       `${Math.round(properties.parcel_area).toLocaleString("ko-KR")}㎡`
     );
     document.getElementById("detail-evidence").textContent = (
-      `${demand}. ${parcelPlanningText(properties)}. ${gaps.length ? `${gaps.join(" · ")}. ` : ""}${accessibilityText(feature, properties.candidate_id)}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
+      `${developmentReviewText(properties)}. ${demand}. ${parcelPlanningText(properties)}. ${gaps.length ? `${gaps.join(" · ")}. ` : ""}${accessibilityText(feature, properties.candidate_id)}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.standalone.get(properties.candidate_id);
@@ -398,8 +424,17 @@
     const scoreEvidence = access.rankingEligible && access.weightedScore !== null
       ? ` · 보완점수 ${Number(access.weightedScore).toFixed(1)}점`
       : "";
+    const reviewText = developmentReviewText(properties);
     const evidence = `${baseEvidence}${accessEvidence}${scoreEvidence}`;
-    label.append(textElement("strong", place), textElement("small", evidence));
+    const reviewStatus = textElement(
+      "small", reviewText,
+      `review-status ${properties.development_review_status || ""}`,
+    );
+    label.append(
+      textElement("strong", place),
+      textElement("small", evidence),
+      reviewStatus,
+    );
     const markerLabel = isHub
       ? `A${Number(feature.properties.candidate_rank)}`
       : `B${Number(feature.properties.preliminary_rank)}`;
@@ -458,8 +493,14 @@
     const reason = district && counts.contiguous_hubs === 0
       ? " 연속필지 후보는 3개 이상 지적필지의 경계 접촉 기준을 충족하지 못해 미선정되었습니다."
       : "";
+    const screening = district
+      ? data.summary.standalone_screening_district_counts?.[district]
+      : data.summary.development_screening_counts?.standalone_candidates;
+    const screeningText = screening
+      ? ` B형 검토 ${Number(screening.reviewed || 0).toLocaleString("ko-KR")}건 중 사전 제외 ${Number(screening.excluded || 0).toLocaleString("ko-KR")}건, 게시 ${Number(screening.published || 0).toLocaleString("ko-KR")}건입니다.`
+      : "";
     document.getElementById("district-candidate-status").textContent = (
-      `${district || "서부산 전체"}: ${primaryStatus}.${reason}`
+      `${district || "서부산 전체"}: ${primaryStatus}.${screeningText}${reason}`
     );
   }
   function refreshLayers() {

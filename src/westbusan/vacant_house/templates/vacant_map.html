@@ -28,6 +28,12 @@
         <div><strong id="inventory-house-count">—</strong><span>빈집 위치</span><strong id="inventory-parcel-count">—</strong><span>고유 필지</span></div>
         <p id="district-candidate-status">서부산 4개 구의 전수현황과 개발후보를 함께 표시합니다.</p>
       </section>
+      <section class="screening-guide">
+        <h3>개발후보 사전심사</h3>
+        <p><strong>사전 제외조건</strong> 맹지, 개발행위허가제한지역, 지적경계·도로접면 미확인, 명시적 숙박·업무시설 입지 제한</p>
+        <p><strong>조건부 검토</strong> 취약·미지정 도로접면, 건축물대장 미연계, 자연녹지·공업·역사문화환경보존 등 추가 인허가 검토지역</p>
+        <small>정책상 1차 검토이며 법적 입지·인허가 가능성을 확정하지 않습니다.</small>
+      </section>
       <h2 class="candidate-heading">개발후보</h2>
       <section class="candidate-group"><h3><span>A형</span> 연속필지 거점개발 후보 <small id="hub-candidate-count"></small></h3><p>3개 이상 빈집 필지의 경계 접촉이 확인된 필지군</p><ol id="hub-candidate-list" class="candidate-list"></ol></section>
       <section class="candidate-group standalone-group"><h3><span>B형</span> 자치구별 단독개발·숙박전환 예비후보 <small id="standalone-candidate-count"></small></h3><p>비연속 단독주택형 빈집 중 검증 지적면적 300㎡ 이상, 자치구별 최대 5개</p><ol id="standalone-candidate-list" class="candidate-list"></ol></section>
@@ -51,7 +57,7 @@
         <form id="address-analysis-form"><input name="address" id="address-input" maxlength="160" required placeholder="부산광역시 북구 구포동 123-4"><button type="submit">빈집 거점개발 판정</button></form>
         <div id="address-analysis-result" hidden></div>
       </section>
-      <p class="map-note">A형은 연속필지 거점개발 후보, B형은 검증 지적면적 300㎡ 이상 단독주택형 가운데 자치구별 최대 5개를 선별한 예비후보입니다. 교통·관광지 근거가 미완결이면 면적과 자치구 방문수요 기반의 잠정 순위이며, 관광숙박 전환은 소유권·접도·토지이용·건축·소방·주차·위생·사업성을 별도 검토해야 합니다.</p>
+      <p class="map-note">A형은 연속필지 거점개발 후보, B형은 사전 제외조건을 통과한 검증 지적면적 300㎡ 이상 단독주택형 가운데 자치구별 최대 5개를 선별한 예비후보입니다. 조건부 후보는 순위에 포함되지만 접도·토지이용·건축물대장·인허가를 추가 확인해야 합니다. 교통·관광지 근거가 미완결이면 면적과 자치구 방문수요 기반의 잠정 순위이며, 관광숙박 전환은 소유권·구조안전·소방·주차·위생·수익성을 별도 검토해야 합니다.</p>
     </section>
   </main>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
