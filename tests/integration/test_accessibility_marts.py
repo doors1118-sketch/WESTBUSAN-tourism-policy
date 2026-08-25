@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, date, datetime
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from westbusan.accessibility.build import build_accessibility_snapshot
 from westbusan.accessibility.poi import TourismPoi
@@ -188,6 +188,25 @@ def test_empty_transport_membership_keeps_transport_metrics_absent(
         "select count(*) from mart_transport_dong_month where snapshot_id = ?",
         [summary.snapshot_id],
     ) == 0
+
+
+def test_accessibility_builder_revision_creates_a_new_snapshot_identity(
+    tmp_path: Path,
+) -> None:
+    """Catches changed joins being masked by an already-completed legacy snapshot."""
+    db, core_run_id, spatial_run_id = _current_database(tmp_path)
+
+    summary = build_accessibility_snapshot(
+        db, core_run_id, spatial_run_id, date(2026, 8, 25)
+    )
+    legacy_id = uuid5(
+        NAMESPACE_URL,
+        "westbusan-accessibility:"
+        f"{core_run_id}:{spatial_run_id}:2026-08-25:"
+        "1ca13ab7d1f1442f387a55c410909180634758cd987065be06d286ae316bb0ac",
+    )
+
+    assert summary.snapshot_id != legacy_id
 
 
 def test_reviewed_tourism_pois_are_manifest_bound(tmp_path: Path) -> None:

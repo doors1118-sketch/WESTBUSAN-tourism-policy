@@ -285,6 +285,17 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "minimum_area_square_metres"
     ] == 300.0
     assert standalone["features"][0]["properties"]["district_demand_score"] == 100.0
+    assert standalone["features"][0]["properties"]["ranking_eligible"] is True
+    assert standalone["features"][0]["properties"]["score_weights"] == {
+        "parcel": 0.45,
+        "transport_access": 0.2,
+        "tourism_access": 0.2,
+        "district_visitor_demand": 0.15,
+    }
+    assert standalone["features"][0]["properties"]["transport_period"] == "2026-06"
+    assert standalone["features"][0]["properties"]["transport_score"] == 50.0
+    assert standalone["features"][0]["properties"]["tourism_score"] == 50.0
+    assert standalone["features"][0]["properties"]["weighted_score"] == 57.5
     assert standalone["features"][0]["properties"]["missing_context"] == [
         "nearby_attractions",
         "transport_access",
@@ -340,6 +351,18 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "minimum_area_square_metres": 300.0,
         "scope": "서부산 4개 구",
     }
+    assert summary["access_ranking_policy"] == {
+        "applies_when_complete": True,
+        "parcel": 0.45,
+        "transport_access": 0.2,
+        "tourism_access": 0.2,
+        "district_visitor_demand": 0.15,
+        "transport_is_unique_visitors": False,
+    }
+    assert summary["access_ranking_eligible_counts"] == {
+        "contiguous_hubs": 2,
+        "standalone_candidates": 1,
+    }
     assert summary["schema_version"] == "vacant-map-v4"
     assert summary["access_snapshot_id"] == str(ACCESS_SNAPSHOT_ID)
     assert summary["parcel_context_run_id"] == str(PARCEL_CONTEXT_RUN_ID)
@@ -385,6 +408,11 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "자료 미결합" in script
     assert "function accessibilityForFeature" in script
     assert "function renderAccessibility" in script
+    assert "function accessScoreBreakdown" in script
+    assert "필지 45%" in script
+    assert "교통 20%" in script
+    assert "관광 20%" in script
+    assert "방문수요 15%" in script
     assert "1km 내 관광지와 교통유입 신호가 함께 확인" in script
     assert "feature.properties.content_type_name" in script
     assert "hasTourism: poiCount1000m > 0" in script

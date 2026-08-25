@@ -6,6 +6,7 @@ import pytest
 from pyproj import Transformer
 from shapely.geometry import Point
 
+from westbusan.accessibility.build import match_transport_metric
 from westbusan.accessibility.spatial import (
     AccessPoint,
     VacantCandidateEvidence,
@@ -112,3 +113,17 @@ def test_complete_candidate_evidence_uses_approved_weights() -> None:
     assert result.status == "ranked"
     assert result.ranked_candidates[0].candidate_id == "access"
     assert result.ranked_candidates[0].weighted_score == pytest.approx(77.5)
+
+
+def test_transport_join_falls_back_to_district_and_dong_name() -> None:
+    """Catches legal-dong code drift leaving every grid transport value null."""
+    metric = _transport()
+
+    matched = match_transport_metric(
+        (metric,),
+        dong_code="05000",
+        district_name="북구",
+        dong_name="구포동",
+    )
+
+    assert matched == metric

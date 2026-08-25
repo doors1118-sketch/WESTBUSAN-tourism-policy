@@ -21,6 +21,7 @@ from westbusan.accessibility.transport import (
 from westbusan.db import Database
 
 _TOURISM_DISTRICT_CLASSIFIER_VERSION = "longest-official-name-v2"
+_ACCESSIBILITY_BUILD_VERSION = "transport-place-name-join-v2"
 
 
 @dataclass(frozen=True)
@@ -105,7 +106,7 @@ def build_accessibility_snapshot(
         NAMESPACE_URL,
         "westbusan-accessibility:"
         f"{core_run_id}:{spatial_run_id}:{business_date.isoformat()}:"
-        f"{tourism_revision}",
+        f"{tourism_revision}:{_ACCESSIBILITY_BUILD_VERSION}",
     )
     existing = db.query(
         """select transport_status, tourism_status, transport_observation_count,
@@ -361,6 +362,7 @@ def _build_spatial_context(
     )
     grid_rows = db.query(
         """select distinct grid.grid_id, mart.primary_dong_code,
+                  mart.district_name, mart.primary_dong_name,
                   grid.centroid_wgs84_longitude, grid.centroid_wgs84_latitude
            from mart_grid_month as mart
            join spatial_run as run on run.spatial_run_id = mart.spatial_run_id
@@ -371,8 +373,13 @@ def _build_spatial_context(
         [spatial_run_id],
     )
     grid_context: list[tuple[object, ...]] = []
-    for grid_id, dong_code, longitude, latitude in grid_rows:
-        transport = transport_by_dong.get(str(dong_code or ""))
+    for grid_id, dong_code, district_name, dong_name, longitude, latitude in grid_rows:
+        transport = match_transport_metric(
+            metrics,
+            dong_code=str(dong_code or ""),
+            district_name=str(district_name or ""),
+            dong_name=str(dong_name or ""),
+        )
         evidence = measure_accessibility(
             Point(float(longitude), float(latitude)),
             pois=poi_points,
@@ -454,3 +461,29 @@ def _build_spatial_context(
             )
         )
     return grid_context, vacant_context
+
+
+def match_transport_metric(
+    metrics: tuple,
+    *,
+    dong_code: str,
+    district_name: str,
+    dong_name: str,
+):
+    """Return latest transport evidence by code, then guarded place-name fallback."""
+    normalized_code = dong_code.strip()
+    normalized_district = "".join(district_name.split())
+    normalized_dong = "".join(dong_name.split())
+    exact = [
+        item
+        for item in metrics
+        if normalized_code and item.destination_dong_code == normalized_code
+    ]
+    named = [
+        item
+        for item in metrics
+        if "".join(item.destination_district_name.split()) == normalized_district
+        and "".join(item.destination_dong_name.split()) == normalized_dong
+    ]
+    matches = exact or named
+    return max(matches, key=lambda item: item.period, default=None)

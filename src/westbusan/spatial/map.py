@@ -10,6 +10,13 @@ from dataclasses import dataclass, field
 from importlib.resources import files
 from typing import Any
 
+from shapely.geometry import shape
+
+from westbusan.accessibility.candidate_scoring import (
+    AccessScoringCandidate,
+    CandidateScoreWeights,
+    score_access_candidates,
+)
 from westbusan.accessibility.poi import tourism_content_type_name
 
 _MAP_CENTER = (129.075, 35.18)
@@ -42,12 +49,14 @@ def build_policy_candidate_rankings(
     features: Sequence[Mapping[str, Any]],
     *,
     limit: int = 5,
+    access_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Rank distinct west-Busan policy areas at region, district, and dong grain."""
     return build_layer_candidate_rankings(
         features,
         layer="policy_priority",
         limit=limit,
+        access_context=access_context,
     )
 
 
@@ -56,6 +65,7 @@ def build_layer_candidate_rankings(
     *,
     layer: str,
     limit: int = 5,
+    access_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Rank one representative per west district plus one distinct extra area."""
     if layer not in _CANDIDATE_LAYERS:
@@ -91,8 +101,62 @@ def build_layer_candidate_rankings(
                 "district": district,
                 "dong": dong,
                 "score": score,
+                "base_score_raw": score,
+                "geometry": feature.get("geometry"),
             }
         )
+
+    access_details: dict[str, dict[str, Any]] = {}
+    access_features = list((access_context or {}).get("features", []))
+    scorable = [
+        item
+        for item in candidates
+        if isinstance(item.get("geometry"), Mapping)
+    ]
+    if layer == "policy_priority" and access_features and scorable:
+        scores = score_access_candidates(
+            tuple(
+                AccessScoringCandidate(
+                    candidate_id=str(item["grid_id"]),
+                    geometry=shape(item["geometry"]),
+                    base_value=float(item["base_score_raw"]),
+                    district_names=(str(item["district"]),),
+                    dong_names=(str(item["dong"]),),
+                )
+                for item in scorable
+            ),
+            access_features,
+            weights=CandidateScoreWeights(0.70, 0.15, 0.15, 0.0),
+        )
+        score_by_id = {item.candidate_id: item for item in scores}
+        for item in candidates:
+            scored = score_by_id.get(str(item["grid_id"]))
+            if scored is None:
+                continue
+            item["score"] = (
+                scored.weighted_score
+                if scored.weighted_score is not None
+                else scored.base_score
+            )
+            access_details[str(item["grid_id"])] = {
+                "base_signal_score": scored.base_score,
+                "transport_score": scored.transport_score,
+                "tourism_score": scored.tourism_score,
+                "weighted_score": scored.weighted_score,
+                "ranking_eligible": scored.ranking_eligible,
+                "transport_period": scored.transport_period,
+                "transport_inbound": scored.transport_inbound,
+                "tourism_poi_count_1000m": scored.tourism_poi_count_1000m,
+                "nearest_tourism_poi_name": scored.nearest_tourism_poi_name,
+                "nearest_tourism_poi_distance_m": (
+                    scored.nearest_tourism_poi_distance_m
+                ),
+                "score_weights": {
+                    "policy_signal": 0.70,
+                    "transport_access": 0.15,
+                    "tourism_access": 0.15,
+                },
+            }
 
     def ranked(items: Sequence[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
         return sorted(
@@ -153,6 +217,7 @@ def build_layer_candidate_rankings(
         },
         "district": district_rankings,
         "dong": dong_rankings,
+        "details": access_details,
     }
 
 
@@ -190,6 +255,11 @@ def build_public_spatial_payload(bundle_data: PublicSpatialData) -> dict[str, An
             layer: build_layer_candidate_rankings(
                 list(bundle_data.grid_geojson.get("features", [])),
                 layer=layer,
+                access_context=(
+                    bundle_data.access_context
+                    if layer == "policy_priority"
+                    else None
+                ),
             )
             for layer in _CANDIDATE_LAYERS
         },
@@ -210,6 +280,7 @@ def render_map(bundle_data: PublicSpatialData) -> str:
         bundle_data.facility_geojson,
         priorities,
         bundle_data.access_context,
+        candidate_rankings=payload["candidate_rankings"]["policy_priority"],
     )
     package = files("westbusan.spatial")
     template = (
@@ -245,6 +316,8 @@ def _render_svg(
     facilities: Mapping[str, Any],
     priorities: Sequence[Mapping[str, Any]],
     access_context: Mapping[str, Any],
+    *,
+    candidate_rankings: Mapping[str, Any] | None = None,
 ) -> str:
     grid_features = list(grids.get("features", []))
     facility_features = list(facilities.get("features", []))
@@ -256,7 +329,9 @@ def _render_svg(
         for item in access_features
         if item.get("properties", {}).get("kind") == "transport_dong"
     }
-    candidate_rankings = build_policy_candidate_rankings(grid_features)
+    candidate_rankings = candidate_rankings or build_policy_candidate_rankings(
+        grid_features, access_context=access_context
+    )
     policy_by_district = {
         str(item["name"]): (
             _policy_kind(int(item["rank"])),

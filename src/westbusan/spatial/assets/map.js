@@ -497,6 +497,7 @@
           content_first: "관광콘텐츠 선행 검토",
           investment_caution: "공급 확대 신중 검토",
         }[kind] || "수요·노후 근거 보완 검토";
+        const accessScore = rankings?.details?.[node.dataset.key] || null;
         return {
           node,
           gridKey: node.dataset.key,
@@ -509,6 +510,7 @@
           action,
           fundingTrack: fundingTrackLabel(node),
           rank: Number(activeRanks[node.dataset.key]),
+          accessScore,
         };
       }).sort((a, b) => a.rank - b.rank || a.gridKey.localeCompare(b.gridKey)).slice(0, 5);
     const panelTitle = document.getElementById("candidate-panel-title");
@@ -548,6 +550,16 @@
         aged_facilities: `20년 이상 ${formatNumber(item.aged)}개 · 개선·전환 검토`,
       };
       detail.textContent = details[activeLayer] || item.action;
+      if (item.accessScore) {
+        const score = item.accessScore;
+        const weighted = score.weighted_score === null
+          ? "접근자료 미결합"
+          : `종합 ${Number(score.weighted_score).toFixed(1)}점`;
+        detail.textContent += (
+          ` · ${weighted} (정책신호 70%·교통 15%·관광 15%)`
+          + `${score.transport_period ? ` · 교통 ${score.transport_period} 기준` : ""}`
+        );
+      }
       label.append(detail);
       button.append(rank, label);
       button.addEventListener("click", () => selectCandidate(item));

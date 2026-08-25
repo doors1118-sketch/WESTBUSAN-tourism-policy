@@ -46,6 +46,13 @@
     return data.access.find((item) => item.properties.kind === "candidate_accessibility"
       && item.properties.candidate_id === identifier)?.properties || null;
   }
+  function tourismWeight(feature) {
+    const type = String(feature.properties.content_type_id
+      || feature.properties.category_name || feature.properties.category_code || "");
+    if (["12", "14", "15", "25", "28"].includes(type)) return 1;
+    if (["38", "39"].includes(type)) return 0.35;
+    return 0;
+  }
   function haversineMetres(left, right) {
     const radians = (value) => value * Math.PI / 180;
     const earthRadius = 6371008.8;
@@ -77,6 +84,7 @@
     const properties = feature.properties || {};
     const coordinate = geometryCoordinate(feature);
     const pois = coordinate ? data.access.filter((item) => item.properties.kind === "tourism_poi"
+      && tourismWeight(item) > 0
       && item.geometry?.type === "Point").map((item) => ({
         feature: item,
         distance: haversineMetres(coordinate, item.geometry.coordinates.map(Number)),
@@ -88,22 +96,44 @@
         && context.district_name === properties.district_name
         && context.dong_name === properties.dong_name;
     }).sort((a, b) => String(b.properties.period || "").localeCompare(String(a.properties.period || "")))[0];
-    const transportInbound = direct?.transport_inbound ?? (transport
+    const transportInbound = properties.transport_inbound ?? direct?.transport_inbound ?? (transport
       ? Number(transport.properties.inbound_other_district || transport.properties.inbound_other_dong || 0)
       : null);
-    const nearestPoiName = direct?.nearest_tourism_poi_name || nearest?.feature.properties.title || null;
-    const nearestPoiDistance = direct?.nearest_tourism_poi_distance_m ?? nearest?.distance ?? null;
-    const poiCount1000m = direct?.tourism_poi_count_1000m ?? pois.filter((item) => item.distance <= 1000).length;
+    const nearestPoiName = properties.nearest_tourism_poi_name
+      || direct?.nearest_tourism_poi_name || nearest?.feature.properties.title || null;
+    const nearestPoiDistance = properties.nearest_tourism_poi_distance_m
+      ?? direct?.nearest_tourism_poi_distance_m ?? nearest?.distance ?? null;
+    const poiCount1000m = properties.tourism_poi_count_1000m
+      ?? direct?.tourism_poi_count_1000m ?? pois.filter((item) => item.distance <= 1000).length;
     return {
       transportInbound,
-      transportPeriod: direct?.transport_period || transport?.properties.period || null,
+      transportPeriod: properties.transport_period
+        || direct?.transport_period || transport?.properties.period || null,
       nearestPoiName,
       nearestPoiDistance,
       poiCount1000m,
       hasTransport: transportInbound !== null,
       hasTourism: poiCount1000m > 0,
-      rankingEligible: Boolean(direct?.ranking_eligible),
+      rankingEligible: Boolean(properties.ranking_eligible ?? direct?.ranking_eligible),
+      weightedScore: properties.weighted_score ?? null,
+      parcelScore: properties.parcel_score ?? null,
+      transportScore: properties.transport_score ?? null,
+      tourismScore: properties.tourism_score ?? null,
+      visitorScore: properties.visitor_score ?? null,
     };
+  }
+  function accessScoreBreakdown(feature, identifier) {
+    const access = accessibilityForFeature(feature, identifier);
+    if (!access.rankingEligible || access.weightedScore === null) {
+      return "접근성 보완순위 미적용(필수 자료 미결합)";
+    }
+    return (
+      `접근성 보완점수 ${Number(access.weightedScore).toFixed(1)}점`
+      + ` · 필지 45% ${Number(access.parcelScore).toFixed(1)}점`
+      + ` · 교통 20% ${Number(access.transportScore).toFixed(1)}점`
+      + ` · 관광 20% ${Number(access.tourismScore).toFixed(1)}점`
+      + ` · 방문수요 15% ${Number(access.visitorScore).toFixed(1)}점`
+    );
   }
   function accessibilityText(feature, identifier) {
     const access = accessibilityForFeature(feature, identifier);
@@ -115,6 +145,7 @@
     else if (access.hasTransport || access.hasTourism) parts.push("접근성 신호가 일부 확인되어 추가 자료와 함께 사업성을 검토할 필요가 있음");
     else parts.push("교통·관광지 접근성 자료 미결합으로 사업성 신호를 판단할 수 없음");
     if (!access.rankingEligible) parts.push("현재 후보순위에는 접근성 근거가 완전 반영되지 않음");
+    else parts.push(accessScoreBreakdown(feature, identifier));
     return parts.join(" · ");
   }
   function renderAccessibility(feature, identifier) {
@@ -282,7 +313,7 @@
       `${properties.district_names.join("·")} ${properties.dong_names.join("·") || "연속필지군"}`
     );
     document.getElementById("detail-summary").textContent = (
-      `${properties.parcel_count}개 빈집 필지가 경계를 맞댄 A형 거점개발 후보입니다.`
+      `${properties.parcel_count}개 빈집 필지가 경계를 맞댄 A형 거점개발 후보입니다. ${accessScoreBreakdown(feature, properties.hub_id)}`
     );
     document.getElementById("detail-type").textContent = "A형";
     document.getElementById("detail-rank").textContent = (
@@ -324,7 +355,7 @@
       `${properties.district_name} ${properties.dong_name || "단일필지"}`
     );
     document.getElementById("detail-summary").textContent = (
-      "연속필지군은 아니지만 검증 지적면적 300㎡ 이상인 단독주택형 B형 예비후보입니다."
+      `연속필지군은 아니지만 검증 지적면적 300㎡ 이상인 단독주택형 B형 예비후보입니다. ${accessScoreBreakdown(feature, properties.candidate_id)}`
     );
     document.getElementById("detail-type").textContent = "B형";
     document.getElementById("detail-rank").textContent = (
@@ -364,7 +395,10 @@
     const accessEvidence = access.hasTransport && access.hasTourism
       ? ` · 관광·교통 근거 확인`
       : access.hasTransport || access.hasTourism ? " · 접근성 일부 확인" : " · 접근성 보완 필요";
-    const evidence = `${baseEvidence}${accessEvidence}`;
+    const scoreEvidence = access.rankingEligible && access.weightedScore !== null
+      ? ` · 보완점수 ${Number(access.weightedScore).toFixed(1)}점`
+      : "";
+    const evidence = `${baseEvidence}${accessEvidence}${scoreEvidence}`;
     label.append(textElement("strong", place), textElement("small", evidence));
     const markerLabel = isHub
       ? `A${Number(feature.properties.candidate_rank)}`

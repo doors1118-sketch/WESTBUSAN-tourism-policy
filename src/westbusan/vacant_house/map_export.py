@@ -7,7 +7,7 @@ import json
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import resources
 from pathlib import Path
 from typing import Protocol
@@ -18,6 +18,12 @@ from shapely import from_wkb
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 
+from westbusan.accessibility.candidate_scoring import (
+    AccessScoringCandidate,
+    CandidateAccessScore,
+    CandidateScoreWeights,
+    score_access_candidates,
+)
 from westbusan.accessibility.poi import tourism_content_type_name
 from westbusan.spatial.export import (
     _demand_scores_from_rows,
@@ -579,14 +585,69 @@ def _map_data(
         )
         for row in evidence_rows
     )
-    standalone_candidates = build_standalone_candidates(
+    standalone_pool = build_standalone_candidates(
         reviewed_cadastral,
         inventory_by_pnu,
         excluded_pnus=frozenset(member_by_pnu),
         district_demand_scores=district_demand_scores,
         minimum_area=_STANDALONE_MINIMUM_AREA,
-        per_district_limit=_STANDALONE_PER_DISTRICT_LIMIT,
+        per_district_limit=None,
     )
+    access_features = tuple(
+        feature
+        for feature in access_context.get("features", [])
+        if isinstance(feature, dict)
+    )
+    standalone_scores = score_access_candidates(
+        tuple(
+            AccessScoringCandidate(
+                candidate_id=candidate.candidate_id,
+                geometry=candidate.geometry,
+                base_value=candidate.parcel_area,
+                district_names=(
+                    _WEST_DISTRICTS.get(candidate.district_code, candidate.district_code),
+                ),
+                dong_names=(
+                    str(address_by_pnu.get(candidate.pnu, [(None,) * 4])[0][3] or ""),
+                ),
+                visitor_score=candidate.district_demand_score,
+            )
+            for candidate in standalone_pool
+        ),
+        access_features,
+        weights=CandidateScoreWeights(0.45, 0.20, 0.20, 0.15),
+    )
+    standalone_score_by_id = {
+        score.candidate_id: score for score in standalone_scores
+    }
+    standalone_candidates_list = []
+    for district_code in sorted({item.district_code for item in standalone_pool}):
+        district_candidates = [
+            item for item in standalone_pool if item.district_code == district_code
+        ]
+        district_complete = all(
+            standalone_score_by_id[item.candidate_id].ranking_eligible
+            for item in district_candidates
+        )
+        if district_complete:
+            district_candidates.sort(
+                key=lambda item: (
+                    -float(
+                        standalone_score_by_id[item.candidate_id].weighted_score or 0.0
+                    ),
+                    item.preliminary_rank,
+                    item.pnu,
+                )
+            )
+        else:
+            district_candidates.sort(key=lambda item: item.preliminary_rank)
+        standalone_candidates_list.extend(
+            replace(item, preliminary_rank=rank)
+            for rank, item in enumerate(
+                district_candidates[:_STANDALONE_PER_DISTRICT_LIMIT], start=1
+            )
+        )
+    standalone_candidates = tuple(standalone_candidates_list)
     # The former Buk-gu-only C group is retained as an empty compatibility
     # collection. Valid 300㎡+ parcels from every West Busan district now
     # compete within their own district's B group.
@@ -648,6 +709,54 @@ def _map_data(
             )
         )
 
+    hub_scores = score_access_candidates(
+        tuple(
+            AccessScoringCandidate(
+                candidate_id=str(feature["properties"]["hub_id"]),
+                geometry=from_wkb(
+                    bytes(
+                        next(
+                            row[4]
+                            for row in hub_rows
+                            if str(row[0]) == str(feature["properties"]["hub_id"])
+                        )
+                    )
+                ),
+                base_value=float(feature["properties"]["union_area"]),
+                district_names=tuple(feature["properties"]["district_names"]),
+                dong_names=tuple(feature["properties"]["dong_names"]),
+                visitor_score=max(
+                    (
+                        district_demand_scores.get(code)
+                        for code in feature["properties"]["district_codes"]
+                        if district_demand_scores.get(code) is not None
+                    ),
+                    default=None,
+                ),
+            )
+            for feature in hub_features
+        ),
+        access_features,
+        weights=CandidateScoreWeights(0.45, 0.20, 0.20, 0.15),
+    )
+    hub_score_by_id = {score.candidate_id: score for score in hub_scores}
+    if hub_features and all(score.ranking_eligible for score in hub_scores):
+        hub_features.sort(
+            key=lambda feature: (
+                -float(
+                    hub_score_by_id[str(feature["properties"]["hub_id"])].weighted_score
+                    or 0.0
+                ),
+                int(feature["properties"]["candidate_rank"]),
+            )
+        )
+        for rank, feature in enumerate(hub_features, start=1):
+            feature["properties"]["candidate_rank"] = rank
+    for feature in hub_features:
+        score = hub_score_by_id.get(str(feature["properties"]["hub_id"]))
+        if score is not None:
+            feature["properties"].update(_access_score_properties(score))
+
     standalone_features: list[dict[str, object]] = []
     for candidate in standalone_candidates:
         sources = address_by_pnu.get(candidate.pnu, [])
@@ -655,6 +764,7 @@ def _map_data(
             candidate.district_code, candidate.district_code
         )
         parcel_context = parcel_context_by_pnu.get(candidate.pnu, {})
+        access_score = standalone_score_by_id[candidate.candidate_id]
         standalone_features.append(
             _feature(
                 candidate.geometry,
@@ -681,10 +791,12 @@ def _map_data(
                     "context_coverage": list(candidate.context_coverage),
                     "missing_context": list(candidate.missing_context),
                     "ranking_basis": [
-                        "district_visitor_demand",
                         "reviewed_parcel_area",
-                        "pnu",
+                        "transport_access",
+                        "tourism_access",
+                        "district_visitor_demand",
                     ],
+                    **_access_score_properties(access_score),
                     **parcel_context,
                 },
             )
@@ -873,6 +985,24 @@ def _map_data(
             ),
             "district_quota": True,
         },
+        "access_ranking_policy": {
+            "applies_when_complete": True,
+            "parcel": 0.45,
+            "transport_access": 0.20,
+            "tourism_access": 0.20,
+            "district_visitor_demand": 0.15,
+            "transport_is_unique_visitors": False,
+        },
+        "access_ranking_eligible_counts": {
+            "contiguous_hubs": sum(
+                bool(feature["properties"].get("ranking_eligible"))
+                for feature in hub_features
+            ),
+            "standalone_candidates": sum(
+                bool(feature["properties"].get("ranking_eligible"))
+                for feature in standalone_features
+            ),
+        },
         "bukgu_supplemental_candidate_policy": {
             "scope": "북구",
             "candidate_label": "북구 관광·교통 보완검토 후보",
@@ -909,6 +1039,28 @@ def _map_data(
         "houses": _collection(house_features),
         "accessibility_context": access_context,
         "summary": summary,
+    }
+
+
+def _access_score_properties(score: CandidateAccessScore) -> dict[str, object]:
+    return {
+        "parcel_score": score.base_score,
+        "transport_score": score.transport_score,
+        "tourism_score": score.tourism_score,
+        "visitor_score": score.visitor_score,
+        "weighted_score": score.weighted_score,
+        "ranking_eligible": score.ranking_eligible,
+        "transport_period": score.transport_period,
+        "transport_inbound": score.transport_inbound,
+        "tourism_poi_count_1000m": score.tourism_poi_count_1000m,
+        "nearest_tourism_poi_name": score.nearest_tourism_poi_name,
+        "nearest_tourism_poi_distance_m": score.nearest_tourism_poi_distance_m,
+        "score_weights": {
+            "parcel": 0.45,
+            "transport_access": 0.20,
+            "tourism_access": 0.20,
+            "district_visitor_demand": 0.15,
+        },
     }
 
 

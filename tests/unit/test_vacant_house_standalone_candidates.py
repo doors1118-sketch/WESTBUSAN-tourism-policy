@@ -123,6 +123,29 @@ def test_selector_keeps_up_to_five_candidates_per_west_district() -> None:
         assert [item.preliminary_rank for item in district_candidates] == [1, 2, 3, 4, 5]
 
 
+def test_selector_can_return_full_pool_before_access_ranking() -> None:
+    """Catches the area-only top five being fixed before access evidence is scored."""
+    cadastral = tuple(
+        _cadastral(f"G-{index}", "26440", 128.90 + index * 0.001, size=0.00030)
+        for index in range(1, 7)
+    )
+    inventory = {
+        item.pnu: _inventory(item.pnu, item.district_code, ("단독주택",))
+        for item in cadastral
+    }
+
+    candidates = build_standalone_candidates(
+        cadastral,
+        inventory,
+        excluded_pnus=set(),
+        district_demand_scores={"26440": 100.0},
+        per_district_limit=None,
+    )
+
+    assert len(candidates) == 6
+    assert [item.preliminary_rank for item in candidates] == [1, 2, 3, 4, 5, 6]
+
+
 def test_missing_demand_is_explicit_and_uses_area_as_deterministic_fallback() -> None:
     """Catches missing visitor evidence being silently converted to a zero score."""
     cadastral = (

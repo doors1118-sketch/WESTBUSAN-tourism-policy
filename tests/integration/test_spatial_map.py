@@ -210,6 +210,90 @@ def test_map_exposes_transport_and_tourism_context_layers() -> None:
     assert "<circle" in rendered
 
 
+def test_investment_rankings_publish_access_weighted_score_components() -> None:
+    """Catches transport and tourism being shown without affecting investment rank."""
+    data = _map_data()
+    first = data.grid_geojson["features"][0]
+    second = {
+        "type": "Feature",
+        "geometry": {
+            "type": "Polygon",
+            "coordinates": [
+                [[129.01, 35.0], [129.02, 35.0], [129.02, 35.01], [129.01, 35.0]]
+            ],
+        },
+        "properties": {
+            **first["properties"],
+            "grid_id": "g-2",
+            "district_name": "북구",
+            "primary_dong_name": "구포동",
+            "recommendation_kind": "remodel",
+            "tourism_supply_gap": 85.0,
+        },
+    }
+    first["properties"]["primary_dong_name"] = "하단동"
+    access_context = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": None,
+                "properties": {
+                    "kind": "transport_dong",
+                    "period": "2025-06",
+                    "district_name": "사하구",
+                    "dong_name": "하단동",
+                    "inbound_other_district": 10,
+                },
+            },
+            {
+                "type": "Feature",
+                "geometry": None,
+                "properties": {
+                    "kind": "transport_dong",
+                    "period": "2025-06",
+                    "district_name": "북구",
+                    "dong_name": "구포동",
+                    "inbound_other_district": 100,
+                },
+            },
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [129.015, 35.005]},
+                "properties": {
+                    "kind": "tourism_poi",
+                    "title": "구포문화시설",
+                    "content_type_id": "14",
+                },
+            },
+        ],
+    }
+    enriched = replace(
+        data,
+        grid_geojson={**data.grid_geojson, "features": [first, second]},
+        access_context=access_context,
+    )
+
+    payload = json.loads(
+        render_map(enriched)
+        .split('<script id="bundle-data" type="application/json">', 1)[1]
+        .split("</script>", 1)[0]
+    )
+    policy = payload["candidate_rankings"]["policy_priority"]
+
+    assert policy["details"]["g-2"]["ranking_eligible"] is True
+    assert policy["details"]["g-2"]["score_weights"] == {
+        "policy_signal": 0.7,
+        "transport_access": 0.15,
+        "tourism_access": 0.15,
+    }
+    assert policy["details"]["g-2"]["transport_period"] == "2025-06"
+    assert policy["default"]["g-2"] < policy["default"]["g-1"]
+    assert "정책신호 70%" in render_map(enriched)
+    assert "교통 15%" in render_map(enriched)
+    assert "관광 15%" in render_map(enriched)
+
+
 def test_policy_overlays_share_the_geographic_vworld_tile_viewport() -> None:
     """Catches tile panning or zooming without moving the policy overlays."""
     rendered = render_map(_map_data())
