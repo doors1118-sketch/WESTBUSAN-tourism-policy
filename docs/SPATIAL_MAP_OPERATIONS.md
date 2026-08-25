@@ -203,6 +203,12 @@ node/target, metric, unit을 가져야 하고, catchment·거리감쇠·coverage
 5. `spatial-export`를 실행하고 manifest의 `access_snapshot_id`와
    `access_context.geojson` hash·row count를 검증합니다.
 
+동일한 core·spatial·business date에 권한 승인 전 0건 snapshot과 승인 후 POI
+snapshot이 차례로 생성될 수 있습니다. migration 045 이후 snapshot UUID는 검토된
+관광지 내용의 canonical SHA-256 revision도 포함합니다. 따라서 동일 날짜라도 POI
+내용이 바뀌면 새 snapshot을 생성해 현재 포인터를 갱신하며, 이전 완료 snapshot을
+잘못 재사용하지 않습니다.
+
 지도는 `대중교통 유입량`과 `관광지`를 독립 레이어로 표시합니다. 법정동 교통값은
 정류장·역 점 좌표가 아니라 법정동 집계이므로 동 영역의 대표점에 표시하며, 정밀
 역세권 분석으로 해석하지 않습니다. 관광지 거리와 교통 유입은 후보의 보조 근거로

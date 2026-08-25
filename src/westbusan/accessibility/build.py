@@ -98,9 +98,12 @@ def build_accessibility_snapshot(
 ) -> AccessibilityBuildSummary:
     """Publish transport facts only when they belong to both current pointers."""
     _require_current_inputs(db, core_run_id, spatial_run_id)
+    tourism_revision = _tourism_poi_revision(tourism_pois)
     snapshot_id = uuid5(
         NAMESPACE_URL,
-        f"westbusan-accessibility:{core_run_id}:{spatial_run_id}:{business_date.isoformat()}",
+        "westbusan-accessibility:"
+        f"{core_run_id}:{spatial_run_id}:{business_date.isoformat()}:"
+        f"{tourism_revision}",
     )
     existing = db.query(
         """select transport_status, tourism_status, transport_observation_count,
@@ -294,6 +297,30 @@ def build_accessibility_snapshot(
         transport_dong_month_count=len(metrics),
         tourism_poi_count=len(tourism_pois),
     )
+
+
+def _tourism_poi_revision(tourism_pois: tuple[TourismPoi, ...]) -> str:
+    """Bind snapshot identity to the reviewed POI content, not only its date."""
+    rows = [
+        {
+            "address": poi.address,
+            "category_codes": poi.category_codes,
+            "content_id": poi.content_id,
+            "content_type_id": poi.content_type_id,
+            "latitude": poi.latitude,
+            "longitude": poi.longitude,
+            "modified_time": poi.modified_time,
+            "title": poi.title,
+        }
+        for poi in sorted(tourism_pois, key=lambda item: item.content_id)
+    ]
+    payload = json.dumps(
+        rows,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _district_from_address(address: str) -> str | None:

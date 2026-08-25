@@ -224,3 +224,42 @@ def test_reviewed_tourism_pois_are_manifest_bound(tmp_path: Path) -> None:
            where snapshot_id = ?""",
         [summary.snapshot_id],
     ) == 1
+
+
+def test_same_day_poi_enrichment_publishes_a_new_snapshot(tmp_path: Path) -> None:
+    """Catches a pending zero-POI snapshot masking a later approved source."""
+    db, core_run_id, spatial_run_id = _current_database(tmp_path)
+    pending = build_accessibility_snapshot(
+        db, core_run_id, spatial_run_id, date(2026, 8, 25)
+    )
+    poi = TourismPoi(
+        content_id="126848",
+        title="구포시장",
+        content_type_id="12",
+        category_codes=("A02", "A0203", "A02030100"),
+        address="부산광역시 북구 구포동",
+        longitude=128.991,
+        latitude=35.201,
+        modified_time="20260825093000",
+        observed_date=date(2026, 8, 25),
+    )
+
+    enriched = build_accessibility_snapshot(
+        db,
+        core_run_id,
+        spatial_run_id,
+        date(2026, 8, 25),
+        tourism_pois=(poi,),
+    )
+
+    assert enriched.snapshot_id != pending.snapshot_id
+    assert enriched.tourism_status == "available"
+    assert enriched.tourism_poi_count == 1
+    assert db.query(
+        """select snapshot_id from accessibility_publication_current
+           where publication_key = 'current'"""
+    ) == [(enriched.snapshot_id,)]
+    assert db.scalar(
+        "select count(*) from dim_tourism_poi_snapshot where snapshot_id = ?",
+        [enriched.snapshot_id],
+    ) == 1
