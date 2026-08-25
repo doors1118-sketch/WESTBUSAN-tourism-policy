@@ -53,3 +53,21 @@ def test_operations_runbook_forbids_secret_and_existing_service_mutation() -> No
     assert "신용보증 서비스를 재시작하지 않는다" in runbook
     assert "/etc/westbusan-tourism-ai/openai.env" in runbook
     assert "롤백" in runbook
+
+
+def test_accessibility_runbooks_define_shared_snapshot_and_safe_interpretation() -> None:
+    spatial = (ROOT / "docs" / "SPATIAL_MAP_OPERATIONS.md").read_text(
+        encoding="utf-8"
+    )
+    vacant = (ROOT / "docs" / "VACANT_HOUSE_OPERATIONS.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "access_context.geojson" in spatial
+    assert "4,608개 요청" in spatial
+    assert "고유 방문자 수, 관광객 수" in spatial
+    assert "access_snapshot_id" in spatial
+    assert "accessibility-context.geojson" in vacant
+    assert "access_snapshot_id" in vacant
+    assert "not unique visitors or tourists" in " ".join(vacant.split())
+    assert "must not be coerced to zero" in " ".join(vacant.split())

@@ -384,3 +384,27 @@ Before deploying a v3 bundle verify:
   candidates; and
 - the UI distinguishes the full inventory from A/B/C candidates and states the
   straight-line distance and unpublished transport-flow limitations.
+
+## 12. Shared transport and tourism context
+
+The vacant-house map may consume the same completed accessibility snapshot as
+the investment map. Export only when the snapshot is bound to the current core
+and current spatial pointers. The bundle must contain
+`accessibility-context.geojson`, and its manifest `access_snapshot_id` must
+match the spatial bundle exactly.
+
+The context file has two independent feature types:
+
+- `transport_dong`: monthly inbound public-transport OD totals aggregated by
+  destination legal dong. The unit is trips/passengers, not unique visitors or
+  tourists. Its point is a dong display representative, not a station or stop.
+- `tourism_poi`: KTO Busan POIs that passed coordinate, address, and Busan
+  boundary review. A point proves published location context only, not demand,
+  footfall, quality, or business feasibility.
+
+The map keeps the full 805-house inventory, all four West Busan district
+filters, and the existing A/B/C candidate IDs unchanged. Transport and tourism
+evidence is supplemental: a missing join is displayed as unavailable and must
+not be coerced to zero or used to demote an existing candidate. Exact addresses
+remain internal operational data. Candidate confirmation still requires land
+use, ownership, road access, structure/fire/parking review, and field work.

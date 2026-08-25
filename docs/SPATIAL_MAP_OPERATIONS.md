@@ -124,6 +124,7 @@ bundle을 복원합니다. 파일 하나만 직접 고치거나 `manifest.json`�
 | `facility_priority.geojson` | 공개 사업체명·주소·점 위치와 시설 등급 |
 | `grid_priority.csv` | dashboard/검토용 grid 속성 표 |
 | `facility_priority.csv` | dashboard/검토용 시설 속성 표 |
+| `access_context.geojson` | 동일 접근성 snapshot의 법정동 교통 유입 집계와 검토된 관광지 점 |
 | `spatial_evidence.parquet` | 공개 projection으로 제한된 분자·분모·coverage·출처 증거 |
 | `index.html` | tile server, CDN, API key가 필요 없는 2패널 로컬 지도 |
 | `manifest.json` | base/spatial run, boundary/policy version, 날짜, row count, schema와 파일 SHA-256 |
@@ -178,3 +179,33 @@ node/target, metric, unit을 가져야 하고, catchment·거리감쇠·coverage
 규칙이 versioned되어야 합니다. 기간과 단위가 호환되고 독립 quality gate를 통과한
 경우에만 component label을 `grid evidence`로 바꿉니다. 기존 열·등급·unavailable
 의미는 유지하고 district context와 node-level 수치를 조용히 섞지 않습니다.
+
+## 교통·관광지 접근성 snapshot 운영
+
+교통과 관광지는 core·spatial 현재 포인터가 서로 일치한 뒤 별도 접근성 snapshot으로
+게시합니다. 교통은 국토교통부 대중교통 OD 원천의 도착 법정동별 월 합계이며 단위는
+통행량(`passengers`)입니다. 이는 고유 방문자 수, 관광객 수, 교통수단별 승하차량,
+숙박수요 또는 통행목적을 뜻하지 않습니다. 관광지는 한국관광공사
+`KorService2/areaBasedList2` 부산(`areaCode=6`) 결과 중 좌표·주소·부산 경계 검토를
+통과한 점만 사용합니다.
+
+운영 순서는 다음과 같습니다.
+
+1. core writer와 공간 writer가 모두 없고 DB 백업이 완료됐는지 확인합니다.
+2. 숙박 6종과 `public_transport_od_usage`를 함께 백필해 품질 게이트를 통과한 새
+   core를 게시합니다. 월별 16개 출발 구·군 × 16개 도착 구·군 = 256개 기본 요청이며,
+   18개월이면 paging 전 4,608개 요청입니다. 할당량 초과 시 완료 월 체크포인트만
+   보존하고 동일 logical run을 재개합니다.
+3. 새 core와 승인 경계로 `spatial-run`을 실행해 spatial 포인터를 새 core에
+   재결합합니다.
+4. 서버 비밀파일에서 키를 값 출력 없이 주입한 뒤
+   `scripts/publish_accessibility_snapshot.py`를 실행합니다.
+5. `spatial-export`를 실행하고 manifest의 `access_snapshot_id`와
+   `access_context.geojson` hash·row count를 검증합니다.
+
+지도는 `대중교통 유입량`과 `관광지`를 독립 레이어로 표시합니다. 법정동 교통값은
+정류장·역 점 좌표가 아니라 법정동 집계이므로 동 영역의 대표점에 표시하며, 정밀
+역세권 분석으로 해석하지 않습니다. 관광지 거리와 교통 유입은 후보의 보조 근거로
+보여 주되, 자료가 없으면 기존 정책순위를 재정렬하거나 0으로 대체하지 않습니다.
+투자·사업대상 확정에는 토지이용, 접도, 소유권, 사업자 수요와 현장조사가 별도로
+필요합니다.
