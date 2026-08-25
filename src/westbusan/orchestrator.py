@@ -577,7 +577,7 @@ class Pipeline:
                         began = False
                         return None, self._load_summary(prior_run_id)
                     if str(prior_status) == "RUNNING":
-                        acquired = self.db.query(
+                        self.db.connection.execute(
                             """update pipeline_run
                                set lease_owner_token = ?, heartbeat_at = ?,
                                    lease_expires_at = ?
@@ -585,10 +585,10 @@ class Pipeline:
                                  and (
                                    lease_owner_token is null
                                    or lease_owner_token = ?
-                                   or lease_expires_at is null
-                                   or lease_expires_at <= ?
-                                 )
-                               returning run_id""",
+                                    or lease_expires_at is null
+                                    or lease_expires_at <= ?
+                                  )
+                            """,
                             [
                                 self._lease_owner_token,
                                 now,
@@ -596,6 +596,19 @@ class Pipeline:
                                 prior_run_id,
                                 self._lease_owner_token,
                                 now,
+                            ],
+                        )
+                        acquired = self.db.query(
+                            """select run_id from pipeline_run
+                               where run_id = ? and status = 'RUNNING'
+                                 and lease_owner_token = ?
+                                 and heartbeat_at = ?
+                                 and lease_expires_at = ?""",
+                            [
+                                prior_run_id,
+                                self._lease_owner_token,
+                                now,
+                                lease_expires,
                             ],
                         )
                         if not acquired:

@@ -571,6 +571,45 @@ def test_expired_lease_takeover_revokes_the_previous_owner(
     )["next_page"] == 4
 
 
+def test_expired_lease_takeover_survives_checkpointed_unique_index(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches DuckDB rejecting takeover UPDATE RETURNING in an upgraded DB."""
+    first = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    first.db.migrate()
+    first_run, _ = first._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "checkpointed-takeover"
+    )
+    assert first_run is not None
+    first.db.connection.execute(
+        """update pipeline_run set lease_expires_at = now() - interval '1 second'
+           where run_id = ?""",
+        [first_run.run_id],
+    )
+    first.db.connection.execute("checkpoint")
+    first.db.connection.close()
+
+    second = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    second.db.migrate()
+    query = second.db.query
+
+    def reject_update_returning(sql: str, parameters=None):
+        normalized = " ".join(sql.lower().split())
+        if normalized.startswith("update pipeline_run") and "returning run_id" in normalized:
+            raise duckdb.ConstraintException(
+                'Constraint Error: Duplicate key "logical_run_key, attempt"'
+            )
+        return query(sql, parameters)
+
+    monkeypatch.setattr(second.db, "query", reject_update_returning)
+    second_run, _ = second._prepare_run(
+        "fixture", "daily", date(2026, 8, 16), "checkpointed-takeover"
+    )
+
+    assert second_run is not None
+    assert second_run.run_id == first_run.run_id
+
+
 def test_expired_lease_takeover_fences_old_collectors_and_failure_status(
     tmp_path: Path, monkeypatch
 ) -> None:
