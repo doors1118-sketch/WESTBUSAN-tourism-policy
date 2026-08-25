@@ -608,6 +608,7 @@ def test_expired_lease_takeover_survives_checkpointed_unique_index(
 
     assert second_run is not None
     assert second_run.run_id == first_run.run_id
+    second._refresh_lease(second_run.run_id)
 
 
 def test_expired_lease_takeover_fences_old_collectors_and_failure_status(

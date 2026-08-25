@@ -899,6 +899,7 @@ class Pipeline:
         if len(epoch_rows) != 1 or epoch_rows[0][0] is None:
             raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
         epoch = int(epoch_rows[0][0])
+        lease_expires = now + _LEASE_DURATION
         refreshed_writer = self.db.query(
             """update pipeline_writer_lease
                set heartbeat_at = ?, lease_expires_at = ?
@@ -907,25 +908,31 @@ class Pipeline:
                returning fence_epoch""",
             [
                 now,
-                now + _LEASE_DURATION,
+                lease_expires,
+                run_id,
+                self._lease_owner_token,
+                epoch,
+            ],
+        )
+        self.db.connection.execute(
+            """update pipeline_run
+               set heartbeat_at = ?, lease_expires_at = ?
+               where run_id = ? and status = 'RUNNING'
+                 and lease_owner_token = ? and writer_fence_epoch = ?""",
+            [
+                now,
+                lease_expires,
                 run_id,
                 self._lease_owner_token,
                 epoch,
             ],
         )
         refreshed_run = self.db.query(
-            """update pipeline_run
-               set heartbeat_at = ?, lease_expires_at = ?
+            """select run_id from pipeline_run
                where run_id = ? and status = 'RUNNING'
                  and lease_owner_token = ? and writer_fence_epoch = ?
-               returning run_id""",
-            [
-                now,
-                now + _LEASE_DURATION,
-                run_id,
-                self._lease_owner_token,
-                epoch,
-            ],
+                 and heartbeat_at = ? and lease_expires_at = ?""",
+            [run_id, self._lease_owner_token, epoch, now, lease_expires],
         )
         if not refreshed_writer or not refreshed_run:
             raise RuntimeError(f"pipeline run {run_id} lease ownership was lost")
