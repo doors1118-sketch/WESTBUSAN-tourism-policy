@@ -1,6 +1,6 @@
 # Codex Cloud 인수인계
 
-## 운영 완료 기준점 (2026-08-24)
+## 운영 완료 기준점 (2026-08-25)
 
 아래 상태가 현재 운영·GitHub 기준점이다. 이 절 아래의 초기 설계·과거 차단 기록은
 이력 보존용이며, 현재 상태와 충돌하면 이 절을 우선한다.
@@ -9,16 +9,18 @@
 - 투자정보 지도: `https://busanproduct.co.kr/tourism/map/index.html`
 - 빈집 운영지도: `https://busanproduct.co.kr/tourism/vacant-map/index.html`
 - GitHub 브랜치: `codex/busan-authority-filter`
-- 현재 기능 완료 commit: `9248e9d` (`fix(spatial): validate ranked map payload`)
-- 운영 UI release: `/opt/westbusan/dashboard/releases/20260824-bukgu-context-v47`
-- 직전 rollback release: `/opt/westbusan/dashboard/releases/20260824-workation-v46`
+- 현재 접근성 코드 기준 commit: `bedf09f` (`docs(tourism): operate shared accessibility releases`)
+- 운영 UI release: `/opt/westbusan/dashboard/releases/20260825-access-v48`
+- 직전 rollback release: `/opt/westbusan/dashboard/releases/20260824-bukgu-context-v47`
 - 운영 AI release: `/opt/westbusan-tourism-ai/releases/20260823-consumption-ai-v43b`
-- 이번 release 회귀 테스트: 관련 unit·integration 62 passed, Ruff·JavaScript syntax·diff check 통과
-- 운영 회귀: 기존 서비스와 관광 UI·투자지도·빈집지도·북구 보완후보 GeoJSON을 포함한 공개 URL 16개 모두 HTTP 200
-- 운영 산출물 검증: 공간·빈집 manifest 유효, 빈집 schema `vacant-map-v3`, 구포동 전체 숙박시설 52개소
+- 이번 접근성 구현 회귀: 관련 unit·integration 124 passed, orchestrator 45 passed, Ruff·diff check 통과
+- 운영 회귀: 기존 서비스 8개와 관광 UI·투자지도·빈집지도·두 접근성 GeoJSON을 포함한 공개 URL 15개 모두 HTTP 200
+- 운영 산출물 검증: 공간·빈집 manifest hash 유효, 두 번들이 동일 접근성 snapshot `4a80b966-c910-500f-9a47-0f6a38a678e0`에 결속
+- 최신 공간 실행: `02141ae7-a4db-57a7-88bc-3fb07112cb52`, core `83aaecea-7650-5399-9b3e-d63f6ec858a0`, 기준일 2026-08-25, `COMPLETED`
 - AI 종합보고서: OpenAI 8개 절·근거 30건 생성 확인, 동일 발행본 재호출 `cached=true`
 
-현재 운영 데이터 기준일은 2026-08-21이고 core 기준일은 2026-08-19이다. 관광
+현재 운영 UI의 주요 관광·숙박 지표는 2026-08-21 발행본을 사용하고, 최신 공간
+실행 및 접근성 snapshot의 기준일은 2026-08-25이다. 관광
 UI는 종합현황, 서부산 자치구 현황, 동서 공급 격차, 투자정보 제공, 빈집 정보
 제공, AI 종합 분석의 6개 탭으로 운영한다. 투자정보 지도는 VWorld 2D 타일,
 숙박시설 위치 3,095건과 거점·정책 레이어를 제공한다. 빈집 지도는 서부산 빈집
@@ -41,8 +43,13 @@ UI는 종합현황, 서부산 자치구 현황, 동서 공급 격차, 투자정�
 이는 현재 게시 빈집의 필지 연속성·면적·건축자료를 묶은 행정검토용 분류이며
 사업대상지 확정이나 사업성 판정이 아니다.
 
-기능 구현은 완료 상태이나 다음은 데이터·정책판단 한계이다. 교통 fact와 체류시간은
-현재 발행본에 없으므로 지표로 게시하지 않는다. 관광소비 80.44 등은 한국관광공사
+접근성 레이어와 공용 snapshot 발행 기능은 구현·배포됐으나 다음은 데이터·정책판단
+한계이다. 교통 backfill은 공공데이터포털 일일 호출한도 결과코드 22로 중단되어
+현재 접근성 snapshot은 `transport_status=missing_membership`, 0건으로 발행했다.
+2025년 3월 26,962건, 4월 27,228건의 체크포인트는 존재하지만 전체 월 완결성과
+품질승인 전에는 지도 근거로 사용하지 않는다. KTO 좌표 POI는 서비스 권한 오류
+HTTP 403으로 `tourism_status=pending`, 0건이며 키 승인 또는 공식 좌표 데이터가
+필요하다. 체류시간도 현재 발행본에 없으므로 지표로 게시하지 않는다. 관광소비 80.44 등은 한국관광공사
 시군구 월별 원천의 방문량 대비 관광소비 상대지표이며 원화·점유율·실제 1인당
 지출액이 아니다. 빈집 후보는 소유권·토지이용·구조안전·접도·소방·주차·위생과
 사업성을 확정하지 않으므로 후속 실사가 필요하다. B형에는 인근 관광지와 교통
@@ -54,8 +61,9 @@ B·C형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의
 두 범위를 상세 카드에 함께 표시한다. API 키·SSH 개인키·환경파일은
 Git에 포함하지 않으며 서버 내부의 전용 비밀파일을 사용한다.
 
-대시보드 기능소개 DOCX는
-`docs/부산_관광경제활력_대시보드_기능소개서.docx`에 함께 보관한다.
+시장보고용 3쪽 사업설명자료와 대시보드 기능·정책비전 DOCX는 각각
+`docs/서부산권_체류형_관광_활성화_사업설명자료.docx`,
+`docs/서부산_관광정책_대시보드_기능과_정책비전.docx`에 함께 보관한다.
 
 ## 현재 상태와 경계
 
