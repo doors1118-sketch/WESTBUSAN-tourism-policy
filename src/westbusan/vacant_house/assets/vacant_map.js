@@ -497,9 +497,17 @@
     const visibleHouses = data.houses.filter(featureMatches);
     data.access.filter((feature) => feature.properties.kind === "tourism_poi" && featureMatches(feature)).forEach((feature) => {
       const [longitude, latitude] = feature.geometry.coordinates;
+      const popup = document.createElement("div");
+      const title = document.createElement("strong");
+      const type = document.createElement("div");
+      const location = document.createElement("small");
+      title.textContent = feature.properties.title || "관광정보";
+      type.textContent = `유형: ${feature.properties.content_type_name || "유형 미확인"}`;
+      location.textContent = [feature.properties.district_name, feature.properties.dong_name].filter(Boolean).join(" ") || "소재지역 미확인";
+      popup.append(title, type, location);
       L.marker([latitude, longitude], { icon: L.divIcon({
         className: "tourism-poi-icon", html: "관", iconSize: [28, 28], iconAnchor: [14, 14],
-      }) }).bindPopup(`<strong>${feature.properties.title}</strong><br>${feature.properties.district_name} ${feature.properties.dong_name || ""}`).addTo(layers.tourismPois);
+      }) }).bindPopup(popup).addTo(layers.tourismPois);
     });
     data.access.filter((feature) => feature.properties.kind === "transport_dong" && featureMatches(feature)).forEach((feature) => {
       const matching = visibleHouses.filter((house) => house.properties.dong_name === feature.properties.dong_name);

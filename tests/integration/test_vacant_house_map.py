@@ -90,6 +90,21 @@ class _PublishedVacantMapConnection:
                 ]
             )
         if "from dim_tourism_poi_snapshot" in query:
+            if "category_name" in query:
+                return _Result(
+                    [
+                        (
+                            "126848",
+                            "구포시장",
+                            "39",
+                            "북구",
+                            "2632010500",
+                            "구포동",
+                            128.991,
+                            35.201,
+                        )
+                    ]
+                )
             return _Result(
                 [
                     (
@@ -334,6 +349,11 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "tourism_poi",
         "candidate_accessibility",
     }
+    tourism_poi = next(
+        item for item in access["features"]
+        if item["properties"]["kind"] == "tourism_poi"
+    )
+    assert tourism_poi["properties"]["content_type_name"] == "음식점"
     assert "/tourism/api/vworld/tiles/{z}/{x}/{y}.png" in html
     assert "정적 지도" not in html
     assert "data-min-zoom=\"7\"" in html
@@ -366,6 +386,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "function accessibilityForFeature" in script
     assert "function renderAccessibility" in script
     assert "1km 내 관광지와 교통유입 신호가 함께 확인" in script
+    assert "feature.properties.content_type_name" in script
     assert "hasTourism: poiCount1000m > 0" in script
     assert "A${Number(feature.properties.candidate_rank)}" in script
     assert "B${Number(feature.properties.preliminary_rank)}" in script

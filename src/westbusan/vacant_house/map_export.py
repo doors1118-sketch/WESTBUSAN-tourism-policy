@@ -18,6 +18,7 @@ from shapely import from_wkb
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 
+from westbusan.accessibility.poi import tourism_content_type_name
 from westbusan.spatial.export import (
     _demand_scores_from_rows,
     _set_public_bundle_permissions,
@@ -383,8 +384,8 @@ def _read_optional_access_context(
             [snapshot_id],
         ).fetchall()
         poi_rows = connection.execute(
-            """select content_id, title, district_name, dong_code, dong_name,
-                      longitude, latitude
+            """select content_id, title, category_name, district_name,
+                      dong_code, dong_name, longitude, latitude
                from dim_tourism_poi_snapshot
                where snapshot_id = ?
                  and district_name in ('강서구','북구','사상구','사하구')
@@ -430,15 +431,17 @@ def _read_optional_access_context(
                 "type": "Feature",
                 "geometry": {
                     "type": "Point",
-                    "coordinates": [float(row[5]), float(row[6])],
+                    "coordinates": [float(row[6]), float(row[7])],
                 },
                 "properties": {
                     "kind": "tourism_poi",
                     "content_id": str(row[0]),
                     "title": str(row[1]),
-                    "district_name": str(row[2] or ""),
-                    "dong_code": str(row[3] or ""),
-                    "dong_name": str(row[4] or ""),
+                    "content_type_id": str(row[2] or ""),
+                    "content_type_name": tourism_content_type_name(row[2]),
+                    "district_name": str(row[3] or ""),
+                    "dong_code": str(row[4] or ""),
+                    "dong_name": str(row[5] or ""),
                 },
             }
         )

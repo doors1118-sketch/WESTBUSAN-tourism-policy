@@ -14,6 +14,23 @@ KTO_POI_SOURCE_URL = (
     "https://apis.data.go.kr/B551011/KorService2/areaBasedList2"
 )
 
+_CONTENT_TYPE_NAMES = {
+    "12": "관광지",
+    "14": "문화시설",
+    "15": "축제·행사",
+    "25": "여행코스",
+    "28": "레포츠",
+    "32": "숙박",
+    "38": "쇼핑",
+    "39": "음식점",
+}
+
+
+def tourism_content_type_name(content_type_id: object) -> str:
+    """Return the Korean KTO content-type label used in public map popups."""
+    normalized = str(content_type_id or "").strip()
+    return _CONTENT_TYPE_NAMES.get(normalized, "기타 관광정보")
+
 
 @dataclass(frozen=True, slots=True)
 class TourismPoi:

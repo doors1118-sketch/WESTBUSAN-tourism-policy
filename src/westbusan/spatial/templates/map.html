@@ -61,6 +61,12 @@
       data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png">
       <div id="vworld-tile-layer" aria-hidden="true"></div>
       {{SVG}}
+      <div id="tourism-poi-popup" class="tourism-poi-popup" hidden aria-live="polite">
+        <button id="tourism-poi-popup-close" type="button" aria-label="관광정보 닫기">×</button>
+        <strong id="tourism-poi-popup-title">관광정보</strong>
+        <span id="tourism-poi-popup-type">유형 미확인</span>
+        <small id="tourism-poi-popup-location">소재지역 미확인</small>
+      </div>
     </div>
     <p class="map-note">정책지원 검토용 우선순위이며 안전·위생·법적 적합성 평가가 아닙니다. · 경계 출처 {{BOUNDARY_SOURCE}}</p>
     <section id="region-summary" class="region-summary" aria-live="polite">

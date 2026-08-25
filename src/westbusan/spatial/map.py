@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from importlib.resources import files
 from typing import Any
 
+from westbusan.accessibility.poi import tourism_content_type_name
+
 _MAP_CENTER = (129.075, 35.18)
 _MAP_ZOOM = 10
 _MAP_WIDTH = 1000
@@ -491,23 +493,31 @@ def _render_svg(
         if len(coordinates) != 2:
             continue
         x, y = project(coordinates)
+        content_type_name = tourism_content_type_name(
+            properties.get("category_name")
+        )
         poi_markers.append(
             '<circle class="tourism-poi-marker" cx="{x:.3f}" cy="{y:.3f}" '
             'r="5" data-base-radius="5" data-district="{district}" '
-            'data-dong="{dong}" data-title="{poi_title}" tabindex="0" '
+            'data-dong="{dong}" data-title="{poi_title}" '
+            'data-tourism-type="{tourism_type}" tabindex="0" '
             'role="button" aria-label="{label}"><title>{title}</title></circle>'.format(
                 x=x,
                 y=y,
                 district=_attribute(properties.get("district_name")),
                 dong=_attribute(properties.get("dong_name")),
                 poi_title=_attribute(properties.get("title")),
-                label=_attribute(f"관광지 {properties.get('title') or ''}"),
+                tourism_type=_attribute(content_type_name),
+                label=_attribute(
+                    f"{content_type_name} {properties.get('title') or ''}"
+                ),
                 title=html.escape(
                     " · ".join(
                         filter(
                             None,
                             (
                                 str(properties.get("title") or "관광지"),
+                                content_type_name,
                                 str(properties.get("district_name") or ""),
                                 str(properties.get("dong_name") or ""),
                             ),

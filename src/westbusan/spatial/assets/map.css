@@ -61,6 +61,12 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .tourism-poi-layer .tourism-poi-marker:not(.is-filtered) { display: block; }
 .poi-overlay-control { display: flex; align-items: center; gap: 7px; margin: 10px 0; padding: 9px 10px; border: 1px solid #cfe0e8; border-radius: 8px; background: #eef8f7; color: #164c52; font-size: 11px; font-weight: 800; }
 .tourism-poi-marker:hover, .tourism-poi-marker:focus { fill: #c53b2d; stroke: #102a43; outline: none; }
+.tourism-poi-popup { position: absolute; z-index: 5; display: grid; gap: 5px; width: min(280px, calc(100% - 24px)); padding: 14px 40px 14px 15px; border: 1px solid #9db7bf; border-radius: 10px; background: #fff; box-shadow: 0 10px 30px #102a4340; pointer-events: auto; }
+.tourism-poi-popup[hidden] { display: none; }
+.tourism-poi-popup strong { color: #102a43; font-size: .95rem; line-height: 1.35; }
+.tourism-poi-popup span { width: fit-content; padding: 3px 7px; border-radius: 999px; background: #dff4f1; color: #0f6868; font-size: .74rem; font-weight: 800; }
+.tourism-poi-popup small { color: #64737b; font-size: .72rem; }
+#tourism-poi-popup-close { position: absolute; top: 7px; right: 7px; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: #52616a; font-size: 1.15rem; line-height: 1; }
 .access-disclaimer { margin: -6px 0 14px; padding: 9px 10px; border-left: 3px solid #0f8b8d; background: #f4f8f8; color: #52616a; font-size: .72rem; line-height: 1.45; }
 .facility-feature { stroke: #fff; stroke-width: .9; fill: #102a43; fill-opacity: .78; vector-effect: non-scaling-stroke; }
 .facility-layer.detail-mode .facility-feature:not(.is-filtered) { display: block; }

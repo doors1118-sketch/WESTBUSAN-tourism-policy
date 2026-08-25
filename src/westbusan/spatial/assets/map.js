@@ -15,6 +15,7 @@
   const policyLabels = [...document.querySelectorAll(".district-policy-label")];
   const tourismPois = [...document.querySelectorAll(".tourism-poi-marker")];
   const tourismPoiOverlay = document.getElementById("tourism-poi-overlay");
+  const tourismPoiPopup = document.getElementById("tourism-poi-popup");
   const filterable = [...grids, ...facilities, ...clusters, ...policyLabels, ...tourismPois];
   const westDistricts = new Set(["강서구", "사하구", "북구", "사상구"]);
   const eastDistricts = new Set(["해운대구", "수영구", "기장군"]);
@@ -191,6 +192,24 @@
 
   function formatNumber(value, digits = 0) {
     return Number.isFinite(value) ? value.toLocaleString("ko-KR", { maximumFractionDigits: digits }) : "자료 없음";
+  }
+
+  function hideTourismPoiPopup() {
+    tourismPoiPopup.hidden = true;
+  }
+
+  function showTourismPoiPopup(node, event) {
+    document.getElementById("tourism-poi-popup-title").textContent = node.dataset.title || "관광정보";
+    document.getElementById("tourism-poi-popup-type").textContent = node.dataset.tourismType || "유형 미확인";
+    document.getElementById("tourism-poi-popup-location").textContent = [node.dataset.district, node.dataset.dong].filter(Boolean).join(" ") || "소재지역 미확인";
+    const mapRect = slippyMap.getBoundingClientRect();
+    const markerRect = node.getBoundingClientRect();
+    const anchorX = Number.isFinite(event?.clientX) ? event.clientX : markerRect.left + markerRect.width / 2;
+    const anchorY = Number.isFinite(event?.clientY) ? event.clientY : markerRect.top + markerRect.height / 2;
+    tourismPoiPopup.hidden = false;
+    const popupRect = tourismPoiPopup.getBoundingClientRect();
+    tourismPoiPopup.style.left = `${Math.max(12, Math.min(mapRect.width - popupRect.width - 12, anchorX - mapRect.left + 12))}px`;
+    tourismPoiPopup.style.top = `${Math.max(12, Math.min(mapRect.height - popupRect.height - 12, anchorY - mapRect.top + 12))}px`;
   }
 
   function haversineMetres(left, right) {
@@ -734,9 +753,17 @@
   }));
   tourismPois.forEach((node) => node.addEventListener("click", (event) => {
     event.stopPropagation();
+    showTourismPoiPopup(node, event);
     document.getElementById("region-summary-title").textContent = `${node.dataset.title || "관광지"} · 관광지 상세`;
-    document.getElementById("region-summary-text").textContent = `${node.dataset.district || "-"} ${node.dataset.dong || ""} · 숙박 투자 검토 시 인근 관광수요 유발시설로 참고하며 실제 방문량은 별도 확인이 필요합니다.`;
+    document.getElementById("region-summary-text").textContent = `${node.dataset.tourismType || "관광정보"} · ${node.dataset.district || "-"} ${node.dataset.dong || ""} · 숙박 투자 검토 시 인근 관광수요 유발시설로 참고하며 실제 방문량은 별도 확인이 필요합니다.`;
   }));
+  tourismPois.forEach((node) => node.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      showTourismPoiPopup(node, event);
+    }
+  }));
+  document.getElementById("tourism-poi-popup-close").addEventListener("click", hideTourismPoiPopup);
   filters.district.addEventListener("change", () => {
     refreshDongOptions();
     apply();
