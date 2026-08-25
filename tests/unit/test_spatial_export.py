@@ -29,6 +29,31 @@ BOUNDARY_FIXTURE = Path("tests/fixtures/spatial/busan_dongs.geojson")
 EXPORT_DATE = date(2026, 8, 17)
 
 
+def test_static_bundle_permissions_are_nginx_readable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "bundle"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    first = root / "index.html"
+    second = nested / "data.json"
+    first.write_text("index", encoding="utf-8")
+    second.write_text("{}", encoding="utf-8")
+    calls: list[tuple[Path, int]] = []
+
+    def record_chmod(path: Path, mode: int) -> None:
+        calls.append((path.relative_to(root), mode))
+
+    monkeypatch.setattr(Path, "chmod", record_chmod)
+
+    spatial_export._set_public_bundle_permissions(root)
+
+    assert (Path("."), 0o755) in calls
+    assert (Path("nested"), 0o755) in calls
+    assert (Path("index.html"), 0o644) in calls
+    assert (Path("nested/data.json"), 0o644) in calls
+
+
 def _settings(tmp_path: Path, db_path: Path) -> Settings:
     return Settings(
         service_key="",

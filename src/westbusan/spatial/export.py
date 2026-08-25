@@ -311,6 +311,7 @@ def export_spatial_current(
     try:
         for name in _FILE_NAMES:
             _write_fsynced(temporary / name, artifacts[name].body)
+        _set_public_bundle_permissions(temporary)
         _assert_same_identity(identity, _load_current_identity(db))
         if directory.exists():
             backup = exports_dir / f".spatial-backup-{uuid4()}"
@@ -342,6 +343,13 @@ def export_spatial_current(
         if temporary.exists():
             shutil.rmtree(temporary)
     return completed
+
+
+def _set_public_bundle_permissions(directory: Path) -> None:
+    """Make a validated static bundle traversable and readable by nginx."""
+    directory.chmod(0o755)
+    for path in directory.rglob("*"):
+        path.chmod(0o755 if path.is_dir() else 0o644)
 
 
 def validate_spatial_bundle(

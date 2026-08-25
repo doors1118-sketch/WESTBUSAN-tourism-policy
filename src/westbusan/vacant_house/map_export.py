@@ -18,7 +18,10 @@ from shapely import from_wkb
 from shapely.geometry import mapping
 from shapely.geometry.base import BaseGeometry
 
-from westbusan.spatial.export import _demand_scores_from_rows
+from westbusan.spatial.export import (
+    _demand_scores_from_rows,
+    _set_public_bundle_permissions,
+)
 from westbusan.vacant_house.hub_models import CadastralParcel, VacantParcel
 from westbusan.vacant_house.standalone_candidates import (
     build_standalone_candidates,
@@ -140,6 +143,7 @@ def export_vacant_house_map_current(
         bundle = VacantHouseMapBundle(temporary, hub_run_id, inventory_run_id)
         if not validate_vacant_house_map_bundle(bundle):
             raise VacantHouseMapExportError("vacant_map_bundle_validation_failed")
+        _set_public_bundle_permissions(temporary)
         os.replace(temporary, output_directory)
     except Exception:
         if temporary.exists():
