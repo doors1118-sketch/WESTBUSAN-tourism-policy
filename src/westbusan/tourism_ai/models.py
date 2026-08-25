@@ -124,6 +124,22 @@ class MapSelection(BaseModel):
         "content_first",
         "investment_caution",
     ]
+    transport_inbound: FiniteFloat | None = Field(default=None, ge=0, le=1_000_000_000)
+    transport_period: str | None = Field(
+        default=None,
+        pattern=r"^[0-9]{4}-(0[1-9]|1[0-2])$",
+    )
+    nearest_tourism_poi_name: str | None = Field(default=None, max_length=200)
+    nearest_tourism_poi_distance_m: FiniteFloat | None = Field(
+        default=None,
+        ge=0,
+        le=100_000,
+    )
+    tourism_poi_count_1000m: StrictInt | None = Field(
+        default=None,
+        ge=0,
+        le=10_000,
+    )
 
 
 class InsightRequest(BaseModel):

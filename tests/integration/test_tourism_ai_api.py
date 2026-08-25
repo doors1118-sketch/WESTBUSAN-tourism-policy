@@ -87,6 +87,39 @@ def _request(region: str = "west", district: str | None = None) -> dict[str, str
     return payload
 
 
+def test_map_selection_accepts_published_transport_and_tourism_evidence(
+    tmp_path: Path,
+) -> None:
+    generator = _CountingGenerator(_model_document())
+    client = TestClient(create_app(_settings(tmp_path), generator=generator))
+    payload = {
+        **_request(),
+        "selection": {
+            "grid_id": "g5174_500_721_340",
+            "district": "북구",
+            "dong": "구포동",
+            "facility_count": 11,
+            "aged_facility_count": 7,
+            "age_known_count": 9,
+            "room_count": 84,
+            "supply_gap_score": 72.5,
+            "demand_score": 88.0,
+            "supply_score": 15.5,
+            "recommendation_kind": "new_supply",
+            "transport_inbound": 327928,
+            "transport_period": "2025-06",
+            "nearest_tourism_poi_name": "북구문화예술회관 공연장",
+            "nearest_tourism_poi_distance_m": 115.2,
+            "tourism_poi_count_1000m": 4,
+        },
+    }
+
+    response = client.post("/insights", json=payload)
+
+    assert response.status_code == 200
+    assert generator.calls == 1
+
+
 def test_same_publication_is_generated_once(tmp_path: Path) -> None:
     generator = _CountingGenerator(_model_document())
     client = TestClient(create_app(_settings(tmp_path), generator=generator))

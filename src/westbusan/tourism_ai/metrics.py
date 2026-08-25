@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
@@ -288,6 +289,28 @@ def load_metric_catalogue(
             ("supply_gap", "관광수요 대비 공급부족도", selection.supply_gap_score, "점"),
             ("demand_score", "방문수요 점수", selection.demand_score, "점"),
             ("supply_score", "객실공급 점수", selection.supply_score, "점"),
+            (
+                "transport_inbound",
+                "동 단위 타 자치구 대중교통 유입량",
+                selection.transport_inbound,
+                "통행",
+            ),
+            (
+                "nearest_tourism_poi_distance",
+                (
+                    f"최근접 관광지({selection.nearest_tourism_poi_name}) 직선거리"
+                    if selection.nearest_tourism_poi_name
+                    else "최근접 관광지 직선거리"
+                ),
+                selection.nearest_tourism_poi_distance_m,
+                "m",
+            ),
+            (
+                "tourism_poi_count_1000m",
+                "1km 내 관광지 수",
+                selection.tourism_poi_count_1000m,
+                "개",
+            ),
         ):
             if value is None:
                 continue
@@ -298,9 +321,16 @@ def load_metric_catalogue(
                 value=value,
                 unit=unit,
                 region=area_name,
-                period=document.as_of,
+                period=(
+                    date.fromisoformat(f"{selection.transport_period}-01")
+                    if suffix == "transport_inbound" and selection.transport_period
+                    else document.as_of
+                ),
                 quality_note=(
-                    "현재 공간지도 발행본의 500m 정책검토 지표; "
+                    "동 단위 타 자치구 대중교통 유입 통행량; 관광객 수가 아니며 "
+                    "통행 목적과 중복 이용자를 구분하지 못함"
+                    if suffix == "transport_inbound"
+                    else "현재 공간지도 발행본의 500m 정책검토 지표; "
                     "인허가·사업성 확정값 아님"
                 ),
             )

@@ -294,6 +294,11 @@ def test_selected_500m_context_becomes_explicit_evidence_metrics(
             demand_score=88.0,
             supply_score=15.5,
             recommendation_kind="new_supply",
+            transport_inbound=327_928,
+            transport_period="2025-06",
+            nearest_tourism_poi_name="북구문화예술회관 공연장",
+            nearest_tourism_poi_distance_m=115.2,
+            tourism_poi_count_1000m=4,
         ),
     )
 
@@ -303,6 +308,10 @@ def test_selected_500m_context_becomes_explicit_evidence_metrics(
     assert catalogue["selection.aged_facilities"].value == 7
     assert catalogue["selection.rooms"].value == 84
     assert catalogue["selection.supply_gap"].value == 72.5
+    assert catalogue["selection.transport_inbound"].value == 327_928
+    assert catalogue["selection.transport_inbound"].period == date(2025, 6, 1)
+    assert catalogue["selection.nearest_tourism_poi_distance"].value == 115.2
+    assert catalogue["selection.tourism_poi_count_1000m"].value == 4
     assert all(metric.region == "북구 구포동 500m" for key, metric in catalogue.items() if key.startswith("selection."))
 
 
