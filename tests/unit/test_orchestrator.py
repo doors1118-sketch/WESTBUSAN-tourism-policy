@@ -609,6 +609,20 @@ def test_expired_lease_takeover_survives_checkpointed_unique_index(
     assert second_run is not None
     assert second_run.run_id == first_run.run_id
     second._refresh_lease(second_run.run_id)
+    second._commit_terminal_summary(
+        orchestrator_module.RunSummary(
+            second_run.run_id,
+            second_run.mode,
+            "BLOCKED",
+            False,
+            0,
+            0,
+            0,
+            1,
+            second_run.started_at,
+            datetime.now(UTC),
+        )
+    )
 
 
 def test_expired_lease_takeover_fences_old_collectors_and_failure_status(

@@ -759,13 +759,12 @@ class Pipeline:
         if current_status == "RUNNING":
             if not recovery:
                 self._assert_fence(summary.run_id)
-            updated = self.db.query(
+            self.db.connection.execute(
                 """update pipeline_run
                    set status = ?, finished_at = ?, lease_owner_token = null,
                        lease_expires_at = null
                    where run_id = ? and status = 'RUNNING'
-                     and (? or lease_owner_token = ?)
-                   returning run_id""",
+                     and (? or lease_owner_token = ?)""",
                 [
                     summary.status,
                     summary.finished_at,
@@ -773,6 +772,12 @@ class Pipeline:
                     recovery,
                     self._lease_owner_token,
                 ],
+            )
+            updated = self.db.query(
+                """select run_id from pipeline_run
+                   where run_id = ? and status = ? and finished_at = ?
+                     and lease_owner_token is null and lease_expires_at is null""",
+                [summary.run_id, summary.status, summary.finished_at],
             )
             if not updated:
                 raise RuntimeError(
