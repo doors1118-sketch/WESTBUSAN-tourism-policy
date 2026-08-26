@@ -195,7 +195,12 @@ class Pipeline:
                 collect_buildings_for_parcel_queries, run.run_id
             ),
         )
-        return self._finish_run(run, result.building_rows, logger)
+        return self._finish_run(
+            run,
+            result.building_rows,
+            logger,
+            quality_source_scope=frozenset(building_registry.ids()),
+        )
 
     def _execute_fixtures(
         self,
@@ -427,7 +432,12 @@ class Pipeline:
         return self._finish_run(run, total_rows, logger)
 
     def _finish_run(
-        self, run: RunContext, total_rows: int, logger: _JsonlLogger
+        self,
+        run: RunContext,
+        total_rows: int,
+        logger: _JsonlLogger,
+        *,
+        quality_source_scope: frozenset[str] | None = None,
     ) -> RunSummary:
         self._refresh_lease(run.run_id)
         build_facilities(
@@ -438,6 +448,7 @@ class Pipeline:
         report = run_quality_suite(
             self.db,
             run.run_id,
+            source_scope=quality_source_scope,
             **self._supported_phase_kwargs(run_quality_suite, run.run_id),
         )
         failed = sum(

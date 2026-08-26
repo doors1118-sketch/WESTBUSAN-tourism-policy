@@ -130,6 +130,7 @@ def run_quality_suite(
     db: Database,
     run_id: UUID,
     *,
+    source_scope: frozenset[str] | None = None,
     progress: Callable[[], None] | None = None,
     fence_check: Callable[[], None] | None = None,
 ) -> QualityReport:
@@ -146,10 +147,14 @@ def run_quality_suite(
     contracts = _source_contracts(db)
     present_data_sources = set(artifacts) | _run_fact_sources(db, run_id)
     source_ids = sorted(
-        set(statuses)
-        | set(artifacts)
-        | present_data_sources
-        | {source_id for source_id, required in contracts.items() if required}
+        source_scope
+        if source_scope is not None
+        else (
+            set(statuses)
+            | set(artifacts)
+            | present_data_sources
+            | {source_id for source_id, required in contracts.items() if required}
+        )
     )
     checks: list[CheckResult] = []
     if not source_ids:

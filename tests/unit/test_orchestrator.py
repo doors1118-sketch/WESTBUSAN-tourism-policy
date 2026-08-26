@@ -193,25 +193,30 @@ def test_vacant_candidate_building_run_collects_only_current_candidate_pnus(
         collect,
         raising=False,
     )
-    monkeypatch.setattr(
-        pipeline, "_finish_run", lambda run, total_rows, logger: total_rows
-    )
+    quality_scopes: list[frozenset[str] | None] = []
+
+    def finish(run, total_rows, logger, *, quality_source_scope=None):
+        quality_scopes.append(quality_source_scope)
+        return total_rows
+
+    monkeypatch.setattr(pipeline, "_finish_run", finish)
 
     result = pipeline.enrich_vacant_candidate_buildings(date(2026, 8, 26))
 
     assert result == 2
+    assert quality_scopes == [frozenset({"building_register_title"})]
     assert [query.parameters for query in captured] == [
         {
             "sigunguCd": "26320",
             "bjdongCd": "10500",
-            "platGbCd": "1",
+                "platGbCd": "0",
             "bun": "0001",
             "ji": "0000",
         },
         {
             "sigunguCd": "26440",
             "bjdongCd": "11100",
-            "platGbCd": "1",
+                "platGbCd": "0",
             "bun": "0190",
             "ji": "0000",
         },
