@@ -171,8 +171,11 @@ def export_vacant_house_map_current(
 def current_vacant_candidate_pnus(
     connection: QueryConnection,
 ) -> tuple[str, ...]:
-    """Return the exact current A/B candidate parcel set used by the map."""
+    """Return the full reviewed A/B parcel pool so re-ranking cannot create gaps."""
     data = _read_current(connection)
+    reviewed = data.get("building_candidate_pnus")
+    if isinstance(reviewed, (list, tuple)):
+        return tuple(sorted(str(pnu) for pnu in reviewed))
     hubs = {
         str(feature["properties"]["hub_id"])
         for feature in data["hubs"].get("features", [])
@@ -1276,6 +1279,17 @@ def _map_data(
         "houses": _collection(house_features),
         "accessibility_context": access_context,
         "summary": summary,
+        "building_candidate_pnus": tuple(
+            sorted(
+                {candidate.pnu for candidate in standalone_review_pool}
+                | {
+                    pnu
+                    for pnu, member in member_by_pnu.items()
+                    if member.get("hub_id")
+                    in {str(row[0]) for row in hub_rows}
+                }
+            )
+        ),
     }
 
 
@@ -1470,7 +1484,7 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
     for name, body in bodies.items():
         (directory / name).write_bytes(body)
     manifest = {
-        "schema_version": "vacant-map-v6",
+        "schema_version": "vacant-map-v7",
         "hub_run_id": str(data["hub_run_id"]),
         "inventory_run_id": str(data["inventory_run_id"]),
         "access_snapshot_id": summary["access_snapshot_id"],
