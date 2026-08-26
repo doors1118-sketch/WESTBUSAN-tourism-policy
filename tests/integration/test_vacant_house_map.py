@@ -8,6 +8,7 @@ from uuid import UUID
 from shapely import to_wkb
 from shapely.geometry import box
 
+from westbusan.vacant_house import map_export as vacant_map_export
 from westbusan.vacant_house.map_export import (
     export_vacant_house_map_current,
     validate_vacant_house_map_bundle,
@@ -135,6 +136,10 @@ class _PublishedVacantMapConnection:
                     )
                 ]
             )
+        if "from staging_building_revision as revision" in query:
+            return _Result([])
+        if "from staging_building_response as response" in query:
+            return _Result([])
         if "from vacant_house_hub where" in query:
             return _Result(
                 [
@@ -246,6 +251,43 @@ class _PublishedVacantMapWithExcludedStandalone(_PublishedVacantMapConnection):
         return super().execute(query, parameters)
 
 
+class _PublishedVacantMapWithBuildingRegisters(_PublishedVacantMapConnection):
+    def execute(
+        self, query: str, parameters: list[object] | None = None
+    ) -> _Result:
+        if "from staging_building_revision as revision" in query:
+            return _Result(
+                [
+                    (
+                        f"26320050001000{index:04d}",
+                        f"BUILDING-{index}",
+                        date(1980 + index, 1, 1),
+                        "단독주택",
+                        "벽돌구조",
+                        45.0 + index,
+                        70.0 + index,
+                        40.0 + index,
+                        1,
+                    )
+                    for index in range(1, 8)
+                ]
+            )
+        if "from staging_building_response as response" in query:
+            return _Result([])
+        return super().execute(query, parameters)
+
+
+def test_current_candidate_pnus_returns_hub_members_and_published_standalones() -> None:
+    """Dropping either candidate class would leave part of the map uncollected."""
+    pnus = vacant_map_export.current_vacant_candidate_pnus(
+        _PublishedVacantMapConnection()
+    )
+
+    assert pnus == tuple(
+        f"26320050001000{index:04d}" for index in range(1, 8)
+    )
+
+
 def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     tmp_path: Path,
 ) -> None:
@@ -344,6 +386,12 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert summary["exact_location_count"] == 7
     assert summary["context_availability"] == {
         "district_visitor_demand": "available",
+        "building_register": {
+            "linked_candidates": 0,
+            "partial_candidates": 0,
+            "not_found_candidates": 0,
+            "not_queried_candidates": 3,
+        },
         "nearby_attractions": "reviewed_place_proximity_available",
         "official_tourism_poi": "available",
         "parcel_planning": "available",
@@ -432,7 +480,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "published": 1,
         "reviewed": 1,
     }
-    assert summary["schema_version"] == "vacant-map-v6"
+    assert summary["schema_version"] == "vacant-map-v7"
     assert summary["access_snapshot_id"] == str(ACCESS_SNAPSHOT_ID)
     assert summary["parcel_context_run_id"] == str(PARCEL_CONTEXT_RUN_ID)
     assert summary["context_availability"]["parcel_planning"] == "available"
@@ -458,6 +506,8 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "street-detail-mode" in script
     assert "vacant/address-analysis" in script
     assert "exact_address" in script
+
+
     assert "연속필지 거점개발 후보" in html
     assert "단독개발·숙박전환 예비후보" in html
     assert "standalone-candidates.geojson" in script
@@ -517,6 +567,34 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "B형 검토" in script
     assert "사전 제외조건" in html
     assert "max-height: calc(100vh - 78px)" in css
+
+
+def test_vacant_map_publishes_candidate_building_register_linkage(
+    tmp_path: Path,
+) -> None:
+    """Hard-coding every candidate as unlinked must fail this publication contract."""
+    bundle = export_vacant_house_map_current(
+        _PublishedVacantMapWithBuildingRegisters(), tmp_path / "linked"
+    )
+    hubs = json.loads(bundle.hubs.read_text(encoding="utf-8"))
+    standalone = json.loads(bundle.standalone_candidates.read_text(encoding="utf-8"))
+    candidates = hubs["features"] + standalone["features"]
+
+    assert len(candidates) == 3
+    assert all(
+        feature["properties"]["building_register_status"] == "linked"
+        for feature in candidates
+    )
+    assert all(
+        feature["properties"]["building_register_building_count"]
+        == feature["properties"].get("parcel_count", 1)
+        for feature in candidates
+    )
+    assert all(
+        "building_register_not_linked"
+        not in feature["properties"]["data_review_gaps"]
+        for feature in candidates
+    )
 
 
 def test_vacant_map_manifest_detects_modified_exact_location_bytes(

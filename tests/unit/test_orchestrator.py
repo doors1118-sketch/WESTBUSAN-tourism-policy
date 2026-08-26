@@ -155,6 +155,69 @@ def test_production_run_does_not_apply_generic_probe_to_building_collectors(
     ) == [("EMPTY",)]
 
 
+def test_vacant_candidate_building_run_collects_only_current_candidate_pnus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Accidentally collecting all licensed parcels would multiply API calls."""
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.fixture_dir = None
+    pipeline.registry = SourceRegistry(
+        (
+            SourceSpec(
+                "building_register_title",
+                "https://example.test/building",
+                operation="getBrTitleInfo",
+                group="building",
+            ),
+        )
+    )
+    captured: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "current_vacant_candidate_pnus",
+        lambda connection: (
+            "2644011100101900000",
+            "2632010500100010000",
+        ),
+        raising=False,
+    )
+
+    def collect(db, registry, run, queries, **kwargs):
+        captured.extend(queries)
+        return SimpleNamespace(building_rows=2)
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "collect_buildings_for_parcel_queries",
+        collect,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        pipeline, "_finish_run", lambda run, total_rows, logger: total_rows
+    )
+
+    result = pipeline.enrich_vacant_candidate_buildings(date(2026, 8, 26))
+
+    assert result == 2
+    assert [query.parameters for query in captured] == [
+        {
+            "sigunguCd": "26320",
+            "bjdongCd": "10500",
+            "platGbCd": "1",
+            "bun": "0001",
+            "ji": "0000",
+        },
+        {
+            "sigunguCd": "26440",
+            "bjdongCd": "11100",
+            "platGbCd": "1",
+            "bun": "0190",
+            "ji": "0000",
+        },
+    ]
+
+
 def test_current_only_backfill_uses_one_restartable_snapshot(tmp_path: Path) -> None:
     """Catches replaying one current-state source once per historical month."""
     pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))

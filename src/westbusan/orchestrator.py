@@ -27,7 +27,11 @@ from westbusan.accommodation.contracts import (
 from westbusan.accommodation.load import load_license_snapshot
 from westbusan.accommodation.normalize import normalize_license
 from westbusan.analytics.build import build_marts, mart_manifest_is_valid
-from westbusan.buildings.load import collect_buildings_for_licenses
+from westbusan.buildings.load import (
+    collect_buildings_for_licenses,
+    collect_buildings_for_parcel_queries,
+    parcel_query_from_pnu,
+)
 from westbusan.config import PolicyConfig, RegionConfig, Settings
 from westbusan.db import Database, ensure_run_rebuildable
 from westbusan.demand.load import load_tourism_demand
@@ -46,6 +50,7 @@ from westbusan.sources.datagokr import parse_data_page
 from westbusan.sources.registry import SourceRegistry, probe_source
 from westbusan.storage import RawStore
 from westbusan.transport.load import SourceMonthEvidence, load_transport
+from westbusan.vacant_house.map_export import current_vacant_candidate_pnus
 
 _LEASE_DURATION = timedelta(minutes=15)
 _PHASE_PROGRESS_INTERVAL_SECONDS = 5.0
@@ -161,6 +166,36 @@ class Pipeline:
             return self._execute_fixtures("backfill", start, end, source_ids)
         selected = self._selected_ids(source_ids)
         return self._execute_production("backfill", start, end, list(selected))
+
+    def enrich_vacant_candidate_buildings(self, as_of: date) -> RunSummary:
+        """Collect and publish building-register evidence only for current A/B PNUs."""
+        self.db.migrate()
+        pnus = tuple(sorted(current_vacant_candidate_pnus(self.db.connection)))
+        identity = f"vacant-candidate-buildings:{as_of.isoformat()}:{','.join(pnus)}"
+        run, persisted = self._prepare_run(
+            "production", "backfill", as_of, identity
+        )
+        if persisted is not None:
+            return persisted
+        assert run is not None
+        logger = _JsonlLogger(self.settings.log_dir, as_of)
+        building_registry = SourceRegistry(
+            tuple(
+                self.registry.get(source_id)
+                for source_id in self.registry.ids(group="building")
+            )
+        )
+        result = collect_buildings_for_parcel_queries(
+            self.db,
+            building_registry,
+            run,
+            tuple(parcel_query_from_pnu(pnu) for pnu in pnus),
+            raw_store=self.raw_store,
+            **self._supported_phase_kwargs(
+                collect_buildings_for_parcel_queries, run.run_id
+            ),
+        )
+        return self._finish_run(run, result.building_rows, logger)
 
     def _execute_fixtures(
         self,

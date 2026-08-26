@@ -166,6 +166,83 @@ def test_same_parcel_is_requested_once_and_links_each_license(
     assert events == [(None, "closed_register", '{"mgmShtregPk":"CLOSED-1001","shterGbCdNm":"폐쇄말소"}')]
 
 
+def test_explicit_vacant_candidate_parcel_is_collected_without_a_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removing the explicit-parcel collector would leave every vacant candidate unlinked."""
+    db = Database(tmp_path / "vacant-building.duckdb", Path("sql"))
+    db.migrate()
+    calls: list[dict[str, object]] = []
+
+    class FakePager:
+        def __init__(self, *_: object, **__: object) -> None:
+            pass
+
+        def iter_url(
+            self, url: str, parameters: dict[str, object], **__: object
+        ) -> list[ApiPage]:
+            calls.append(dict(parameters))
+            rows = (
+                [
+                    {
+                        "mgmBldrgstPk": "VACANT-BUILDING-1",
+                        "sigunguCd": "26440",
+                        "bjdongCd": "11100",
+                        "platGbCd": "1",
+                        "bun": "0190",
+                        "ji": "0000",
+                        "platPlc": "부산광역시 강서구 명지동 190",
+                        "useAprDay": "19500101",
+                        "mainPurpsCdNm": "단독주택",
+                        "strctCdNm": "벽돌구조",
+                        "totArea": "42.98",
+                    }
+                ]
+                if url.endswith("getBrTitleInfo")
+                else []
+            )
+            return [
+                ApiPage(
+                    rows=rows,
+                    total_count=len(rows),
+                    page_no=1,
+                    page_size=max(1, len(rows)),
+                    raw_body=b'{"provider":"fixture"}',
+                    schema_fingerprint="fixture",
+                )
+            ]
+
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-key")
+    monkeypatch.setattr(building_load, "DataGoKrPager", FakePager)
+    run = RunContext.start("vacant-building", datetime.now(UTC))
+
+    result = building_load.collect_buildings_for_parcel_queries(
+        db,
+        SourceRegistry.load(Path("config/sources.yaml")),
+        run,
+        (building_load.parcel_query_from_pnu("2644011100101900000"),),
+        raw_store=RawStore(tmp_path / "data"),
+    )
+
+    assert result.parcel_queries == 1
+    assert result.building_rows == 1
+    assert len(calls) == 5
+    assert {tuple(sorted(call.items())) for call in calls} == {
+        (
+            ("bjdongCd", "11100"),
+            ("bun", "0190"),
+            ("ji", "0000"),
+            ("platGbCd", "1"),
+            ("sigunguCd", "26440"),
+        )
+    }
+    assert db.query(
+        """select sigungu_cd || bjdong_cd || plat_gb_cd || bun || ji,
+                  use_approval_date, main_use
+           from staging_building_revision"""
+    ) == [("2644011100101900000", date(1950, 1, 1), "단독주택")]
+
+
 def test_building_collection_resumes_after_completed_parcel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

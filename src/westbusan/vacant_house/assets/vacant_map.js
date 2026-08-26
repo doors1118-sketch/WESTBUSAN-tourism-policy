@@ -81,12 +81,39 @@
   }
 
   function dataReviewText(properties) {
-    const gaps = (properties.data_review_gaps || []).map(
+    const gaps = (properties.data_review_gaps || [])
+      .filter((reason) => reason !== "building_register_not_linked")
+      .map(
       (reason) => developmentReasonLabels[reason] || reason,
     );
-    if (properties.data_review_status === "complete") return "자료 확인 완료";
-    if (gaps.length) return `자료 보완: ${gaps.join("·")}`;
-    return "자료 보완 여부 미확인";
+    const register = buildingRegisterText(properties);
+    if (properties.data_review_status === "complete") return register;
+    if (gaps.length) return `${register} · 자료 보완: ${gaps.join("·")}`;
+    return register;
+  }
+
+  function buildingRegisterText(properties) {
+    const status = properties.building_register_status || "not_queried";
+    const total = Number(properties.building_register_total_parcel_count || 0);
+    const linked = Number(properties.building_register_linked_parcel_count || 0);
+    const buildings = Number(properties.building_register_building_count || 0);
+    if (status === "linked") return `건축물대장 ${buildings}동 연계 완료`;
+    if (status === "partial") return `건축물대장 ${linked}/${total}필지 일부 연계`;
+    if (status === "not_found") return "건축물대장 조회 결과 없음";
+    return "건축물대장 추가조회 필요";
+  }
+
+  function buildingRegisterDetail(properties) {
+    const parts = [buildingRegisterText(properties)];
+    const years = properties.building_register_use_approval_years || [];
+    const uses = properties.building_register_main_uses || [];
+    const structures = properties.building_register_structures || [];
+    const totalArea = Number(properties.building_register_total_area_sum || 0);
+    if (years.length) parts.push(`사용승인연도 ${years.join("·")}`);
+    if (uses.length) parts.push(`주용도 ${uses.join("·")}`);
+    if (structures.length) parts.push(`구조 ${structures.join("·")}`);
+    if (totalArea > 0) parts.push(`대장 연면적 합계 ${totalArea.toLocaleString("ko-KR")}㎡`);
+    return parts.join(" · ");
   }
 
   function policyInterpretation(feature, kind, identifier) {
@@ -456,7 +483,7 @@
     );
     renderAccessibility(feature, properties.hub_id);
     document.getElementById("detail-evidence").textContent = (
-      `${developmentReviewText(properties)}. 지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. 용도지역 ${properties.land_use_zones.join("·") || "미확인"}, 용도지구 ${properties.land_use_districts.join("·") || "미확인"}, 도로접면 ${properties.road_sides.join("·") || "미확인"}입니다. ${accessibilityText(feature, properties.hub_id)}. 소유권·구조안전·소방·주차와 수익성은 별도 검토 대상입니다.`
+      `${developmentReviewText(properties)}. 지적필지 경계 접촉이 확인된 물리적 연속필지군입니다. 용도지역 ${properties.land_use_zones.join("·") || "미확인"}, 용도지구 ${properties.land_use_districts.join("·") || "미확인"}, 도로접면 ${properties.road_sides.join("·") || "미확인"}입니다. ${buildingRegisterDetail(properties)}. ${accessibilityText(feature, properties.hub_id)}. 소유권·구조안전·소방·주차와 수익성은 별도 검토 대상입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.hubs.get(properties.hub_id);
@@ -498,7 +525,7 @@
       `${Math.round(properties.parcel_area).toLocaleString("ko-KR")}㎡`
     );
     document.getElementById("detail-evidence").textContent = (
-      `${developmentReviewText(properties)}. ${demand}. ${parcelPlanningText(properties)}. ${gaps.length ? `${gaps.join(" · ")}. ` : ""}${accessibilityText(feature, properties.candidate_id)}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
+      `${developmentReviewText(properties)}. ${demand}. ${parcelPlanningText(properties)}. ${buildingRegisterDetail(properties)}. ${gaps.length ? `${gaps.join(" · ")}. ` : ""}${accessibilityText(feature, properties.candidate_id)}. B형 번호는 최종 투자순위가 아니라 현재 가용근거 기준의 예비검토 순서입니다.`
     );
     renderHouseCards(houses);
     const entry = featureLayers.standalone.get(properties.candidate_id);

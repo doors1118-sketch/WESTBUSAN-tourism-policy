@@ -29,6 +29,7 @@ from westbusan.accessibility.poi import (
     tourism_display_color,
     tourism_display_group,
 )
+from westbusan.buildings.load import parcel_query_from_pnu
 from westbusan.spatial.export import (
     _demand_scores_from_rows,
     _set_public_bundle_permissions,
@@ -167,6 +168,27 @@ def export_vacant_house_map_current(
     return VacantHouseMapBundle(output_directory, hub_run_id, inventory_run_id)
 
 
+def current_vacant_candidate_pnus(
+    connection: QueryConnection,
+) -> tuple[str, ...]:
+    """Return the exact current A/B candidate parcel set used by the map."""
+    data = _read_current(connection)
+    hubs = {
+        str(feature["properties"]["hub_id"])
+        for feature in data["hubs"].get("features", [])
+    }
+    pnus = {
+        str(feature["properties"]["pnu"])
+        for feature in data["standalone_candidates"].get("features", [])
+    }
+    pnus.update(
+        str(feature["properties"]["pnu"])
+        for feature in data["parcels"].get("features", [])
+        if str(feature["properties"].get("hub_id") or "") in hubs
+    )
+    return tuple(sorted(pnus))
+
+
 def validate_vacant_house_map_bundle(bundle: VacantHouseMapBundle) -> bool:
     """Validate exact file membership and every manifest-bound byte."""
     if not bundle.directory.is_dir():
@@ -273,6 +295,9 @@ def _read_current(connection: QueryConnection) -> dict[str, object]:
              and revision.lot_type is not null and revision.main_lot is not null
            order by pnu, revision.record_id"""
     ).fetchall()
+    building_register_by_pnu, queried_building_parcel_hashes = (
+        _read_optional_building_register_context(connection)
+    )
     district_demand_scores, demand_status = _read_optional_district_demand_scores(
         connection
     )
@@ -302,7 +327,82 @@ def _read_current(connection: QueryConnection) -> dict[str, object]:
         parcel_context_run_id=parcel_context_run_id,
         parcel_context_by_pnu=parcel_context_by_pnu,
         parcel_context_status=parcel_context_status,
+        building_register_by_pnu=building_register_by_pnu,
+        queried_building_parcel_hashes=queried_building_parcel_hashes,
     )
+
+
+def _read_optional_building_register_context(
+    connection: QueryConnection,
+) -> tuple[dict[str, list[dict[str, object]]], set[str]]:
+    """Read exact-PNU building rows from the current core publication lineage."""
+    try:
+        building_rows = connection.execute(
+            """with current_run as (
+                   select published_run_id as run_id
+                   from publication_state where publication_key='current'
+               ), eligible as (
+                   select revision.*, row_number() over (
+                       partition by revision.building_id
+                       order by revision.observed_on desc,
+                                revision.revision_sequence desc,
+                                revision.recorded_at desc,
+                                revision.version_run_id desc
+                   ) as revision_rank
+                   from staging_building_revision as revision
+                   join pipeline_run_input as lineage
+                     on lineage.input_run_id=revision.version_run_id
+                   join current_run on current_run.run_id=lineage.run_id
+               )
+               select concat(revision.sigungu_cd, revision.bjdong_cd,
+                             revision.plat_gb_cd, revision.bun, revision.ji) as pnu,
+                      revision.building_id, revision.use_approval_date,
+                      revision.main_use, profile.structure, revision.total_area,
+                      profile.site_area, profile.building_area,
+                      profile.parking_total
+               from eligible as revision
+               left join building_investment_profile_observation as profile
+                 on profile.version_run_id=revision.version_run_id
+                and profile.building_id=revision.building_id
+                and profile.observed_on=revision.observed_on
+               where revision.revision_rank=1
+                 and revision.sigungu_cd is not null
+                 and revision.bjdong_cd is not null
+                 and revision.plat_gb_cd is not null
+                 and revision.bun is not null and revision.ji is not null
+               order by pnu, revision.building_id"""
+        ).fetchall()
+        response_rows = connection.execute(
+            """with current_run as (
+                   select published_run_id as run_id
+                   from publication_state where publication_key='current'
+               )
+               select response.parcel_hash, max(response.total_count)
+               from staging_building_response as response
+               join pipeline_run_input as lineage
+                 on lineage.input_run_id=response.run_id
+               join current_run on current_run.run_id=lineage.run_id
+               where response.source_id='building_register_title'
+               group by response.parcel_hash order by response.parcel_hash"""
+        ).fetchall()
+    except duckdb.Error:
+        return {}, set()
+    fields = (
+        "building_id",
+        "use_approval_date",
+        "main_use",
+        "structure",
+        "total_area",
+        "site_area",
+        "building_area",
+        "parking_total",
+    )
+    by_pnu: dict[str, list[dict[str, object]]] = {}
+    for row in building_rows:
+        by_pnu.setdefault(str(row[0]), []).append(
+            dict(zip(fields, row[1:], strict=True))
+        )
+    return by_pnu, {str(row[0]) for row in response_rows}
 
 
 def _read_optional_parcel_context(
@@ -565,6 +665,8 @@ def _map_data(
     parcel_context_run_id: UUID | None,
     parcel_context_by_pnu: dict[str, dict[str, object]],
     parcel_context_status: str,
+    building_register_by_pnu: dict[str, list[dict[str, object]]],
+    queried_building_parcel_hashes: set[str],
 ) -> dict[str, object]:
     geometry_by_pnu = {
         str(row[0]): from_wkb(bytes(row[3])) for row in evidence_rows
@@ -607,8 +709,8 @@ def _map_data(
         candidate.candidate_id: _candidate_development_review(
             pnus=(candidate.pnu,),
             geometry_by_pnu=geometry_by_pnu,
-            address_by_pnu=address_by_pnu,
             parcel_context_by_pnu=parcel_context_by_pnu,
+            building_register_by_pnu=building_register_by_pnu,
         )
         for candidate in standalone_review_pool
     }
@@ -706,8 +808,11 @@ def _map_data(
         development_review = _candidate_development_review(
             pnus=tuple(hub_pnus),
             geometry_by_pnu=geometry_by_pnu,
-            address_by_pnu=address_by_pnu,
             parcel_context_by_pnu=parcel_context_by_pnu,
+            building_register_by_pnu=building_register_by_pnu,
+        )
+        building_register = _building_register_properties(
+            tuple(hub_pnus), building_register_by_pnu, queried_building_parcel_hashes
         )
         hub_review_results.append(development_review)
         if not development_review.eligible:
@@ -738,6 +843,7 @@ def _map_data(
                     ),
                     "parcel_planning_parcel_count": len(hub_context),
                     **_development_review_properties(development_review),
+                    **building_register,
                 },
             )
         )
@@ -838,6 +944,11 @@ def _map_data(
                     ],
                     **_access_score_properties(access_score),
                     **_development_review_properties(development_review),
+                    **_building_register_properties(
+                        (candidate.pnu,),
+                        building_register_by_pnu,
+                        queried_building_parcel_hashes,
+                    ),
                     **parcel_context,
                 },
             )
@@ -1006,7 +1117,7 @@ def _map_data(
     }
 
     summary = {
-        "schema_version": "vacant-map-v6",
+        "schema_version": "vacant-map-v7",
         "hub_run_id": str(hub_run_id),
         "inventory_run_id": str(inventory_run_id),
         "source_snapshot_date": snapshot_date,
@@ -1073,7 +1184,11 @@ def _map_data(
                 "lodging_use_explicitly_restricted",
             ],
             "conditional_candidates_remain_rankable": True,
-            "building_register_linked": False,
+            "building_register_linked": bool(hub_features or standalone_features)
+            and all(
+                feature["properties"].get("building_register_status") == "linked"
+                for feature in hub_features + standalone_features
+            ),
             "legal_determination": False,
         },
         "development_screening_counts": {
@@ -1124,6 +1239,24 @@ def _map_data(
             "transport_flow": access_status["transport"],
             "official_tourism_poi": access_status["tourism"],
             "parcel_planning": parcel_context_status,
+            "building_register": {
+                "linked_candidates": sum(
+                    feature["properties"].get("building_register_status") == "linked"
+                    for feature in hub_features + standalone_features
+                ),
+                "partial_candidates": sum(
+                    feature["properties"].get("building_register_status") == "partial"
+                    for feature in hub_features + standalone_features
+                ),
+                "not_found_candidates": sum(
+                    feature["properties"].get("building_register_status") == "not_found"
+                    for feature in hub_features + standalone_features
+                ),
+                "not_queried_candidates": sum(
+                    feature["properties"].get("building_register_status") == "not_queried"
+                    for feature in hub_features + standalone_features
+                ),
+            },
         },
     }
     return {
@@ -1145,15 +1278,14 @@ def _candidate_development_review(
     *,
     pnus: tuple[str, ...],
     geometry_by_pnu: dict[str, BaseGeometry],
-    address_by_pnu: dict[str, list[tuple[object, ...]]],
     parcel_context_by_pnu: dict[str, dict[str, object]],
+    building_register_by_pnu: dict[str, list[dict[str, object]]],
 ) -> DevelopmentReview:
     contexts = [
         parcel_context_by_pnu[pnu]
         for pnu in pnus
         if pnu in parcel_context_by_pnu
     ]
-    sources = [row for pnu in pnus for row in address_by_pnu.get(pnu, [])]
     road_sides = tuple(
         str(context["road_side"])
         for context in contexts
@@ -1165,19 +1297,78 @@ def _candidate_development_review(
         for key in ("land_use_zone", "land_use_district", "land_use_area")
         if (value := context.get(key))
     )
+    building_rows = [
+        row for pnu in pnus for row in building_register_by_pnu.get(pnu, [])
+    ]
+    building_register_linked = bool(pnus) and all(
+        building_register_by_pnu.get(pnu) for pnu in pnus
+    )
     return assess_development_review(
         road_sides=road_sides,
         land_use_zones=land_use_zones,
         has_cadastral_geometry=bool(pnus)
         and all(pnu in geometry_by_pnu for pnu in pnus),
-        # The current publication has not linked the official building-register
-        # assessment. Inventory year/area fields are useful context but do not
-        # replace that authoritative linkage.
-        building_register_linked=False,
-        construction_year_known=bool(sources)
-        and all(row[7] is not None for row in sources),
-        building_structure_known=False,
+        building_register_linked=building_register_linked,
+        construction_year_known=building_register_linked
+        and bool(building_rows)
+        and all(row.get("use_approval_date") is not None for row in building_rows),
+        building_structure_known=building_register_linked
+        and bool(building_rows)
+        and all(row.get("structure") for row in building_rows),
     )
+
+
+def _building_register_properties(
+    pnus: tuple[str, ...],
+    building_register_by_pnu: dict[str, list[dict[str, object]]],
+    queried_building_parcel_hashes: set[str],
+) -> dict[str, object]:
+    rows = [row for pnu in pnus for row in building_register_by_pnu.get(pnu, [])]
+    linked_parcels = sum(bool(building_register_by_pnu.get(pnu)) for pnu in pnus)
+    queried_parcels = sum(
+        bool(building_register_by_pnu.get(pnu))
+        or _building_parcel_hash(pnu) in queried_building_parcel_hashes
+        for pnu in pnus
+    )
+    if pnus and linked_parcels == len(pnus):
+        status = "linked"
+    elif linked_parcels:
+        status = "partial"
+    elif pnus and queried_parcels == len(pnus):
+        status = "not_found"
+    else:
+        status = "not_queried"
+    return {
+        "building_register_status": status,
+        "building_register_total_parcel_count": len(pnus),
+        "building_register_queried_parcel_count": queried_parcels,
+        "building_register_linked_parcel_count": linked_parcels,
+        "building_register_building_count": len(rows),
+        "building_register_use_approval_years": sorted(
+            {
+                value.year
+                for row in rows
+                if (value := row.get("use_approval_date")) is not None
+            }
+        ),
+        "building_register_main_uses": sorted(
+            {str(value) for row in rows if (value := row.get("main_use"))}
+        ),
+        "building_register_structures": sorted(
+            {str(value) for row in rows if (value := row.get("structure"))}
+        ),
+        "building_register_total_area_sum": round(
+            sum(float(value) for row in rows if (value := row.get("total_area")) is not None),
+            1,
+        ),
+    }
+
+
+def _building_parcel_hash(pnu: str) -> str:
+    try:
+        return parcel_query_from_pnu(pnu).request_hash
+    except ValueError:
+        return ""
 
 
 def _development_review_properties(

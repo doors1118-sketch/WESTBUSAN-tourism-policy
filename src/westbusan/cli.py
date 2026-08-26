@@ -430,6 +430,19 @@ def building_profile_backfill(
         raise typer.Exit(2)
 
 
+@app.command("vacant-house-building-link")
+def vacant_house_building_link(
+    as_of: Annotated[str, typer.Option(help="Business date (YYYY-MM-DD).")],
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Collect and publish building-register evidence for current A/B candidates."""
+    _finish(
+        _pipeline(root).enrich_vacant_candidate_buildings(
+            _parse_date(as_of, "as-of")
+        )
+    )
+
+
 @app.command("vacant-house-parcel-context")
 def vacant_house_parcel_context(
     actor: Annotated[str, typer.Argument(help="Internal operator identity.")],

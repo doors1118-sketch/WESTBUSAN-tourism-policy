@@ -130,6 +130,7 @@ def test_cli_help_lists_all_operational_commands() -> None:
         "vacant-house-stage",
         "vacant-house-import",
         "building-profile-backfill",
+        "vacant-house-building-link",
         "vacant-house-parcel-context",
     } <= set(result.stdout.split())
 

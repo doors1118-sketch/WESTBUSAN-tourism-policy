@@ -62,6 +62,14 @@ class ParcelQuery:
         return hashlib.sha256(encoded.encode()).hexdigest()
 
 
+def parcel_query_from_pnu(pnu: str) -> ParcelQuery:
+    """Build the official parcel-service request fields from one exact 19-digit PNU."""
+    value = str(pnu).strip()
+    if len(value) != 19 or not value.isdigit():
+        raise ValueError("invalid_pnu")
+    return ParcelQuery(value[:5], value[5:10], value[10], value[11:15], value[15:19])
+
+
 @dataclass(frozen=True, slots=True)
 class BuildingCollectionResult:
     """Counts from one parcel-targeted building collection run."""
@@ -188,8 +196,10 @@ def collect_buildings_for_licenses(
     *,
     raw_store: RawStore | None = None,
     progress: ProgressCallback | None = None,
+    explicit_queries: tuple[ParcelQuery, ...] = (),
+    include_license_parcels: bool = True,
 ) -> BuildingCollectionResult:
-    """Enrich only licensed accommodation parcels; duplicate parcels share API calls."""
+    """Enrich licensed and explicitly requested parcels; duplicate parcels share calls."""
     heartbeat = progress or _noop_progress
     heartbeat()
     service_key = os.getenv("DATA_GO_KR_SERVICE_KEY")
@@ -197,9 +207,13 @@ def collect_buildings_for_licenses(
         return BuildingCollectionResult(parcel_queries=0, building_rows=0, bridge_rows=0)
 
     licenses_by_parcel: dict[str, list[tuple[str, str]]] = defaultdict(list)
-    queries: dict[str, ParcelQuery] = {}
+    queries: dict[str, ParcelQuery] = {
+        query.request_hash: query for query in explicit_queries
+    }
     license_parcels: dict[tuple[str, str], str] = {}
-    if db.query("select 1 from pipeline_run where run_id = ?", [run.run_id]):
+    if not include_license_parcels:
+        license_rows = []
+    elif db.query("select 1 from pipeline_run where run_id = ?", [run.run_id]):
         license_rows = db.query(
             """with eligible as (
                select revision.*, row_number() over (
@@ -370,6 +384,27 @@ def collect_buildings_for_licenses(
             [run.run_id, source_ids, source_record_ids],
         )
     return BuildingCollectionResult(len(queries), building_rows, bridge_rows)
+
+
+def collect_buildings_for_parcel_queries(
+    db: Database,
+    registry: SourceRegistry,
+    run: RunContext,
+    queries: tuple[ParcelQuery, ...],
+    *,
+    raw_store: RawStore | None = None,
+    progress: ProgressCallback | None = None,
+) -> BuildingCollectionResult:
+    """Collect official building evidence for an explicit, already-reviewed PNU set."""
+    return collect_buildings_for_licenses(
+        db,
+        registry,
+        run,
+        raw_store=raw_store,
+        progress=progress,
+        explicit_queries=queries,
+        include_license_parcels=False,
+    )
 
 
 def _completed_building_parcels(db: Database, run_id: UUID) -> set[str]:
