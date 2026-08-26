@@ -726,7 +726,7 @@ def test_vacant_house_tab_lazy_loads_exact_internal_map_without_embedding_source
     document = json.loads(_asset("data.json"))
 
     assert (
-        'data-vacant-map-src="vacant-map/index.html?v=20260824-bukgu-context-v47"'
+        'data-vacant-map-src="vacant-map/index.html?v=20260826-building-register-v65"'
         in html
     )
     assert '<iframe src="vacant-map/index.html"' not in html
