@@ -235,5 +235,40 @@ def test_ready_accommodation_source_with_no_run_snapshot_fails_and_is_persisted(
     ]
 
 
+def test_quality_source_scope_persists_only_scoped_contract_checks(
+    tmp_path: Path,
+) -> None:
+    """A focused enrichment must not require unrelated accommodation contracts."""
+    db = Database(tmp_path / "scoped-quality.duckdb", Path("sql"))
+    db.migrate()
+    run_id = uuid4()
+    ensure_integrity_run(db, run_id, business_date=date(2026, 8, 26))
+    db.record_source_status(
+        SourceStatus(
+            "building_register_title",
+            datetime(2026, 8, 26, tzinfo=UTC),
+            "EMPTY",
+            {},
+            run_id,
+        )
+    )
+
+    report = run_quality_suite(
+        db,
+        run_id,
+        source_scope=frozenset({"building_register_title"}),
+    )
+
+    assert report.complete is True
+    assert all(
+        check.source_id in {None, "building_register_title"}
+        for check in report.checks
+    )
+    assert all(
+        "lodgings" not in contract_id
+        for contract_id in report.expected_contract_ids
+    )
+
+
 def _check(report: QualityReport, name: str) -> CheckResult:
     return next(check for check in report.checks if check.name == name)

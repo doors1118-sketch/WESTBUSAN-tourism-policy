@@ -192,8 +192,17 @@ def run_quality_suite(
 
     report = QualityReport([_redacted_check(check) for check in checks], run_id=run_id)
     heartbeat()
+    scoped_contracts = (
+        contracts
+        if source_scope is None
+        else {
+            source_id: required
+            for source_id, required in contracts.items()
+            if source_id in source_scope
+        }
+    )
     return _persist_suite(
-        db, report, _contract_check_ids(contracts), fence_check=guard
+        db, report, _contract_check_ids(scoped_contracts), fence_check=guard
     )
 
 
