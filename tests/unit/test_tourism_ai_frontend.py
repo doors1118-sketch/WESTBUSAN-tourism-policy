@@ -81,6 +81,14 @@ def test_dashboard_exposes_three_decision_questions_and_required_tabs() -> None:
     assert 'data-supply-donuts' in html
 
 
+def test_mobile_dashboard_gives_investment_map_enough_embedded_height() -> None:
+    """Keeps the reordered investment map substantially visible inside its iframe."""
+    stylesheet = _asset("app.css")
+
+    mobile_block = stylesheet.split("@media(max-width:600px)")[-1]
+    assert ".investment-map-card iframe{height:940px}" in mobile_block
+
+
 def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
     """Catches the supply tab losing the demand evidence that explains the gap."""
     html = _asset("index.html")

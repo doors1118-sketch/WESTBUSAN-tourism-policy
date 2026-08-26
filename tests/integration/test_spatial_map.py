@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 from westbusan.spatial.map import (
     PublicSpatialData,
@@ -705,3 +706,14 @@ def test_default_priorities_do_not_mutate_manifest_bound_metadata() -> None:
 
     assert payload["metadata"] == data.metadata
     assert "관광수요 대비 숙박공급 부족" in rendered
+
+
+def test_mobile_layout_places_investment_map_before_long_filter_panel() -> None:
+    """Prevents the map from being pushed below the full filter panel on phones."""
+    css = Path("src/westbusan/spatial/assets/map.css").read_text(
+        encoding="utf-8"
+    )
+
+    assert "@media (max-width: 900px)" in css
+    assert "#map-panel { order: 1;" in css
+    assert "#filters-panel { order: 2;" in css

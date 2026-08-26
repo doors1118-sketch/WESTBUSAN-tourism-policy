@@ -146,7 +146,8 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
   .freshness { flex-wrap: wrap; }
   .two-panel { grid-template-columns: 1fr; }
   .two-panel > * { min-width: 0; }
-  #filters-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  #map-panel { order: 1; }
+  #filters-panel { order: 2; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   #filters-panel h2, #filters-panel h3, #filters-panel .legend, #filters-panel .kpis { grid-column: 1 / -1; }
   #slippy-map { height: 72vh; min-height: 540px; }
   aside { max-height: none; }

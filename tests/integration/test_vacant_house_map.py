@@ -553,6 +553,17 @@ def test_missing_accessibility_keeps_existing_candidate_order(
     assert access == {"features": [], "type": "FeatureCollection"}
 
 
+def test_mobile_layout_places_vacant_map_before_long_candidate_sidebar() -> None:
+    """Prevents the map from being pushed thousands of pixels below candidates."""
+    css = Path(
+        "src/westbusan/vacant_house/assets/vacant_map.css"
+    ).read_text(encoding="utf-8")
+
+    assert "@media(max-width:960px)" in css
+    assert ".map-workspace { order: 1;" in css
+    assert ".map-sidebar { order: 2;" in css
+
+
 def test_landlocked_standalone_candidate_is_excluded_before_ranking(
     tmp_path: Path,
 ) -> None:
