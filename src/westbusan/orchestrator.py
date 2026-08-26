@@ -178,6 +178,7 @@ class Pipeline:
         if persisted is not None:
             return persisted
         assert run is not None
+        self._inherit_fact_memberships(run.run_id)
         logger = _JsonlLogger(self.settings.log_dir, as_of)
         building_registry = SourceRegistry(
             tuple(
@@ -200,6 +201,22 @@ class Pipeline:
             result.building_rows,
             logger,
             quality_source_scope=frozenset(building_registry.ids()),
+        )
+
+    def _inherit_fact_memberships(self, run_id: UUID) -> None:
+        """Materialize inherited tourism and transport membership on a focused run."""
+        self.db.connection.execute(
+            """insert into run_fact_observation (
+                   run_id, family, observation_key, observed_at
+               )
+               select ?, membership.family, membership.observation_key,
+                      membership.observed_at
+               from pipeline_run_input as lineage
+               join run_fact_observation as membership
+                 on membership.run_id = lineage.input_run_id
+               where lineage.run_id = ? and lineage.input_run_id <> ?
+               on conflict do nothing""",
+            [run_id, run_id, run_id],
         )
 
     def _execute_fixtures(

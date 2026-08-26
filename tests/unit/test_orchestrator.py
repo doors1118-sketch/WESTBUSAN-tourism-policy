@@ -223,6 +223,37 @@ def test_vacant_candidate_building_run_collects_only_current_candidate_pnus(
     ]
 
 
+def test_focused_building_run_inherits_tourism_and_transport_membership(
+    tmp_path: Path,
+) -> None:
+    pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
+    pipeline.db.migrate()
+    parent, child = uuid4(), uuid4()
+    pipeline.db.connection.execute(
+        "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', now(), 'PUBLISHED')",
+        [parent],
+    )
+    pipeline.db.connection.execute(
+        "insert into pipeline_run (run_id, mode, started_at, status) values (?, 'test', now(), 'RUNNING')",
+        [child],
+    )
+    pipeline.db.connection.execute(
+        "insert into pipeline_run_input (run_id, input_run_id) values (?, ?)",
+        [child, parent],
+    )
+    pipeline.db.connection.execute(
+        "insert into run_fact_observation (run_id, family, observation_key) values (?, 'transport', 'T1'), (?, 'tourism', 'V1')",
+        [parent, parent],
+    )
+
+    pipeline._inherit_fact_memberships(child)
+
+    assert pipeline.db.query(
+        "select family, observation_key from run_fact_observation where run_id=? order by family",
+        [child],
+    ) == [("tourism", "V1"), ("transport", "T1")]
+
+
 def test_current_only_backfill_uses_one_restartable_snapshot(tmp_path: Path) -> None:
     """Catches replaying one current-state source once per historical month."""
     pipeline = Pipeline.for_fixtures(tmp_path, Path("tests/fixtures"))
