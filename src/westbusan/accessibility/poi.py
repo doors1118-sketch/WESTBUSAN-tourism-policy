@@ -25,11 +25,42 @@ _CONTENT_TYPE_NAMES = {
     "39": "음식점",
 }
 
+_DISPLAY_GROUPS = {
+    "15": "festival",
+    "39": "food",
+    "12": "tourism_culture",
+    "14": "tourism_culture",
+    "25": "leisure_course",
+    "28": "leisure_course",
+    "32": "lodging_shopping",
+    "38": "lodging_shopping",
+}
+
+_DISPLAY_COLORS = {
+    "festival": "#d1495b",
+    "food": "#e67e22",
+    "tourism_culture": "#1769aa",
+    "leisure_course": "#6b5ac6",
+    "lodging_shopping": "#168b89",
+    "other": "#68727d",
+}
+
 
 def tourism_content_type_name(content_type_id: object) -> str:
     """Return the Korean KTO content-type label used in public map popups."""
     normalized = str(content_type_id or "").strip()
     return _CONTENT_TYPE_NAMES.get(normalized, "기타 관광정보")
+
+
+def tourism_display_group(content_type_id: object) -> str:
+    """Return the stable public-map display group for a KTO content type."""
+    normalized = str(content_type_id or "").strip()
+    return _DISPLAY_GROUPS.get(normalized, "other")
+
+
+def tourism_display_color(content_type_id: object) -> str:
+    """Return the accessible categorical colour for a KTO content type."""
+    return _DISPLAY_COLORS[tourism_display_group(content_type_id)]
 
 
 @dataclass(frozen=True, slots=True)

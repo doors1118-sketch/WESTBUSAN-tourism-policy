@@ -200,7 +200,11 @@
 
   function showTourismPoiPopup(node, event) {
     document.getElementById("tourism-poi-popup-title").textContent = node.dataset.title || "관광정보";
-    document.getElementById("tourism-poi-popup-type").textContent = node.dataset.tourismType || "유형 미확인";
+    const popupType = document.getElementById("tourism-poi-popup-type");
+    const group = node.dataset.poiGroup || "other";
+    const groupLabels = { festival: "축제·행사", food: "식당·음식", tourism_culture: "관광·문화시설", leisure_course: "레포츠·여행코스", lodging_shopping: "숙박·쇼핑", other: "기타 관광정보" };
+    popupType.className = `poi-group-${group}`;
+    popupType.textContent = `${groupLabels[group] || groupLabels.other} · ${node.dataset.tourismType || "세부유형 미확인"}`;
     document.getElementById("tourism-poi-popup-location").textContent = [node.dataset.district, node.dataset.dong].filter(Boolean).join(" ") || "소재지역 미확인";
     const mapRect = slippyMap.getBoundingClientRect();
     const markerRect = node.getBoundingClientRect();
@@ -352,7 +356,7 @@
       aged_facilities: [["#7f0000", "20년 이상 10개+"], ["#d1495b", "5–9개"], ["#e67e22", "2–4개"], ["#e5b839", "1개"]],
       facility_locations: [["#0d3b59", "저배율 · 읍면동 묶음"], ["#496173", "15레벨+ · 개별 시설"]],
       transport_inflow: [["#8e0152", "유입량 상위"], ["#d95f02", "유입량 중상위"], ["#e6b800", "유입량 중하위"], ["#2b83ba", "유입량 하위"]],
-      tourism_poi: [["#0f8b8d", "공식 관광지 위치"]],
+      tourism_poi: [["#d1495b", "축제·행사"], ["#e67e22", "식당·음식"], ["#1769aa", "관광·문화시설"], ["#6b5ac6", "레포츠·여행코스"], ["#168b89", "숙박·쇼핑"], ["#68727d", "기타 관광정보"]],
     };
     setLegend(legends[activeLayer]);
   }

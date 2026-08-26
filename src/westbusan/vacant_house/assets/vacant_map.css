@@ -62,9 +62,20 @@ main { display: grid; grid-template-columns: 330px minmax(0,1fr); min-height: ca
 .legend .supplemental { border: 2px solid #6945b5; background: rgba(122,91,199,.38); }
 .legend .parcel { border: 1px solid #c55d1b; background: rgba(237,125,49,.55); }
 .legend .house { width: 11px; height: 11px; border-radius: 50%; background: var(--red); }
-.legend .poi { border-radius: 50%; background: #0f8b8d; }
+.legend .poi-festival { border-radius: 50%; background: #d1495b; }
+.legend .poi-food { border-radius: 50%; background: #e67e22; }
+.legend .poi-tourism-culture { border-radius: 50%; background: #1769aa; }
+.legend .poi-leisure-course { border-radius: 50%; background: #6b5ac6; }
+.legend .poi-lodging-shopping { border-radius: 50%; background: #168b89; }
+.legend .poi-other { border-radius: 50%; background: #68727d; }
 .legend .transport { border-radius: 50%; background: rgba(142,1,82,.45); }
-.tourism-poi-icon { display: grid!important; place-items: center; border: 2px solid #fff; border-radius: 50%; background: #0f8b8d; color: #fff; box-shadow: 0 2px 8px rgba(15,139,141,.35); font-weight: 900; }
+.tourism-poi-icon { display: grid!important; place-items: center; border: 2px solid #fff; border-radius: 50%; background: #68727d; color: #fff; box-shadow: 0 2px 8px rgba(15,44,61,.35); font-weight: 900; }
+.tourism-poi-icon.poi-group-festival { background: #d1495b; }
+.tourism-poi-icon.poi-group-food { background: #e67e22; }
+.tourism-poi-icon.poi-group-tourism_culture { background: #1769aa; }
+.tourism-poi-icon.poi-group-leisure_course { background: #6b5ac6; }
+.tourism-poi-icon.poi-group-lodging_shopping { background: #168b89; }
+.tourism-poi-icon.poi-group-other { background: #68727d; }
 .map-workspace { padding: 12px; overflow: auto; }
 #vacant-slippy-map { position: relative; height: 620px; overflow: hidden; border: 1px solid #cbd9e3; border-radius: 14px; background: #dbe5ea; }
 .candidate-marker { display: grid!important; place-items: center; border: 2px solid #fff; border-radius: 50%; background: var(--navy); box-shadow: 0 2px 9px rgba(13,46,74,.38); color: #fff; font-size: 13px; font-weight: 900; }

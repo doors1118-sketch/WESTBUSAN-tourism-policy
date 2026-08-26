@@ -182,8 +182,14 @@ def test_map_exposes_transport_and_tourism_context_layers() -> None:
     assert 'data-layer="tourism_poi"' in rendered
     assert 'id="tourism-poi-overlay"' in rendered
     assert 'type="checkbox" checked' in rendered
-    assert 'class="tourism-poi-marker"' in rendered
     assert 'data-tourism-type="음식점"' in rendered
+    assert 'data-poi-group="food"' in rendered
+    assert 'class="tourism-poi-marker poi-group-food"' in rendered
+    assert "축제·행사" in rendered
+    assert "식당·음식" in rendered
+    assert "관광·문화시설" in rendered
+    assert "레포츠·여행코스" in rendered
+    assert "숙박·쇼핑" in rendered
     assert 'id="tourism-poi-popup"' in rendered
     assert 'id="tourism-poi-popup-title"' in rendered
     assert 'id="tourism-poi-popup-type"' in rendered

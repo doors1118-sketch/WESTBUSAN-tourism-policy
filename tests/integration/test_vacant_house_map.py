@@ -432,7 +432,7 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         "published": 1,
         "reviewed": 1,
     }
-    assert summary["schema_version"] == "vacant-map-v5"
+    assert summary["schema_version"] == "vacant-map-v6"
     assert summary["access_snapshot_id"] == str(ACCESS_SNAPSHOT_ID)
     assert summary["parcel_context_run_id"] == str(PARCEL_CONTEXT_RUN_ID)
     assert summary["context_availability"]["parcel_planning"] == "available"
@@ -446,6 +446,8 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
         if item["properties"]["kind"] == "tourism_poi"
     )
     assert tourism_poi["properties"]["content_type_name"] == "음식점"
+    assert tourism_poi["properties"]["poi_display_group"] == "food"
+    assert tourism_poi["properties"]["poi_display_color"] == "#e67e22"
     assert "/tourism/api/vworld/tiles/{z}/{x}/{y}.png" in html
     assert "정적 지도" not in html
     assert "data-min-zoom=\"7\"" in html
@@ -491,6 +493,13 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "방문수요 15%" in script
     assert "1km 내 관광지와 교통유입 신호가 함께 확인" in script
     assert "feature.properties.content_type_name" in script
+    assert "function poiDisplayStyle" in script
+    assert "poi-group-food" in css
+    assert "축제·행사" in html
+    assert "식당·음식" in html
+    assert "관광·문화시설" in html
+    assert "레포츠·여행코스" in html
+    assert "숙박·쇼핑" in html
     assert "hasTourism: poiCount1000m > 0" in script
     assert "A${Number(feature.properties.candidate_rank)}" in script
     assert "B${Number(feature.properties.preliminary_rank)}" in script

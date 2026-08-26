@@ -40,6 +40,18 @@
     station_proximity: "역 접근성",
     transport_flow: "교통량",
   };
+  const poiDisplayStyles = {
+    festival: { label: "축제·행사", short: "축", color: "#d1495b" },
+    food: { label: "식당·음식", short: "식", color: "#e67e22" },
+    tourism_culture: { label: "관광·문화시설", short: "관", color: "#1769aa" },
+    leisure_course: { label: "레포츠·여행코스", short: "레", color: "#6b5ac6" },
+    lodging_shopping: { label: "숙박·쇼핑", short: "숙", color: "#168b89" },
+    other: { label: "기타 관광정보", short: "기", color: "#68727d" },
+  };
+  function poiDisplayStyle(properties = {}) {
+    const group = properties.poi_display_group || "other";
+    return { group, ...(poiDisplayStyles[group] || poiDisplayStyles.other) };
+  }
   const developmentReasonLabels = {
     cadastral_geometry_unconfirmed: "지적경계 미확인",
     road_contact_unconfirmed: "도로접면 미확인",
@@ -663,16 +675,17 @@
     const visibleHouses = data.houses.filter(featureMatches);
     data.access.filter((feature) => feature.properties.kind === "tourism_poi" && featureMatches(feature)).forEach((feature) => {
       const [longitude, latitude] = feature.geometry.coordinates;
+      const display = poiDisplayStyle(feature.properties);
       const popup = document.createElement("div");
       const title = document.createElement("strong");
       const type = document.createElement("div");
       const location = document.createElement("small");
       title.textContent = feature.properties.title || "관광정보";
-      type.textContent = `유형: ${feature.properties.content_type_name || "유형 미확인"}`;
+      type.textContent = `유형: ${display.label} · ${feature.properties.content_type_name || "세부유형 미확인"}`;
       location.textContent = [feature.properties.district_name, feature.properties.dong_name].filter(Boolean).join(" ") || "소재지역 미확인";
       popup.append(title, type, location);
       L.marker([latitude, longitude], { icon: L.divIcon({
-        className: "tourism-poi-icon", html: "관", iconSize: [28, 28], iconAnchor: [14, 14],
+        className: `tourism-poi-icon poi-group-${display.group}`, html: display.short, iconSize: [28, 28], iconAnchor: [14, 14],
       }) }).bindPopup(popup).addTo(layers.tourismPois);
     });
     data.access.filter((feature) => feature.properties.kind === "transport_dong" && featureMatches(feature)).forEach((feature) => {

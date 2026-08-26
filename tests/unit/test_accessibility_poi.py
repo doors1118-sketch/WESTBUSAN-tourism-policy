@@ -9,7 +9,11 @@ import pytest
 from shapely.geometry import box
 
 import westbusan.accessibility.build as accessibility_build
-from westbusan.accessibility.poi import parse_kto_poi_rows, review_poi
+import westbusan.accessibility.poi as accessibility_poi
+from westbusan.accessibility.poi import (
+    parse_kto_poi_rows,
+    review_poi,
+)
 
 FIXTURE = Path("tests/fixtures/accessibility/kto_area_based_success.json")
 BUSAN_BOUNDARY = box(128.7, 34.8, 129.35, 35.4)
@@ -25,6 +29,31 @@ def test_parse_kto_poi_preserves_official_identity_and_wgs84() -> None:
     assert poi.longitude == pytest.approx(129.0028)
     assert poi.latitude == pytest.approx(35.2054)
     assert poi.source_url.endswith("/KorService2/areaBasedList2")
+
+
+@pytest.mark.parametrize(
+    ("content_type_id", "group", "color"),
+    [
+        ("15", "festival", "#d1495b"),
+        ("39", "food", "#e67e22"),
+        ("12", "tourism_culture", "#1769aa"),
+        ("14", "tourism_culture", "#1769aa"),
+        ("25", "leisure_course", "#6b5ac6"),
+        ("28", "leisure_course", "#6b5ac6"),
+        ("32", "lodging_shopping", "#168b89"),
+        ("38", "lodging_shopping", "#168b89"),
+        ("999", "other", "#68727d"),
+    ],
+)
+def test_tourism_display_style_is_stable_by_official_content_type(
+    content_type_id: str, group: str, color: str
+) -> None:
+    group_function = getattr(accessibility_poi, "tourism_display_group", None)
+    color_function = getattr(accessibility_poi, "tourism_display_color", None)
+    assert callable(group_function)
+    assert callable(color_function)
+    assert group_function(content_type_id) == group
+    assert color_function(content_type_id) == color
 
 
 def test_parse_kto_poi_rejects_missing_identity_or_coordinate() -> None:

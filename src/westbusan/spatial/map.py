@@ -17,7 +17,10 @@ from westbusan.accessibility.candidate_scoring import (
     CandidateScoreWeights,
     score_access_candidates,
 )
-from westbusan.accessibility.poi import tourism_content_type_name
+from westbusan.accessibility.poi import (
+    tourism_content_type_name,
+    tourism_display_group,
+)
 
 _MAP_CENTER = (129.075, 35.18)
 _MAP_ZOOM = 10
@@ -571,11 +574,12 @@ def _render_svg(
         content_type_name = tourism_content_type_name(
             properties.get("category_name")
         )
+        display_group = tourism_display_group(properties.get("category_name"))
         poi_markers.append(
-            '<circle class="tourism-poi-marker" cx="{x:.3f}" cy="{y:.3f}" '
+            '<circle class="tourism-poi-marker poi-group-{poi_group}" cx="{x:.3f}" cy="{y:.3f}" '
             'r="5" data-base-radius="5" data-district="{district}" '
             'data-dong="{dong}" data-title="{poi_title}" '
-            'data-tourism-type="{tourism_type}" tabindex="0" '
+            'data-tourism-type="{tourism_type}" data-poi-group="{poi_group}" tabindex="0" '
             'role="button" aria-label="{label}"><title>{title}</title></circle>'.format(
                 x=x,
                 y=y,
@@ -583,6 +587,7 @@ def _render_svg(
                 dong=_attribute(properties.get("dong_name")),
                 poi_title=_attribute(properties.get("title")),
                 tourism_type=_attribute(content_type_name),
+                poi_group=_attribute(display_group),
                 label=_attribute(
                     f"{content_type_name} {properties.get('title') or ''}"
                 ),

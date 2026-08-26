@@ -24,7 +24,11 @@ from westbusan.accessibility.candidate_scoring import (
     CandidateScoreWeights,
     score_access_candidates,
 )
-from westbusan.accessibility.poi import tourism_content_type_name
+from westbusan.accessibility.poi import (
+    tourism_content_type_name,
+    tourism_display_color,
+    tourism_display_group,
+)
 from westbusan.spatial.export import (
     _demand_scores_from_rows,
     _set_public_bundle_permissions,
@@ -449,6 +453,8 @@ def _read_optional_access_context(
                     "title": str(row[1]),
                     "content_type_id": str(row[2] or ""),
                     "content_type_name": tourism_content_type_name(row[2]),
+                    "poi_display_group": tourism_display_group(row[2]),
+                    "poi_display_color": tourism_display_color(row[2]),
                     "district_name": str(row[3] or ""),
                     "dong_code": str(row[4] or ""),
                     "dong_name": str(row[5] or ""),
@@ -1000,7 +1006,7 @@ def _map_data(
     }
 
     summary = {
-        "schema_version": "vacant-map-v5",
+        "schema_version": "vacant-map-v6",
         "hub_run_id": str(hub_run_id),
         "inventory_run_id": str(inventory_run_id),
         "source_snapshot_date": snapshot_date,
@@ -1268,7 +1274,7 @@ def _write_bundle(directory: Path, data: dict[str, object]) -> None:
     for name, body in bodies.items():
         (directory / name).write_bytes(body)
     manifest = {
-        "schema_version": "vacant-map-v5",
+        "schema_version": "vacant-map-v6",
         "hub_run_id": str(data["hub_run_id"]),
         "inventory_run_id": str(data["inventory_run_id"]),
         "access_snapshot_id": summary["access_snapshot_id"],
