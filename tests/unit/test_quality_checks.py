@@ -11,6 +11,7 @@ from westbusan.quality.checks import (
     _active_facility_count,
     _designation_coverage_check,
     _entity_precision_check,
+    persisted_report_is_valid,
     run_quality_suite,
 )
 from westbusan.quality.publish import can_publish
@@ -268,6 +269,7 @@ def test_quality_source_scope_persists_only_scoped_contract_checks(
         "lodgings" not in contract_id
         for contract_id in report.expected_contract_ids
     )
+    assert persisted_report_is_valid(db, run_id, report) is True
 
 
 def _check(report: QualityReport, name: str) -> CheckResult:

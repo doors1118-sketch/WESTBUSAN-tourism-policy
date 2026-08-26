@@ -1853,7 +1853,7 @@ def _persist_suite(
 
 def persisted_report_is_valid(db: Database, run_id: UUID, report: QualityReport) -> bool:
     """Verify a supplied report against the immutable completed suite manifest."""
-    if not report.complete or report.run_id != run_id or not report.report_hash or not report.expected_check_ids or not report.expected_contract_ids or not report.checks:
+    if not report.complete or report.run_id != run_id or not report.report_hash or not report.expected_check_ids or not report.checks:
         return False
     if _hash_checks(report.checks) != report.report_hash:
         return False
@@ -1866,10 +1866,16 @@ def persisted_report_is_valid(db: Database, run_id: UUID, report: QualityReport)
         contracts = tuple(json.loads(contract_json))
     except (TypeError, ValueError, json.JSONDecodeError):
         return False
-    canonical_contracts = _contract_check_ids(_source_contracts(db))
+    source_contracts = _source_contracts(db)
+    report_sources = {
+        check.source_id for check in report.checks if check.source_id is not None
+    }
+    if not report_sources or not report_sources.issubset(source_contracts):
+        return False
+    canonical_contracts = _contract_check_ids(source_contracts)
     if report.report_hash != manifest_hash or tuple(sorted(report.expected_check_ids)) != expected or tuple(sorted(report.expected_contract_ids)) != contracts or len(expected) != check_count:
         return False
-    if contracts != tuple(sorted(canonical_contracts)):
+    if not set(contracts).issubset(set(canonical_contracts)):
         return False
     rows = db.query("select check_id, check_name, status, actual_json, expected_json, severity, source_id, table_name, evidence_json from fact_data_quality where run_id = ? order by check_id", [run_id])
     if len(rows) != check_count or tuple(sorted(str(row[0]) for row in rows)) != expected:
