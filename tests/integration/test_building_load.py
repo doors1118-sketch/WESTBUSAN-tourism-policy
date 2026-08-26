@@ -188,7 +188,7 @@ def test_explicit_vacant_candidate_parcel_is_collected_without_a_license(
                         "mgmBldrgstPk": "VACANT-BUILDING-1",
                         "sigunguCd": "26440",
                         "bjdongCd": "11100",
-                        "platGbCd": "1",
+                            "platGbCd": "0",
                         "bun": "0190",
                         "ji": "0000",
                         "platPlc": "부산광역시 강서구 명지동 190",
@@ -232,7 +232,7 @@ def test_explicit_vacant_candidate_parcel_is_collected_without_a_license(
             ("bjdongCd", "11100"),
             ("bun", "0190"),
             ("ji", "0000"),
-            ("platGbCd", "1"),
+            ("platGbCd", "0"),
             ("sigunguCd", "26440"),
         )
     }
@@ -240,7 +240,16 @@ def test_explicit_vacant_candidate_parcel_is_collected_without_a_license(
         """select sigungu_cd || bjdong_cd || plat_gb_cd || bun || ji,
                   use_approval_date, main_use
            from staging_building_revision"""
-    ) == [("2644011100101900000", date(1950, 1, 1), "단독주택")]
+    ) == [("2644011100001900000", date(1950, 1, 1), "단독주택")]
+
+
+def test_parcel_query_translates_pnu_land_flag_to_building_api_code() -> None:
+    """PNU uses 1/2 for land/mountain while Building HUB uses 0/1."""
+    land = building_load.parcel_query_from_pnu("2638010100102600012")
+    mountain = building_load.parcel_query_from_pnu("2638010100202600012")
+
+    assert land.plat_gb_cd == "0"
+    assert mountain.plat_gb_cd == "1"
 
 
 def test_building_collection_resumes_after_completed_parcel(

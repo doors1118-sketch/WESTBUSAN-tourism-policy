@@ -355,7 +355,12 @@ def _read_optional_building_register_context(
                    join current_run on current_run.run_id=lineage.run_id
                )
                select concat(revision.sigungu_cd, revision.bjdong_cd,
-                             revision.plat_gb_cd, revision.bun, revision.ji) as pnu,
+                             case revision.plat_gb_cd
+                               when '0' then '1'
+                               when '1' then '2'
+                               else revision.plat_gb_cd
+                             end,
+                             revision.bun, revision.ji) as pnu,
                       revision.building_id, revision.use_approval_date,
                       revision.main_use, profile.structure, revision.total_area,
                       profile.site_area, profile.building_area,

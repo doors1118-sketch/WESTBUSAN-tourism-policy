@@ -67,7 +67,17 @@ def parcel_query_from_pnu(pnu: str) -> ParcelQuery:
     value = str(pnu).strip()
     if len(value) != 19 or not value.isdigit():
         raise ValueError("invalid_pnu")
-    return ParcelQuery(value[:5], value[5:10], value[10], value[11:15], value[15:19])
+    pnu_land_flag = value[10]
+    building_api_land_code = {"1": "0", "2": "1"}.get(pnu_land_flag)
+    if building_api_land_code is None:
+        raise ValueError("invalid_pnu_land_flag")
+    return ParcelQuery(
+        value[:5],
+        value[5:10],
+        building_api_land_code,
+        value[11:15],
+        value[15:19],
+    )
 
 
 @dataclass(frozen=True, slots=True)
