@@ -193,7 +193,7 @@
     const labels = { all: "전체", festival: "축제·행사", food: "식당·음식", tourism_culture: "관광·문화시설", leisure_course: "레포츠·여행코스", lodging_shopping: "숙박·쇼핑", other: "기타 관광정보" };
     const districtPois = tourismPois.filter((node) => !filters.district.value || node.dataset.district === filters.district.value);
     const visibleCount = districtPois.filter((node) => activePoiFilter === "all" || node.dataset.poiGroup === activePoiFilter).length;
-    const scope = filters.district.value || "서부산 전체";
+    const scope = filters.district.value || "부산 전체";
     poiFilterStatus.textContent = `${scope} · ${labels[activePoiFilter] || labels.all} ${visibleCount.toLocaleString("ko-KR")}개 표시`;
   }
 

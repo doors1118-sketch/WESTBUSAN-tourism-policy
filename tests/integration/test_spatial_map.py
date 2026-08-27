@@ -199,6 +199,7 @@ def test_map_exposes_transport_and_tourism_context_layers() -> None:
     assert 'id="spatial-poi-filter-status"' in rendered
     assert "function setPoiFilter" in rendered
     assert "activePoiFilter === \"all\"" in rendered
+    assert 'const scope = filters.district.value || "부산 전체";' in rendered
     assert 'id="tourism-poi-popup"' in rendered
     assert 'id="tourism-poi-popup-title"' in rendered
     assert 'id="tourism-poi-popup-type"' in rendered
