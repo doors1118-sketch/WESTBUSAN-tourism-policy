@@ -4,6 +4,8 @@
   const hubCandidateList = document.getElementById("hub-candidate-list");
   const standaloneCandidateList = document.getElementById("standalone-candidate-list");
   const districtFilter = document.getElementById("district-filter");
+  const poiFilterButtons = [...document.querySelectorAll("[data-poi-filter]")];
+  const poiFilterStatus = document.getElementById("vacant-poi-filter-status");
   const WEST_DISTRICTS = ["강서구", "북구", "사상구", "사하구"];
   const guide = document.getElementById("zoom-guide");
   const map = L.map(mapElement, {
@@ -67,6 +69,7 @@
     building_structure_unconfirmed: "건축구조 미확인",
   };
   let selected = null;
+  let activePoiFilter = "all";
 
   function developmentReviewText(properties) {
     const status = properties.development_review_status;
@@ -331,6 +334,50 @@
     const districts = feature.properties.district_names
       || [feature.properties.district_name];
     return !districtFilter.value || districts.includes(districtFilter.value);
+  }
+  function tourismPoiMatches(feature) {
+    return featureMatches(feature) && (
+      activePoiFilter === "all"
+      || (feature.properties.poi_display_group || "other") === activePoiFilter
+    );
+  }
+
+  function updatePoiFilterStatus() {
+    const districtPois = data.access.filter((feature) => feature.properties.kind === "tourism_poi" && featureMatches(feature));
+    const visiblePois = districtPois.filter(tourismPoiMatches);
+    const label = activePoiFilter === "all" ? "전체" : (poiDisplayStyles[activePoiFilter] || poiDisplayStyles.other).label;
+    poiFilterStatus.textContent = `${districtFilter.value || "서부산 전체"} · ${label} ${visiblePois.length.toLocaleString("ko-KR")}개 표시`;
+  }
+
+  function renderTourismPoiMarkers() {
+    layers.tourismPois.clearLayers();
+    data.access.filter((feature) => feature.properties.kind === "tourism_poi" && tourismPoiMatches(feature)).forEach((feature) => {
+      const [longitude, latitude] = feature.geometry.coordinates;
+      const display = poiDisplayStyle(feature.properties);
+      const popup = document.createElement("div");
+      const title = document.createElement("strong");
+      const type = document.createElement("div");
+      const location = document.createElement("small");
+      title.textContent = feature.properties.title || "관광정보";
+      type.textContent = `유형: ${display.label} · ${feature.properties.content_type_name || "세부유형 미확인"}`;
+      location.textContent = [feature.properties.district_name, feature.properties.dong_name].filter(Boolean).join(" ") || "소재지역 미확인";
+      popup.append(title, type, location);
+      L.marker([latitude, longitude], { icon: L.divIcon({
+        className: `tourism-poi-icon poi-group-${display.group}`, html: display.short, iconSize: [28, 28], iconAnchor: [14, 14],
+      }) }).bindPopup(popup).addTo(layers.tourismPois);
+    });
+    updatePoiFilterStatus();
+  }
+
+  function setPoiFilter(group) {
+    const allowed = new Set(["all", "festival", "food", "tourism_culture", "leisure_course", "lodging_shopping", "other"]);
+    activePoiFilter = allowed.has(group) ? group : "all";
+    poiFilterButtons.forEach((button) => {
+      const isActive = button.dataset.poiFilter === activePoiFilter;
+      button.classList.toggle("is-active", isActive);
+      button.setAttribute("aria-pressed", String(isActive));
+    });
+    renderTourismPoiMarkers();
   }
   function selectionKey(kind, identifier) {
     return `${kind}:${identifier}`;
@@ -700,21 +747,7 @@
       featureLayers.houses.set(feature.properties.record_id, marker);
     });
     const visibleHouses = data.houses.filter(featureMatches);
-    data.access.filter((feature) => feature.properties.kind === "tourism_poi" && featureMatches(feature)).forEach((feature) => {
-      const [longitude, latitude] = feature.geometry.coordinates;
-      const display = poiDisplayStyle(feature.properties);
-      const popup = document.createElement("div");
-      const title = document.createElement("strong");
-      const type = document.createElement("div");
-      const location = document.createElement("small");
-      title.textContent = feature.properties.title || "관광정보";
-      type.textContent = `유형: ${display.label} · ${feature.properties.content_type_name || "세부유형 미확인"}`;
-      location.textContent = [feature.properties.district_name, feature.properties.dong_name].filter(Boolean).join(" ") || "소재지역 미확인";
-      popup.append(title, type, location);
-      L.marker([latitude, longitude], { icon: L.divIcon({
-        className: `tourism-poi-icon poi-group-${display.group}`, html: display.short, iconSize: [28, 28], iconAnchor: [14, 14],
-      }) }).bindPopup(popup).addTo(layers.tourismPois);
-    });
+    renderTourismPoiMarkers();
     data.access.filter((feature) => feature.properties.kind === "transport_dong" && featureMatches(feature)).forEach((feature) => {
       const matching = visibleHouses.filter((house) => house.properties.dong_name === feature.properties.dong_name);
       if (!matching.length) return;
@@ -794,6 +827,7 @@
     if (control.checked && !map.hasLayer(layer)) layer.addTo(map);
     if (!control.checked && map.hasLayer(layer)) map.removeLayer(layer);
   }));
+  poiFilterButtons.forEach((button) => button.addEventListener("click", () => setPoiFilter(button.dataset.poiFilter)));
   document.getElementById("address-analysis-form").addEventListener(
     "submit",
     async (event) => {

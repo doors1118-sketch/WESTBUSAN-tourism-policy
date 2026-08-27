@@ -550,6 +550,14 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "관광·문화시설" in html
     assert "레포츠·여행코스" in html
     assert "숙박·쇼핑" in html
+    assert html.count('class="poi-filter-button') == 7
+    assert 'data-poi-filter="all"' in html
+    assert 'data-poi-filter="festival"' in html
+    assert 'data-poi-filter="food"' in html
+    assert 'aria-pressed="true"' in html
+    assert 'id="vacant-poi-filter-status"' in html
+    assert "function setPoiFilter" in script
+    assert "activePoiFilter === \"all\"" in script
     assert "hasTourism: poiCount1000m > 0" in script
     assert "A${Number(feature.properties.candidate_rank)}" in script
     assert "B${Number(feature.properties.preliminary_rank)}" in script

@@ -16,6 +16,8 @@
   const tourismPois = [...document.querySelectorAll(".tourism-poi-marker")];
   const tourismPoiOverlay = document.getElementById("tourism-poi-overlay");
   const tourismPoiPopup = document.getElementById("tourism-poi-popup");
+  const poiFilterButtons = [...document.querySelectorAll("[data-poi-filter]")];
+  const poiFilterStatus = document.getElementById("spatial-poi-filter-status");
   const filterable = [...grids, ...facilities, ...clusters, ...policyLabels, ...tourismPois];
   const westDistricts = new Set(["강서구", "사하구", "북구", "사상구"]);
   const eastDistricts = new Set(["해운대구", "수영구", "기장군"]);
@@ -31,6 +33,7 @@
   const tileNodes = new Map();
   let candidateMarkers = [];
   let activeLayer = "policy_priority";
+  let activePoiFilter = "all";
   let selectedGridNode = null;
   let dragOrigin = null;
 
@@ -178,11 +181,32 @@
   function visible(node) {
     const isTourismPoi = node.classList.contains("tourism-poi-marker");
     if (filters.district.value && node.dataset.district !== filters.district.value) return false;
+    if (isTourismPoi && activePoiFilter !== "all" && node.dataset.poiGroup !== activePoiFilter) return false;
     // POI 읍면동 값은 도로명주소 정규화 결과와 분석격자의 법정동이 다를 수 있다.
     // 후보 선택 시에는 해당 자치구 POI를 유지하고 실제 거리는 선택지점에서 계산한다.
     if (!isTourismPoi && filters.dong.value && node.dataset.dong !== filters.dong.value) return false;
     if (filters.period.value && node.dataset.period && node.dataset.period !== filters.period.value) return false;
     return true;
+  }
+
+  function updatePoiFilterStatus() {
+    const labels = { all: "전체", festival: "축제·행사", food: "식당·음식", tourism_culture: "관광·문화시설", leisure_course: "레포츠·여행코스", lodging_shopping: "숙박·쇼핑", other: "기타 관광정보" };
+    const districtPois = tourismPois.filter((node) => !filters.district.value || node.dataset.district === filters.district.value);
+    const visibleCount = districtPois.filter((node) => activePoiFilter === "all" || node.dataset.poiGroup === activePoiFilter).length;
+    const scope = filters.district.value || "서부산 전체";
+    poiFilterStatus.textContent = `${scope} · ${labels[activePoiFilter] || labels.all} ${visibleCount.toLocaleString("ko-KR")}개 표시`;
+  }
+
+  function setPoiFilter(group) {
+    const allowed = new Set(["all", "festival", "food", "tourism_culture", "leisure_course", "lodging_shopping", "other"]);
+    activePoiFilter = allowed.has(group) ? group : "all";
+    poiFilterButtons.forEach((button) => {
+      const selected = button.dataset.poiFilter === activePoiFilter;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
+    hideTourismPoiPopup();
+    apply();
   }
 
   function numeric(node, key) {
@@ -608,6 +632,7 @@
   function apply() {
     filterable.forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
     updateVisibleCounts();
+    updatePoiFilterStatus();
     setLayerEncoding();
     buildCandidateRanking();
     if (selectedGridNode && visible(selectedGridNode)) renderGridSummary(selectedGridNode);
@@ -799,6 +824,7 @@
     apply();
   }));
   tourismPoiOverlay.addEventListener("change", apply);
+  poiFilterButtons.forEach((button) => button.addEventListener("click", () => setPoiFilter(button.dataset.poiFilter)));
   document.getElementById("region-ai-button").addEventListener("click", () => requestRegionInsight());
   document.getElementById("lot-investment-form").addEventListener("submit", async (event) => {
     event.preventDefault();

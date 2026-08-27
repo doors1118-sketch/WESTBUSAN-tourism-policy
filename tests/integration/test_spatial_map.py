@@ -191,6 +191,14 @@ def test_map_exposes_transport_and_tourism_context_layers() -> None:
     assert "관광·문화시설" in rendered
     assert "레포츠·여행코스" in rendered
     assert "숙박·쇼핑" in rendered
+    assert rendered.count('class="poi-filter-button') == 7
+    assert 'data-poi-filter="all"' in rendered
+    assert 'data-poi-filter="festival"' in rendered
+    assert 'data-poi-filter="food"' in rendered
+    assert 'aria-pressed="true"' in rendered
+    assert 'id="spatial-poi-filter-status"' in rendered
+    assert "function setPoiFilter" in rendered
+    assert "activePoiFilter === \"all\"" in rendered
     assert 'id="tourism-poi-popup"' in rendered
     assert 'id="tourism-poi-popup-title"' in rendered
     assert 'id="tourism-poi-popup-type"' in rendered
