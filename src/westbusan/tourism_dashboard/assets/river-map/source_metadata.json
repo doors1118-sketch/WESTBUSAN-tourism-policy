@@ -1,0 +1,53 @@
+{
+  "source_system": "RIMGIS",
+  "source_map": "https://www.river.go.kr/map/rimMap.do",
+  "source_service": "https://www.river.go.kr/geoserver/rimgis/wfs",
+  "retrieved_at": "2026-08-28T14:46:56+09:00",
+  "scope": "낙동강 화명·대저·삼락·맥도·을숙도 생태공원 일원",
+  "bbox": [
+    128.9,
+    35.08,
+    129.03,
+    35.28
+  ],
+  "river_plan_code": "2000010200912",
+  "geometry_version": "RIMGIS WFS 응답에 기준일·고시번호 필드 없음",
+  "official_notice_context": [
+    {
+      "notice": "환경부 낙동강유역환경청 고시 제2026-11호",
+      "date": "2026-02-24",
+      "subject": "낙동강(국가하천) 하천구역 결정(변경) 및 지형도면",
+      "url": "https://www.eum.go.kr/web/gs/gv/gvGosiDet.jsp?seq=632222",
+      "geometry_matched": false
+    },
+    {
+      "notice": "환경부 낙동강유역환경청 고시 제2026-12호",
+      "date": "2026-03-04",
+      "subject": "낙동강(국가하천) 홍수관리구역 지정 및 지형도면",
+      "url": "https://www.eum.go.kr/web/gs/gv/gvGosiDet.jsp?seq=633773",
+      "geometry_matched": false
+    }
+  ],
+  "feature_count": 20,
+  "source_counts": {
+    "rc100": {
+      "matched": 73,
+      "published": 13
+    },
+    "rc161_dst": {
+      "matched": 6,
+      "published": 1
+    },
+    "rc164_dst": {
+      "matched": 6,
+      "published": 5
+    },
+    "rc165_dst": {
+      "matched": 6,
+      "published": 1
+    }
+  },
+  "sha256": "acec3076cc37ea851ea5778cb1a76b60ed1f80508b693204b089fd613d132ad1",
+  "legal_effect": false,
+  "limitation": "RIMGIS 정보는 공간 검토용 참고자료이며 법적 효력을 갖는 허가·규제 판정이 아닙니다. WFS 도형을 2026-11·12호 고시도면과 형상·필지 단위로 대조하지 못했으며, 최종 고시도면과 관리청 공식 의견으로 재확인해야 합니다."
+}

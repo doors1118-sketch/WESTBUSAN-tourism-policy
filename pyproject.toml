@@ -31,7 +31,7 @@ westbusan = "westbusan.cli:app"
 
 [tool.setuptools.package-data]
 "westbusan.spatial" = ["templates/*.html", "assets/*.css", "assets/*.js"]
-"westbusan.tourism_dashboard" = ["assets/*"]
+"westbusan.tourism_dashboard" = ["assets/*", "assets/river-map/*"]
 "westbusan.vacant_house" = [
   "templates/*.html",
   "assets/*.css",

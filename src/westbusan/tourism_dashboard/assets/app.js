@@ -701,6 +701,12 @@ document.querySelectorAll("[data-tab-target]").forEach((button) => {
         vacantMapFrame.setAttribute("src", vacantMapFrame.dataset.vacantMapSrc);
       }
     }
+    if (target === "river") {
+      const riverMapFrame = document.querySelector("[data-river-map-src]");
+      if (riverMapFrame && !riverMapFrame.getAttribute("src")) {
+        riverMapFrame.setAttribute("src", riverMapFrame.dataset.riverMapSrc);
+      }
+    }
     document.querySelectorAll("[data-tab-target]").forEach((item) => {
       const selected = item === button;
       item.classList.toggle("active", selected);

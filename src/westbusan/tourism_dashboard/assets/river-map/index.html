@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>낙동강 생태공원 규제·행위 검토지도</title>
+  <link rel="stylesheet" href="map.css?v=20260828-river-review-v1">
+</head>
+<body>
+  <header class="page-head">
+    <div>
+      <p class="eyebrow">NAKDONG RIVER PARK DECISION SUPPORT</p>
+      <h1>낙동강 생태공원 규제·행위 검토지도</h1>
+      <p>화명·대저·삼락·맥도·을숙도 일원을 확대하고, 지점을 눌러 선택 행위의 1차 검토등급과 선행 확인사항을 봅니다.</p>
+    </div>
+    <div class="source-badge"><span>공간도형</span><strong>RIMGIS WFS</strong><small id="source-date">2026-08-28 스냅샷</small></div>
+  </header>
+
+  <main class="workspace">
+    <aside class="controls" aria-label="규제지도 검토조건">
+      <section>
+        <h2>공원 빠른 이동</h2>
+        <div class="park-buttons" role="group" aria-label="낙동강 생태공원">
+          <button type="button" data-park="hwamyeong">화명생태공원</button>
+          <button type="button" data-park="daejeo">대저생태공원</button>
+          <button type="button" data-park="samrak">삼락생태공원</button>
+          <button type="button" data-park="maekdo">맥도생태공원</button>
+          <button type="button" data-park="eulsukdo">을숙도생태공원</button>
+        </div>
+      </section>
+
+      <section>
+        <label for="activity-select">검토할 행위</label>
+        <select id="activity-select">
+          <option value="walking">산책·탐방</option>
+          <option value="ecology">생태관찰·복원</option>
+          <option value="festival">축제·행사</option>
+          <option value="sports">체육·레저</option>
+          <option value="camping">야영·캠핑</option>
+          <option value="food">판매·음식시설</option>
+          <option value="culture">공연·문화시설</option>
+          <option value="lodging">숙박시설</option>
+          <option value="parking">주차장·진입도로</option>
+        </select>
+        <p class="control-help">행위를 먼저 선택한 후 지도의 위치를 누르십시오. 업종·규모·구조물 종류가 확정되지 않은 단계의 예비판정입니다.</p>
+      </section>
+
+      <section>
+        <h2>공간 레이어</h2>
+        <label class="layer-toggle"><input type="checkbox" data-layer="river_area" checked><i class="swatch river"></i>하천구역</label>
+        <label class="layer-toggle"><input type="checkbox" data-layer="general_conservation" checked><i class="swatch conservation"></i>일반보전지구</label>
+        <label class="layer-toggle"><input type="checkbox" data-layer="waterfront" checked><i class="swatch waterfront"></i>근린친수지구</label>
+        <label class="layer-toggle"><input type="checkbox" data-layer="restoration" checked><i class="swatch restoration"></i>복원지구</label>
+        <p class="control-help">현재 RIMGIS 조회 스냅샷에서 보이는 분류만 표시합니다. 첨부 개념도의 특별보전·완충·친수거점 지구는 최종 계획 원도면으로 보완해야 합니다.</p>
+      </section>
+    </aside>
+
+    <section class="map-column">
+      <div class="map-shell">
+        <div class="map-toolbar" aria-label="지도 조작">
+          <button id="zoom-in" type="button" aria-label="확대">+</button>
+          <button id="zoom-out" type="button" aria-label="축소">−</button>
+          <button id="zoom-reset" type="button">전체</button>
+        </div>
+        <div id="river-map" data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png" tabindex="0" aria-label="낙동강 생태공원 규제지도">
+          <div id="tile-layer" aria-hidden="true"></div>
+          <svg id="river-overlay" aria-hidden="true"></svg>
+          <div id="park-labels" aria-hidden="true"></div>
+          <div id="click-marker" hidden aria-hidden="true"></div>
+          <p class="map-instruction">행위를 선택하고 검토 지점을 클릭하십시오.</p>
+        </div>
+      </div>
+
+      <section class="assessment" aria-live="polite">
+        <div class="assessment-head">
+          <div><p class="eyebrow">CLICK-BASED ACTIVITY REVIEW</p><h2 id="assessment-title">지도에서 검토 위치를 선택하십시오</h2></div>
+          <strong id="assessment-grade" class="grade idle">미선택</strong>
+        </div>
+        <div class="assessment-facts">
+          <div><span>인근 공원</span><strong id="selected-park">-</strong></div>
+          <div><span>관리구역</span><strong id="selected-zone">-</strong></div>
+          <div><span>검토 행위</span><strong id="selected-activity">산책·탐방</strong></div>
+          <div><span>좌표</span><strong id="selected-coordinate">-</strong></div>
+        </div>
+        <div class="assessment-copy">
+          <div><h3>1차 판정 근거</h3><p id="assessment-reason">위치 선택 전입니다.</p></div>
+          <div><h3>선행 확인사항</h3><p id="assessment-next">최신 고시도면·사업계획·관리청 공식의견이 필요합니다.</p></div>
+        </div>
+        <div class="legal-note"><strong>법적 효력 없음</strong><span>RIMGIS 공간도형을 이용한 정책·사업 초기 선별용입니다. ‘검토 가능’은 허가 가능을 의미하지 않으며, 최종 고시도면·하천정비기본계획·하천점용허가·관리청 의견으로 재판정해야 합니다.</span></div>
+      </section>
+    </section>
+  </main>
+
+  <script src="map.js?v=20260828-river-review-v1"></script>
+</body>
+</html>
+
