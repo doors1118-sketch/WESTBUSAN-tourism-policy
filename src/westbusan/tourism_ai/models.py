@@ -61,6 +61,7 @@ class ParcelGeocodeResponse(BaseModel):
     latitude: FiniteFloat | None
     district: str | None
     crs: str | None
+    pnu: str | None = Field(default=None, pattern=r"^\d{19}$")
 
 
 class VacantAddressAnalysisRequest(BaseModel):

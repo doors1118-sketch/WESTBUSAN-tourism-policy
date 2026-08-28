@@ -1,0 +1,37 @@
+{
+  "published_at": "2026-08-28",
+  "query_mode": "approved_snapshot_plus_server_side_point_intersection",
+  "coordinate_system": "EPSG:4326",
+  "legal_effect": false,
+  "sources": [
+    {
+      "category": "wetland",
+      "provider": "VWorld 국가공간정보포털",
+      "datasets": ["LT_C_UM901", "LT_C_WGISARWET"],
+      "reference_url": "https://www.vworld.kr/"
+    },
+    {
+      "category": "heritage",
+      "provider": "국가유산 공간정보 서비스",
+      "datasets": ["CHL_SPCN_AS", "CHL_PRTN_AS", "CHL_SPCL_AS", "CHL_PRTL_AS", "CHL_PMPG_AS_1", "CHL_PMPG_AS_23"],
+      "reference_url": "https://gis-heritage.go.kr/newMap.do",
+      "storage": "DuckDB 승인 스냅샷",
+      "limitation": "수치 높이기준은 자동판정하되 비정형 문구와 공통조건은 원문·관리청 검토 필요"
+    },
+    {
+      "category": "urban_park",
+      "provider": "VWorld 국가공간정보포털",
+      "datasets": ["LT_C_UPISUQ153"],
+      "filter": "공간시설 명칭에 공원 포함",
+      "reference_url": "https://www.vworld.kr/"
+    },
+    {
+      "category": "land_use",
+      "provider": "VWorld 국가공간정보포털",
+      "datasets": ["LT_C_UQ111", "LT_C_UQ112", "LT_C_UQ113", "LT_C_UQ114"],
+      "reference_url": "https://www.vworld.kr/",
+      "limitation": "도시·관리·농림·자연환경보전지역 대분류이며 세분 용도지역·용도지구·용도구역은 미연계"
+    }
+  ],
+  "disclaimer": "선택 지점의 중첩 여부를 조회하는 사전검토 자료이며 법적 행위허가 판정이 아닙니다."
+}

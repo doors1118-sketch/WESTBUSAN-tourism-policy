@@ -3,17 +3,17 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>낙동강 생태공원 규제·행위 검토지도</title>
-  <link rel="stylesheet" href="map.css?v=20260828-river-review-v1">
+  <title>낙동강 관광사업 입지 사전검토</title>
+  <link rel="stylesheet" href="map.css?v=20260828-nakdong-planning-v4">
 </head>
 <body>
   <header class="page-head">
     <div>
-      <p class="eyebrow">NAKDONG RIVER PARK DECISION SUPPORT</p>
-      <h1>낙동강 생태공원 규제·행위 검토지도</h1>
-      <p>화명·대저·삼락·맥도·을숙도 일원을 확대하고, 지점을 눌러 선택 행위의 1차 검토등급과 선행 확인사항을 봅니다.</p>
+      <p class="eyebrow">NAKDONG RIVER TOURISM SITE PRE-SCREENING</p>
+      <h1>낙동강 관광사업 입지 사전검토</h1>
+      <p>낙동강 5개 생태공원 일원의 하천·환경·국가유산 규제와 주소·지번별 도시계획 지정을 분리해 교차검토합니다.</p>
     </div>
-    <div class="source-badge"><span>공간도형</span><strong>RIMGIS WFS</strong><small id="source-date">2026-08-28 스냅샷</small></div>
+    <div class="source-badge"><span>공간도형·지점조회</span><strong>RIMGIS + VWorld + 국가유산 DB</strong><small id="source-date">2026-08-28 RIMGIS 스냅샷</small></div>
   </header>
 
   <main class="workspace">
@@ -30,6 +30,16 @@
       </section>
 
       <section>
+        <h2>주소·지번 정밀검토</h2>
+        <div class="parcel-search-row">
+          <label class="sr-only" for="parcel-address">부산 주소 또는 지번</label>
+          <input id="parcel-address" type="search" maxlength="160" placeholder="예: 부산광역시 북구 금곡동 1511-3">
+          <button id="parcel-search" type="button">검색</button>
+        </div>
+        <p id="parcel-search-state" class="control-help" aria-live="polite">주소 검색 시 PNU를 확인해 용도지역·지구·구역을 조회합니다.</p>
+      </section>
+
+      <section>
         <label for="activity-select">검토할 행위</label>
         <select id="activity-select">
           <option value="walking">산책·탐방</option>
@@ -42,7 +52,17 @@
           <option value="lodging">숙박시설</option>
           <option value="parking">주차장·진입도로</option>
         </select>
-        <p class="control-help">행위를 먼저 선택한 후 지도의 위치를 누르십시오. 업종·규모·구조물 종류가 확정되지 않은 단계의 예비판정입니다.</p>
+        <div class="project-fields">
+          <label for="structure-height">건축물 최고높이(m)</label>
+          <input id="structure-height" type="number" min="0" max="1000" step="0.1" inputmode="decimal" placeholder="예: 10">
+          <label for="roof-type">지붕 유형</label>
+          <select id="roof-type">
+            <option value="unknown">미정</option>
+            <option value="flat">평지붕</option>
+            <option value="sloped">경사지붕</option>
+          </select>
+        </div>
+        <p class="control-help">국가유산 허용기준의 높이 자동판정에는 옥탑 등을 포함한 최고높이와 지붕 유형이 필요합니다. 미입력 시 ‘사업조건 입력 필요’로 남깁니다.</p>
       </section>
 
       <section>
@@ -51,7 +71,12 @@
         <label class="layer-toggle"><input type="checkbox" data-layer="general_conservation" checked><i class="swatch conservation"></i>일반보전지구</label>
         <label class="layer-toggle"><input type="checkbox" data-layer="waterfront" checked><i class="swatch waterfront"></i>근린친수지구</label>
         <label class="layer-toggle"><input type="checkbox" data-layer="restoration" checked><i class="swatch restoration"></i>복원지구</label>
-        <p class="control-help">현재 RIMGIS 조회 스냅샷에서 보이는 분류만 표시합니다. 첨부 개념도의 특별보전·완충·친수거점 지구는 최종 계획 원도면으로 보완해야 합니다.</p>
+        <div class="layer-divider" aria-hidden="true"></div>
+        <label class="layer-toggle"><input type="checkbox" data-regulation-layer="wetland" checked><i class="swatch wetland"></i>습지보호구역</label>
+        <label class="layer-toggle"><input type="checkbox" data-regulation-layer="heritage" checked><i class="swatch heritage"></i>국가유산</label>
+        <label class="layer-toggle"><input type="checkbox" data-regulation-layer="urban_park" checked><i class="swatch urban-park"></i>도시공원</label>
+        <label class="layer-toggle"><input type="checkbox" data-regulation-layer="land_use" checked><i class="swatch land-use"></i>용도지역(대분류)</label>
+        <p class="control-help">하천 관리구역과 국가유산 지정·보호·허용기준은 승인 스냅샷, 습지·도시공원·용도지역은 VWorld 지점조회입니다. 조회 실패는 ‘중첩 없음’으로 처리하지 않습니다.</p>
       </section>
     </aside>
 
@@ -65,6 +90,7 @@
         <div id="river-map" data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png" tabindex="0" aria-label="낙동강 생태공원 규제지도">
           <div id="tile-layer" aria-hidden="true"></div>
           <svg id="river-overlay" aria-hidden="true"></svg>
+          <svg id="external-regulation-overlay" aria-hidden="true"></svg>
           <div id="park-labels" aria-hidden="true"></div>
           <div id="click-marker" hidden aria-hidden="true"></div>
           <p class="map-instruction">행위를 선택하고 검토 지점을 클릭하십시오.</p>
@@ -86,12 +112,21 @@
           <div><h3>1차 판정 근거</h3><p id="assessment-reason">위치 선택 전입니다.</p></div>
           <div><h3>선행 확인사항</h3><p id="assessment-next">최신 고시도면·사업계획·관리청 공식의견이 필요합니다.</p></div>
         </div>
-        <div class="legal-note"><strong>법적 효력 없음</strong><span>RIMGIS 공간도형을 이용한 정책·사업 초기 선별용입니다. ‘검토 가능’은 허가 가능을 의미하지 않으며, 최종 고시도면·하천정비기본계획·하천점용허가·관리청 의견으로 재판정해야 합니다.</span></div>
+        <div id="regulation-results" class="regulation-results" aria-label="규제별 교차조회 결과">
+          <article data-regulation-result="wetland"><span>습지보호구역</span><strong>위치 선택 전</strong><small>VWorld 지점조회</small></article>
+          <article data-regulation-result="heritage"><span>국가유산</span><strong>위치 선택 전</strong><small>내부 승인 스냅샷 판정</small></article>
+          <article data-regulation-result="urban_park"><span>도시공원</span><strong>위치 선택 전</strong><small>VWorld 지점조회</small></article>
+          <article data-regulation-result="land_use"><span>용도지역(대분류)</span><strong>위치 선택 전</strong><small>VWorld 지점조회</small></article>
+        </div>
+        <section class="parcel-planning" aria-labelledby="parcel-planning-title">
+          <div class="parcel-planning-head"><div><span>PNU-BOUND PLANNING REVIEW</span><h3 id="parcel-planning-title">필지 도시계획 상세</h3></div><strong id="parcel-planning-status">주소·지번 입력 필요</strong></div>
+          <div id="parcel-planning-results" class="parcel-planning-results"><p>지도 좌표만으로는 필지별 용도지역·지구·구역을 확정하지 않습니다. 왼쪽에서 주소 또는 지번을 검색하십시오.</p></div>
+        </section>
+        <div class="legal-note"><strong>법적 효력 없음</strong><span>정책·사업 초기 선별용 누적 교차판정입니다. ‘검토 가능’은 허가 가능을 의미하지 않습니다. 최종 고시도면, 국가유산별 역사문화환경 보존지역 허용기준, 공원조성계획, 토지이용계획확인서와 관계기관 의견으로 재판정해야 합니다.</span></div>
       </section>
     </section>
   </main>
 
-  <script src="map.js?v=20260828-river-review-v1"></script>
+  <script src="map.js?v=20260828-nakdong-planning-v4"></script>
 </body>
 </html>
-

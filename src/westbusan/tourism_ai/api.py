@@ -2,14 +2,31 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Literal
 
 import duckdb
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
+from westbusan.river_regulation.heritage import (
+    HeritageCriteriaCatalogue,
+    HeritageProject,
+    load_heritage_catalogue,
+    unavailable_heritage_decision,
+)
+from westbusan.river_regulation.parcel import (
+    NakdongParcelCatalogue,
+    catalogue_unavailable_review,
+    load_nakdong_parcel_catalogue,
+    pnu_required_review,
+)
+from westbusan.river_regulation.vworld import (
+    VWorldRegulationClient,
+    unavailable_review,
+)
 from westbusan.tourism_ai.cache import (
     ClientCooldownExceeded,
     DailyLimitExceeded,
@@ -80,6 +97,8 @@ def create_app(
     report_catalogue: ReportEvidenceCatalogue | None = None,
     vworld_client: httpx.Client | None = None,
     vacant_catalogue: AddressAnalysisCatalogue | None = None,
+    heritage_catalogue: HeritageCriteriaCatalogue | None = None,
+    parcel_catalogue: NakdongParcelCatalogue | None = None,
 ) -> FastAPI:
     """Create the isolated application with explicit dependencies."""
 
@@ -135,11 +154,29 @@ def create_app(
     vworld_tiles: VWorldTileProxy | None = None
     vworld_geocoder: VWorldGeocodeProxy | None = None
     cadastral: VWorldCadastralClient | None = None
+    regulations: VWorldRegulationClient | None = None
     if vacant_catalogue is None and settings.tourism_ai_vacant_db_path is not None:
         with duckdb.connect(
             str(settings.tourism_ai_vacant_db_path), read_only=True
         ) as connection:
             vacant_catalogue = load_address_catalogue(connection)
+    regulation_db_path = (
+        settings.tourism_ai_regulation_db_path
+        or settings.tourism_ai_report_db_path
+        or settings.tourism_ai_vacant_db_path
+    )
+    if heritage_catalogue is None and regulation_db_path is not None:
+        try:
+            with duckdb.connect(str(regulation_db_path), read_only=True) as connection:
+                heritage_catalogue = load_heritage_catalogue(connection)
+        except duckdb.Error:
+            heritage_catalogue = None
+    if parcel_catalogue is None and regulation_db_path is not None:
+        try:
+            with duckdb.connect(str(regulation_db_path), read_only=True) as connection:
+                parcel_catalogue = load_nakdong_parcel_catalogue(connection)
+        except duckdb.Error:
+            parcel_catalogue = None
     if settings.vworld_api_key is not None:
         upstream = vworld_client or httpx.Client(timeout=15.0)
         vworld = VWorldBasemapProxy(
@@ -158,6 +195,12 @@ def create_app(
             api_key=settings.vworld_api_key.get_secret_value(),
             domain=settings.tourism_ai_vworld_domain,
             client=upstream,
+        )
+        regulations = VWorldRegulationClient(
+            api_key=settings.vworld_api_key.get_secret_value(),
+            domain=settings.tourism_ai_vworld_domain,
+            client=upstream,
+            max_workers=8,
         )
 
     @app.middleware("http")
@@ -186,6 +229,7 @@ def create_app(
             latitude=result.latitude,
             district=result.district,
             crs=result.crs,
+            pnu=result.pnu,
         ).model_dump(mode="json")
 
     @app.post("/vacant/address-analysis")
@@ -217,6 +261,80 @@ def create_app(
             "status": "ok",
             "data_ready": settings.tourism_ai_data_path.is_file(),
         }
+
+    @app.get("/regulations/point")
+    def regulation_point(
+        longitude: float,
+        latitude: float,
+        activity: str,
+        river_zone: str,
+        height_m: float | None = None,
+        roof_type: Literal["flat", "sloped", "unknown"] = "unknown",
+        pnu: str | None = None,
+    ) -> JSONResponse:
+        """Return a cumulative, non-legal point screen for fixed official layers."""
+        if pnu is not None and re.fullmatch(r"\d{19}", pnu) is None:
+            raise HTTPException(status_code=422, detail="invalid_pnu")
+        try:
+            if regulations is None:
+                review = unavailable_review(
+                    activity=activity,
+                    river_zone=river_zone,
+                )
+            else:
+                review = regulations.review_point(
+                    longitude=longitude,
+                    latitude=latitude,
+                    activity=activity,
+                    river_zone=river_zone,
+                )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        try:
+            heritage = (
+                heritage_catalogue.review_point(
+                    longitude=longitude,
+                    latitude=latitude,
+                    project=HeritageProject(
+                        activity=activity,
+                        height_m=height_m,
+                        roof_type=roof_type,
+                    ),
+                )
+                if heritage_catalogue is not None
+                else unavailable_heritage_decision()
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if pnu is None:
+            parcel_planning = pnu_required_review()
+        elif parcel_catalogue is None:
+            parcel_planning = catalogue_unavailable_review(pnu)
+        else:
+            try:
+                parcel_planning = parcel_catalogue.review_pnu(
+                    pnu=pnu,
+                    activity=activity,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+        content = review.as_public_dict()
+        heritage_public = heritage.as_public_dict()
+        content["heritage_criteria"] = heritage_public
+        content["parcel_planning"] = parcel_planning.as_public_dict()
+        feature_collection = content.get("feature_collection")
+        heritage_collection = heritage_public.get("feature_collection")
+        if isinstance(feature_collection, dict) and isinstance(
+            heritage_collection, dict
+        ):
+            features = feature_collection.get("features")
+            heritage_features = heritage_collection.get("features")
+            if isinstance(features, list) and isinstance(heritage_features, list):
+                features.extend(heritage_features)
+        return JSONResponse(
+            content=content,
+            headers={"Cache-Control": "private, max-age=300"},
+        )
 
     @app.get("/vworld/base.png", response_class=Response)
     def vworld_basemap() -> Response:

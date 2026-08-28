@@ -17,6 +17,7 @@ class TourismAISettings(BaseSettings):
     vworld_api_key: SecretStr | None = None
     tourism_ai_vacant_db_path: Path | None = None
     tourism_ai_report_db_path: Path | None = None
+    tourism_ai_regulation_db_path: Path | None = None
     tourism_ai_vworld_domain: str = Field(
         default="tourism.busanproduct.co.kr", min_length=4, max_length=120
     )

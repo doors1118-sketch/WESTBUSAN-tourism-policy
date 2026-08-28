@@ -8,14 +8,24 @@
   const map = document.getElementById("river-map");
   const tileLayer = document.getElementById("tile-layer");
   const overlay = document.getElementById("river-overlay");
+  const externalOverlay = document.getElementById("external-regulation-overlay");
   const labelsLayer = document.getElementById("park-labels");
   const clickMarker = document.getElementById("click-marker");
   const activitySelect = document.getElementById("activity-select");
+  const structureHeight = document.getElementById("structure-height");
+  const roofType = document.getElementById("roof-type");
+  const parcelAddress = document.getElementById("parcel-address");
+  const parcelSearch = document.getElementById("parcel-search");
+  const parcelSearchState = document.getElementById("parcel-search-state");
   const tileNodes = new Map();
   const pathNodes = [];
+  const externalPathNodes = [];
   let features = [];
   let selectedPoint = null;
+  let selectedPnu = null;
   let dragOrigin = null;
+  let regulationController = null;
+  let regulationSequence = 0;
 
   const parks = {
     hwamyeong: { name: "화명생태공원", lon: 129.00547, lat: 35.23847, zoom: 14 },
@@ -38,6 +48,27 @@
     conditional: "관리청 협의 전제 검토",
     principally_restricted: "원칙적 불가 가능성 높음",
     outside_scope: "하천구역 외·별도 법령 검토",
+  };
+  const regulationLabels = {
+    wetland: "습지보호구역",
+    heritage: "국가유산",
+    urban_park: "도시공원",
+    land_use: "용도지역",
+  };
+  const regulationStatusLabels = {
+    no_overlap: "선택 지점 중첩 없음",
+    provider_error: "공간서비스 조회 실패·미판정",
+    invalid_response: "공간서비스 응답 오류·미판정",
+  };
+  const planningCategoryLabels = {
+    development_restriction: "개발행위허가 제한",
+    district_unit_plan: "지구단위계획",
+    urban_planning_facility: "도시계획시설",
+    land_use_zone: "용도지역",
+    land_use_district: "용도지구",
+    land_use_area: "용도구역",
+    other_law_restriction: "개별법 규제",
+    unclassified: "기타 지정",
   };
 
   function worldPixel(lon, lat, zoom) {
@@ -103,7 +134,9 @@
 
   function renderOverlay() {
     overlay.setAttribute("viewBox", `0 0 ${map.clientWidth} ${map.clientHeight}`);
+    externalOverlay.setAttribute("viewBox", `0 0 ${map.clientWidth} ${map.clientHeight}`);
     pathNodes.forEach(({ node, feature }) => node.setAttribute("d", pathForGeometry(feature.geometry)));
+    externalPathNodes.forEach(({ node, feature }) => node.setAttribute("d", pathForGeometry(feature.geometry)));
     labelsLayer.replaceChildren();
     Object.values(parks).forEach((park) => {
       const [x, y] = screenPoint(park.lon, park.lat);
@@ -178,6 +211,176 @@
     return { grade: "conditional", reason: "하천구역 내이지만 현재 스냅샷에서 세부 관리지구가 중첩되지 않은 위치입니다. 이를 행위 허용으로 해석하면 안 됩니다.", next: "최신 하천정비기본계획 원도면과 관리청 공식 의견으로 세부 지구를 확인하십시오." };
   }
 
+  function setRegulationResultsLoading() {
+    document.querySelectorAll("[data-regulation-result]").forEach((card) => {
+      card.className = "is-loading";
+      card.querySelector("strong").textContent = "조회 중";
+      card.querySelector("small").textContent = "VWorld 규제 레이어 교차조회";
+    });
+    const planningStatus = document.getElementById("parcel-planning-status");
+    planningStatus.className = "";
+    planningStatus.textContent = selectedPnu ? "필지 규제 조회 중" : "주소·지번 입력 필요";
+  }
+
+  function clearExternalRegulations() {
+    externalPathNodes.splice(0).forEach(({ node }) => node.remove());
+  }
+
+  function regulationLayerEnabled(category) {
+    const input = document.querySelector(`[data-regulation-layer="${category}"]`);
+    return !input || input.checked;
+  }
+
+  function renderRegulationCards(review) {
+    const matches = Array.isArray(review.matches) ? review.matches : [];
+    const statuses = Array.isArray(review.layer_statuses) ? review.layer_statuses : [];
+    Object.keys(regulationLabels).forEach((category) => {
+      const card = document.querySelector(`[data-regulation-result="${category}"]`);
+      if (!card) return;
+      const categoryMatches = matches.filter((match) => match.category === category);
+      const status = statuses.find((item) => item.category === category);
+      const statusCode = status ? status.status : "";
+      card.className = statusCode === "matched" ? "is-matched" : statusCode === "no_overlap" ? "is-clear" : "is-missing";
+      card.querySelector("strong").textContent = categoryMatches.length
+        ? categoryMatches.map((match) => match.label).join(" · ")
+        : regulationStatusLabels[statusCode] || "응답 없음·미판정";
+      card.querySelector("small").textContent = statusCode === "matched"
+        ? `${categoryMatches.length}개 도형 중첩`
+        : "조회 결과와 법정 고시도면은 다를 수 있음";
+    });
+    const heritage = review.heritage_criteria;
+    const heritageCard = document.querySelector('[data-regulation-result="heritage"]');
+    if (heritage && heritageCard) {
+      const restricted = ["direct_designation_overlap", "individual_review_required", "exceeds_published_criteria"].includes(heritage.code);
+      const clear = ["within_published_criteria", "no_snapshot_overlap"].includes(heritage.code);
+      heritageCard.className = restricted ? "is-matched" : clear ? "is-clear" : "is-missing";
+      heritageCard.querySelector("strong").textContent = heritage.label || "국가유산 기준 미판정";
+      const checked = heritage.source_checked_at ? heritage.source_checked_at.slice(0, 10) : "기준일 미확인";
+      const zone = heritage.zone_name ? ` · ${heritage.zone_name}` : "";
+      heritageCard.querySelector("small").textContent = `${checked} 승인 스냅샷${zone}`;
+    }
+  }
+
+  function renderExternalRegulations(collection) {
+    clearExternalRegulations();
+    const externalFeatures = collection && Array.isArray(collection.features) ? collection.features : [];
+    externalFeatures.forEach((feature) => {
+      const category = feature && feature.properties ? feature.properties.category : "";
+      if (!regulationLabels[category] || !feature.geometry) return;
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("class", `external-feature external-${category}`);
+      path.setAttribute("fill-rule", "evenodd");
+      path.classList.toggle("is-hidden", !regulationLayerEnabled(category));
+      externalOverlay.append(path);
+      externalPathNodes.push({ node: path, feature });
+    });
+    renderOverlay();
+  }
+
+  function renderParcelPlanning(review) {
+    const status = document.getElementById("parcel-planning-status");
+    const root = document.getElementById("parcel-planning-results");
+    root.replaceChildren();
+    status.className = review && review.grade === "principally_restricted"
+      ? "is-restricted"
+      : review && review.grade === "conditional" ? "is-conditional" : "";
+    status.textContent = review && review.label ? review.label : "필지 규제 미판정";
+    if (!review || review.status !== "matched") {
+      const message = document.createElement("p");
+      message.textContent = review && review.reason
+        ? review.reason
+        : "승인된 필지 규제 결과를 확인하지 못했습니다.";
+      root.append(message);
+      return;
+    }
+    const designations = document.createElement("div");
+    designations.className = "planning-designations";
+    (review.designations || []).forEach((item) => {
+      const badge = document.createElement("span");
+      badge.textContent = `${planningCategoryLabels[item.category] || "지정"} · ${item.name}`;
+      designations.append(badge);
+    });
+    if (!designations.childElementCount) {
+      const badge = document.createElement("span");
+      badge.textContent = "공식 지정명 없음·원문 재확인";
+      designations.append(badge);
+    }
+    root.append(designations);
+    const characteristics = review.characteristics || {};
+    const facts = [
+      ["PNU", review.pnu || "-"],
+      ["지목", characteristics.land_category || "미확인"],
+      ["필지면적", Number.isFinite(characteristics.parcel_area) ? `${characteristics.parcel_area.toLocaleString("ko-KR")}㎡` : "미확인"],
+      ["도로접면", characteristics.road_side || "미확인"],
+      ["이용상황", characteristics.land_use_situation || "미확인"],
+      ["자료기준", review.source_date || (review.checked_at || "").slice(0, 10) || "미확인"],
+    ];
+    const grid = document.createElement("div");
+    grid.className = "planning-grid";
+    facts.forEach(([label, value]) => {
+      const card = document.createElement("div");
+      const caption = document.createElement("span"); caption.textContent = label;
+      const strong = document.createElement("strong"); strong.textContent = value;
+      card.append(caption, strong); grid.append(card);
+    });
+    root.append(grid);
+    const copy = document.createElement("div");
+    copy.className = "planning-copy";
+    const reason = document.createElement("p"); reason.textContent = `판정 근거: ${review.reason}`;
+    const next = document.createElement("p"); next.textContent = `선행 확인: ${review.next_check}`;
+    copy.append(reason, next); root.append(copy);
+  }
+
+  function markRegulationsUnavailable(message) {
+    clearExternalRegulations();
+    document.querySelectorAll("[data-regulation-result]").forEach((card) => {
+      card.className = "is-missing";
+      card.querySelector("strong").textContent = "조회 실패·미판정";
+      card.querySelector("small").textContent = message;
+    });
+    renderParcelPlanning({
+      status: "request_failed",
+      grade: "unreviewed",
+      label: "필지 규제 조회 실패·미판정",
+      reason: message,
+    });
+  }
+
+  async function queryRegulations(point, zone, activity, sequence) {
+    if (regulationController) regulationController.abort();
+    regulationController = new AbortController();
+    const query = new URLSearchParams({
+      longitude: String(point[0]),
+      latitude: String(point[1]),
+      activity,
+      river_zone: zone,
+    });
+    const height = Number(structureHeight.value);
+    if (structureHeight.value !== "" && Number.isFinite(height)) query.set("height_m", String(height));
+    query.set("roof_type", roofType.value);
+    if (selectedPnu) query.set("pnu", selectedPnu);
+    try {
+      const response = await fetch(`/tourism/api/regulations/point?${query}`, {
+        headers: { Accept: "application/json" },
+        signal: regulationController.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const review = await response.json();
+      if (sequence !== regulationSequence) return;
+      renderRegulationCards(review);
+      renderParcelPlanning(review.parcel_planning);
+      renderExternalRegulations(review.feature_collection);
+      const grade = document.getElementById("assessment-grade");
+      grade.className = `grade ${review.grade}`;
+      grade.textContent = review.label || gradeLabels[review.grade] || "추가 확인 필요";
+      document.getElementById("assessment-reason").textContent = review.reason;
+      document.getElementById("assessment-next").textContent = review.next_check;
+    } catch (error) {
+      if (error.name === "AbortError" || sequence !== regulationSequence) return;
+      markRegulationsUnavailable("하천구역 판정만 유지·외부 규제 재조회 필요");
+    }
+  }
+
   function updateAssessment(point) {
     const zone = zoneAt(point); const activity = activitySelect.value; const result = assessSelection(zone, activity); const park = nearestPark(point);
     document.getElementById("assessment-title").textContent = `${park.name} 일원·${activityLabels[activity]} 1차 검토`;
@@ -188,6 +391,9 @@
     document.getElementById("selected-coordinate").textContent = `${point[1].toFixed(6)}, ${point[0].toFixed(6)}`;
     document.getElementById("assessment-reason").textContent = result.reason;
     document.getElementById("assessment-next").textContent = result.next;
+    setRegulationResultsLoading();
+    regulationSequence += 1;
+    void queryRegulations(point, zone, activity, regulationSequence);
   }
 
   function setView(lon, lat, zoom) {
@@ -201,6 +407,8 @@
     if (!dragOrigin) return; const moved = dragOrigin.moved; dragOrigin = null;
     if (moved) return;
     const rect = map.getBoundingClientRect(); const worldX = state.centerX - map.clientWidth / 2 + event.clientX - rect.left; const worldY = state.centerY - map.clientHeight / 2 + event.clientY - rect.top;
+    selectedPnu = null;
+    parcelSearchState.textContent = "지도 클릭 위치입니다. 필지 도시계획 상세는 주소·지번 검색이 필요합니다.";
     selectedPoint = lonLatFromWorld(worldX, worldY, state.zoom); updateAssessment(selectedPoint); renderOverlay();
   });
   map.addEventListener("wheel", (event) => { event.preventDefault(); const [lon, lat] = lonLatFromWorld(state.centerX, state.centerY, state.zoom); setView(lon, lat, state.zoom + (event.deltaY < 0 ? 1 : -1)); }, { passive: false });
@@ -214,7 +422,51 @@
   document.querySelectorAll("[data-layer]").forEach((input) => input.addEventListener("change", () => {
     pathNodes.filter((item) => item.feature.properties.zone_type === input.dataset.layer).forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
   }));
+  document.querySelectorAll("[data-regulation-layer]").forEach((input) => input.addEventListener("change", () => {
+    externalPathNodes.filter((item) => item.feature.properties.category === input.dataset.regulationLayer)
+      .forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
+  }));
   activitySelect.addEventListener("change", () => { document.getElementById("selected-activity").textContent = activityLabels[activitySelect.value]; if (selectedPoint) updateAssessment(selectedPoint); });
+  structureHeight.addEventListener("change", () => { if (selectedPoint) updateAssessment(selectedPoint); });
+  roofType.addEventListener("change", () => { if (selectedPoint) updateAssessment(selectedPoint); });
+  async function searchParcel() {
+    const address = parcelAddress.value.trim();
+    if (address.length < 8 || !address.includes("부산")) {
+      parcelSearchState.textContent = "부산광역시와 자치구를 포함한 주소·지번을 입력하십시오.";
+      return;
+    }
+    parcelSearch.disabled = true;
+    parcelSearchState.textContent = "주소와 PNU를 확인하는 중입니다.";
+    try {
+      const response = await fetch("/tourism/api/vworld/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ address }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const geocode = await response.json();
+      if (geocode.status !== "matched" || !geocode.pnu || !Number.isFinite(geocode.longitude) || !Number.isFinite(geocode.latitude)) {
+        selectedPnu = null;
+        parcelSearchState.textContent = "주소 좌표 또는 19자리 PNU를 확인하지 못했습니다.";
+        return;
+      }
+      selectedPnu = geocode.pnu;
+      selectedPoint = [geocode.longitude, geocode.latitude];
+      parcelSearchState.textContent = `${geocode.district || "부산"} · PNU 확인 완료`;
+      setView(selectedPoint[0], selectedPoint[1], Math.max(state.zoom, 16));
+      updateAssessment(selectedPoint);
+      renderOverlay();
+    } catch (_error) {
+      selectedPnu = null;
+      parcelSearchState.textContent = "주소 검색 서비스에 연결하지 못했습니다. 잠시 후 다시 확인하십시오.";
+    } finally {
+      parcelSearch.disabled = false;
+    }
+  }
+  parcelSearch.addEventListener("click", () => { void searchParcel(); });
+  parcelAddress.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") { event.preventDefault(); void searchParcel(); }
+  });
   window.addEventListener("resize", render);
 
   Promise.all([

@@ -355,7 +355,7 @@ def test_navigation_orders_decision_tabs_and_places_ai_analysis_last() -> None:
         'data-tab-target="supply">동서 공급 격차<',
         'data-tab-target="investment">투자정보 제공<',
         'data-tab-target="vacant">빈집 정보 제공<',
-        'data-tab-target="river">낙동강 공원 규제·행위 검토<',
+        'data-tab-target="river">낙동강 입지 사전검토<',
         'data-tab-target="insights">AI 종합 분석<',
     )
     positions = [nav.index(item) for item in expected]

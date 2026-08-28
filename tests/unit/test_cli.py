@@ -132,7 +132,28 @@ def test_cli_help_lists_all_operational_commands() -> None:
         "building-profile-backfill",
         "vacant-house-building-link",
         "vacant-house-parcel-context",
+        "nakdong-parcel-regulation-sync",
     } <= set(result.stdout.split())
+
+
+def test_nakdong_parcel_sync_blocks_before_opening_provider_without_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pnu_file = tmp_path / "nakdong-pnus.txt"
+    pnu_file.write_text("2632010100100010000\n", encoding="utf-8")
+    monkeypatch.delenv("VWORLD_API_KEY", raising=False)
+
+    result = CliRunner().invoke(
+        app,
+        ["nakdong-parcel-regulation-sync", "--pnu-file", str(pnu_file)],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "reason": "vworld_api_key_missing",
+        "status": "BLOCKED",
+    }
 
 
 @pytest.mark.parametrize(

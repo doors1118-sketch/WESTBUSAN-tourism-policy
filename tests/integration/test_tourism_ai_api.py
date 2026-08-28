@@ -13,6 +13,11 @@ from pydantic import SecretStr
 
 from tests.unit.test_tourism_ai_metrics import RUN_ID, _write_dashboard
 from tests.unit.test_tourism_ai_service import _model_document
+from westbusan.river_regulation.heritage import (
+    HeritageCriteriaCatalogue,
+    parse_criteria_html,
+)
+from westbusan.river_regulation.parcel import NakdongParcelCatalogue
 from westbusan.tourism_ai.api import create_app
 from westbusan.tourism_ai.config import TourismAISettings
 from westbusan.tourism_ai.models import EvidenceMetric, ModelInsight
@@ -366,6 +371,234 @@ def test_vworld_tile_is_unavailable_without_server_key(tmp_path: Path) -> None:
     assert response.json() == {"detail": "vworld_unavailable"}
 
 
+def test_regulation_point_is_server_queried_and_secret_safe(tmp_path: Path) -> None:
+    secret = "sentinel-vworld-key"
+    requested_datasets: set[str] = set()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/req/data"
+        assert request.url.params["key"] == secret
+        assert request.url.params["geomFilter"] == "POINT(128.953 35.117)"
+        dataset = request.url.params["data"]
+        requested_datasets.add(dataset)
+        if dataset != "LT_C_UM901":
+            return httpx.Response(200, json={"response": {"status": "NOT_FOUND"}})
+        return httpx.Response(
+            200,
+            json={
+                "response": {
+                    "status": "OK",
+                    "result": {
+                        "featureCollection": {
+                            "features": [
+                                {
+                                    "properties": {
+                                        "dgm_nm": "낙동강하구 습지보호지역",
+                                        "private": "never-publish",
+                                    },
+                                    "geometry": {
+                                        "type": "Polygon",
+                                        "coordinates": [[
+                                            [128.95, 35.11],
+                                            [128.96, 35.11],
+                                            [128.96, 35.12],
+                                            [128.95, 35.12],
+                                            [128.95, 35.11],
+                                        ]],
+                                    },
+                                }
+                            ]
+                        }
+                    },
+                }
+            },
+        )
+
+    client = TestClient(
+        create_app(
+            _settings(tmp_path),
+            generator=_CountingGenerator(_model_document()),
+            vworld_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        )
+    )
+
+    response = client.get(
+        "/regulations/point",
+        params={
+            "longitude": 128.953,
+            "latitude": 35.117,
+            "activity": "lodging",
+            "river_zone": "general_conservation",
+        },
+    )
+
+    assert response.status_code == 200
+    assert len(requested_datasets) == 8
+    assert response.json()["grade"] == "principally_restricted"
+    assert response.json()["complete"] is True
+    assert response.json()["matches"][0]["category"] == "wetland"
+    assert secret not in response.text
+    assert "private" not in response.text
+
+
+def test_regulation_point_without_key_is_explicitly_partial(tmp_path: Path) -> None:
+    settings = _settings(tmp_path).model_copy(update={"vworld_api_key": None})
+    client = TestClient(
+        create_app(settings, generator=_CountingGenerator(_model_document()))
+    )
+
+    response = client.get(
+        "/regulations/point",
+        params={
+            "longitude": 128.953,
+            "latitude": 35.117,
+            "activity": "walking",
+            "river_zone": "waterfront",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["complete"] is False
+    assert response.json()["missing_categories"] == [
+        "wetland",
+        "heritage",
+        "urban_park",
+        "land_use",
+    ]
+    assert {item["status"] for item in response.json()["layer_statuses"]} == {
+        "provider_error"
+    }
+    assert response.json()["parcel_planning"]["status"] == "pnu_required"
+
+
+def test_regulation_point_uses_independent_nakdong_parcel_catalogue(
+    tmp_path: Path,
+) -> None:
+    pnu = "2632010100100010000"
+    catalogue = NakdongParcelCatalogue.from_records(
+        snapshot_id="nakdong-test-1",
+        checked_at="2026-08-28T00:00:00+00:00",
+        parcels=[
+            {
+                "pnu": pnu,
+                "land_use_status": "matched",
+                "land_use_designations": [
+                    "제2종일반주거지역",
+                    "개발행위허가제한지역",
+                ],
+                "land_use_response_sha256": "a" * 64,
+                "land_characteristics_status": "not_found",
+                "land_characteristics_response_sha256": "b" * 64,
+                "land_characteristics": None,
+                "source_date": "2026-08-27",
+            }
+        ],
+    )
+    settings = _settings(tmp_path).model_copy(update={"vworld_api_key": None})
+    client = TestClient(
+        create_app(
+            settings,
+            generator=_CountingGenerator(_model_document()),
+            parcel_catalogue=catalogue,
+        )
+    )
+
+    response = client.get(
+        "/regulations/point",
+        params={
+            "longitude": 129.01025,
+            "latitude": 35.2061,
+            "activity": "lodging",
+            "river_zone": "waterfront",
+            "pnu": pnu,
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["parcel_planning"]
+    assert result["status"] == "matched"
+    assert result["grade"] == "principally_restricted"
+    assert result["snapshot_id"] == "nakdong-test-1"
+    assert response.json()["complete"] is False
+
+
+def test_regulation_point_rejects_invalid_pnu(tmp_path: Path) -> None:
+    settings = _settings(tmp_path).model_copy(update={"vworld_api_key": None})
+    client = TestClient(
+        create_app(settings, generator=_CountingGenerator(_model_document()))
+    )
+
+    response = client.get(
+        "/regulations/point",
+        params={
+            "longitude": 129.01025,
+            "latitude": 35.2061,
+            "activity": "lodging",
+            "river_zone": "waterfront",
+            "pnu": "123",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_regulation_point_uses_cached_heritage_criteria_without_upstream_call(
+    tmp_path: Path,
+) -> None:
+    from shapely.geometry import box, mapping
+
+    criteria = parse_criteria_html(
+        """<table><tbody>
+        <tr><td>2구역</td><td></td><td>건축물 최고높이 11m 이하</td>
+            <td>건축물 최고높이 15m 이하</td><td>2</td></tr>
+        <tr><td>공통</td><td></td><td><input id="hidden_pmpgSeid"
+            value="PMPG00000812">최고높이는 옥탑 포함</td></tr>
+        </tbody></table>"""
+    )
+    catalogue = HeritageCriteriaCatalogue.from_records(
+        snapshot_id="cached-heritage-1",
+        source_checked_at="2026-08-28T00:00:00+00:00",
+        designations=[],
+        criteria_zones=[
+            {
+                "layer_name": "CHL_PMPG_AS_1",
+                "gid": 1,
+                "pmpg_seid": criteria.pmpg_seid,
+                "zone_name": "2구역",
+                "geometry": mapping(box(128.95, 35.11, 128.96, 35.12)),
+                "criteria": criteria.as_dict(),
+            }
+        ],
+    )
+    settings = _settings(tmp_path).model_copy(update={"vworld_api_key": None})
+    client = TestClient(
+        create_app(
+            settings,
+            generator=_CountingGenerator(_model_document()),
+            heritage_catalogue=catalogue,
+        )
+    )
+
+    response = client.get(
+        "/regulations/point",
+        params={
+            "longitude": 128.955,
+            "latitude": 35.115,
+            "activity": "lodging",
+            "river_zone": "waterfront",
+            "height_m": 10,
+            "roof_type": "flat",
+        },
+    )
+
+    assert response.status_code == 200
+    result = response.json()["heritage_criteria"]
+    assert result["code"] == "within_published_criteria"
+    assert result["limit_m"] == 11
+    assert result["snapshot_id"] == "cached-heritage-1"
+    assert result["legal_effect"] is False
+
+
 def test_vworld_parcel_geocode_is_server_proxied_and_redacted(tmp_path: Path) -> None:
     """Catches browser-side credentials or exact-address AI without a reviewed point."""
     secret = "sentinel-vworld-key"
@@ -401,6 +634,7 @@ def test_vworld_parcel_geocode_is_server_proxied_and_redacted(tmp_path: Path) ->
         "latitude": 35.2061,
         "district": "북구",
         "crs": "EPSG:4326",
+        "pnu": None,
     }
     assert secret not in response.text
     assert "response_hash" not in response.text

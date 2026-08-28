@@ -7,7 +7,7 @@ import os
 from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, NoReturn
-from uuid import UUID
+from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -17,6 +17,14 @@ from westbusan.buildings.load import backfill_building_investment_profiles
 from westbusan.db import migrate_legacy_run
 from westbusan.orchestrator import Pipeline, RunSummary, export_current, redact_for_log
 from westbusan.quality.checks import approve_schema_baseline, observed_schema_contracts
+from westbusan.river_regulation.heritage import (
+    collect_heritage_snapshot,
+    publish_heritage_snapshot,
+)
+from westbusan.river_regulation.parcel import (
+    collect_nakdong_parcel_records,
+    publish_nakdong_parcel_snapshot,
+)
 from westbusan.spatial.boundary import approve_boundary, inspect_boundary
 from westbusan.spatial.enrich import enrich_current_facilities
 from westbusan.spatial.export import export_spatial_current
@@ -728,6 +736,136 @@ def spatial_geocode(
             "provider_error": summary.provider_error,
             "invalid_response": summary.invalid_response,
             "missing_address": summary.missing_address,
+        }
+    )
+
+
+@app.command("heritage-criteria-sync")
+def heritage_criteria_sync(
+    west: Annotated[float, typer.Option(help="WGS84 minimum longitude.")] = 128.75,
+    south: Annotated[float, typer.Option(help="WGS84 minimum latitude.")] = 35.0,
+    east: Annotated[float, typer.Option(help="WGS84 maximum longitude.")] = 129.12,
+    north: Annotated[float, typer.Option(help="WGS84 maximum latitude.")] = 35.32,
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Cache one complete official HGIS criteria snapshot in DuckDB."""
+    pipeline = _pipeline(root)
+    pipeline.db.migrate()
+    run_id = uuid4()
+    checked_at = datetime.now(ZoneInfo("Asia/Seoul"))
+    bounds = (west, south, east, north)
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=False,
+            headers={"User-Agent": "westbusan-policy-screen/1.0"},
+        ) as client:
+            collected = collect_heritage_snapshot(client, bounds=bounds)
+        publish_heritage_snapshot(
+            pipeline.db,
+            run_id=run_id,
+            checked_at=checked_at,
+            bounds=bounds,
+            designations=collected.designations,
+            criteria_zones=collected.criteria_zones,
+        )
+    except Exception as error:
+        _print_json(
+            {
+                "status": "BLOCKED",
+                "reason": (
+                    str(error)
+                    if isinstance(error, ValueError)
+                    else "heritage_criteria_sync_failed"
+                ),
+            }
+        )
+        raise typer.Exit(1) from error
+    _print_json(
+        {
+            "status": "PUBLISHED",
+            "run_id": run_id,
+            "checked_at": checked_at,
+            "designation_count": len(collected.designations),
+            "criteria_zone_count": len(collected.criteria_zones),
+            "bounds": bounds,
+        }
+    )
+
+
+@app.command("nakdong-parcel-regulation-sync")
+def nakdong_parcel_regulation_sync(
+    pnu_file: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="UTF-8 text file containing one 19-digit review PNU per line.",
+        ),
+    ],
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Publish a complete PNU-bound planning snapshot for the Nakdong tab only."""
+    api_key = os.getenv("VWORLD_API_KEY", "").strip()
+    if not api_key:
+        _print_json({"status": "BLOCKED", "reason": "vworld_api_key_missing"})
+        raise typer.Exit(1)
+    domain = os.getenv("VWORLD_API_DOMAIN", "busanproduct.co.kr").strip()
+    pnus = [
+        line.strip()
+        for line in pnu_file.read_text(encoding="utf-8-sig").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    pipeline = _pipeline(root)
+    pipeline.db.migrate()
+    run_id = uuid4()
+    checked_at = datetime.now(ZoneInfo("Asia/Seoul"))
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=False,
+            headers={"User-Agent": "westbusan-policy-screen/1.0"},
+        ) as client:
+            records = collect_nakdong_parcel_records(
+                pnus,
+                land_use_client=VWorldNedParcelContextClient(
+                    api_key=api_key,
+                    domain=domain,
+                    client=client,
+                    kind="land_use",
+                    source_id="nakdong_vworld_land_use",
+                ),
+                land_characteristics_client=VWorldNedParcelContextClient(
+                    api_key=api_key,
+                    domain=domain,
+                    client=client,
+                    kind="land_characteristics",
+                    source_id="nakdong_vworld_land_characteristics",
+                ),
+            )
+        publish_nakdong_parcel_snapshot(
+            pipeline.db,
+            run_id=run_id,
+            checked_at=checked_at,
+            parcels=records,
+        )
+    except Exception as error:
+        safe_reason = (
+            str(error)
+            if isinstance(error, (TypeError, ValueError))
+            else "nakdong_parcel_sync_failed"
+        )
+        _print_json({"status": "BLOCKED", "reason": safe_reason})
+        raise typer.Exit(1) from error
+    _print_json(
+        {
+            "status": "PUBLISHED",
+            "run_id": run_id,
+            "checked_at": checked_at,
+            "parcel_count": len(records),
+            "land_use_coverage": 1.0,
         }
     )
 
