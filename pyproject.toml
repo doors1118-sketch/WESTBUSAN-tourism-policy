@@ -20,7 +20,7 @@ dependencies = [
   "xlrd>=2.0,<3",
   "xmltodict>=0.14,<1",
   "tzdata>=2025.2; platform_system == 'Windows'",
-  "pytz>=2025.2; platform_system == 'Windows'",
+  "pytz>=2025.2",
 ]
 
 [project.optional-dependencies]
