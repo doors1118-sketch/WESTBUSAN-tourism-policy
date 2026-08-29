@@ -43,6 +43,8 @@
 ### Korean Law MCP 격리 설치
 
 - 소스는 `https://github.com/chrisryugj/korean-law-mcp`의 `v4.12.0` 태그, 검증 커밋 `7839d70a2b9e336ac47c70eeef64fc4714970224`로 고정한다. 배포 전 태그·커밋·패키지 버전의 일치를 확인한다.
+- 법제처 `LAW_OC`는 등록된 서버 IP·도메인과 실제 호출 서버가 일치해야 한다. 사무실 PC의 HTTP 200 오류봉투를 성공으로 해석하지 말고, 승인된 운영 서버에서 `resultCode`·결과 건수를 확인한다.
+- Git 이력이나 systemd unit에 인라인으로 저장된 적이 있는 `LAW_OC`는 노출된 것으로 간주하여 재발급·회전하고, 새 값은 서버 보안 환경파일에만 둔다.
 - Node.js는 패키지 요구사항에 따라 20.19.0 이상을 사용한다. 운영 서버의 실제 버전이 낮으면 서비스를 시작하지 않는다.
 - `/opt/westbusan-korean-law-mcp/releases/<release>`에서 의존성을 잠금 설치하고 빌드한 뒤 `current` 링크를 원자적으로 바꾼다. Git 기본 브랜치를 직접 실행하지 않는다.
 - `westbusan-korean-law-mcp.service`는 전용 계정으로 `127.0.0.1:18082`에만 바인딩한다. Nginx에 `/mcp`를 공개하지 않는다.
