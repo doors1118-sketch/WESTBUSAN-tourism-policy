@@ -7,6 +7,7 @@
   const INITIAL = { lon: 128.977, lat: 35.178, zoom: 12 };
   const map = document.getElementById("river-map");
   const tileLayer = document.getElementById("tile-layer");
+  const parkBoundaryOverlay = document.getElementById("park-boundary-overlay");
   const overlay = document.getElementById("river-overlay");
   const externalOverlay = document.getElementById("external-regulation-overlay");
   const labelsLayer = document.getElementById("park-labels");
@@ -20,9 +21,11 @@
   const policyInsightButton = document.getElementById("policy-insight-button");
   const policyInsightPanel = document.getElementById("policy-insight-panel");
   const tileNodes = new Map();
+  const parkBoundaryPathNodes = [];
   const pathNodes = [];
   const externalPathNodes = [];
   let features = [];
+  let parkBoundaryFeatures = [];
   let selectedPoint = null;
   let selectedPnu = null;
   let dragOrigin = null;
@@ -31,11 +34,11 @@
   let policyInsightController = null;
 
   const parks = {
-    hwamyeong: { name: "화명생태공원", lon: 129.00547, lat: 35.23847, zoom: 14 },
-    daejeo: { name: "대저생태공원", lon: 128.98894, lat: 35.21074, zoom: 14 },
-    samrak: { name: "삼락생태공원", lon: 128.9763, lat: 35.1711, zoom: 14 },
-    maekdo: { name: "맥도생태공원", lon: 128.95709, lat: 35.15138, zoom: 14 },
-    eulsukdo: { name: "을숙도생태공원", lon: 128.9523, lat: 35.1172, zoom: 14 },
+    hwamyeong: { id: "hwamyeong", name: "화명생태공원", color: "#2563EB", lon: 129.00547, lat: 35.23847, zoom: 14 },
+    daejeo: { id: "daejeo", name: "대저생태공원", color: "#D97706", lon: 128.98894, lat: 35.21074, zoom: 14 },
+    samrak: { id: "samrak", name: "삼락생태공원", color: "#059669", lon: 128.9763, lat: 35.1711, zoom: 14 },
+    maekdo: { id: "maekdo", name: "맥도생태공원", color: "#7C3AED", lon: 128.95709, lat: 35.15138, zoom: 14 },
+    eulsukdo: { id: "eulsukdo", name: "을숙도생태공원", color: "#DB2777", lon: 128.9523, lat: 35.1172, zoom: 14 },
   };
   const activityLabels = {
     walking: "산책·탐방", ecology: "생태관찰·복원", festival: "축제·행사",
@@ -136,8 +139,10 @@
   }
 
   function renderOverlay() {
+    parkBoundaryOverlay.setAttribute("viewBox", `0 0 ${map.clientWidth} ${map.clientHeight}`);
     overlay.setAttribute("viewBox", `0 0 ${map.clientWidth} ${map.clientHeight}`);
     externalOverlay.setAttribute("viewBox", `0 0 ${map.clientWidth} ${map.clientHeight}`);
+    parkBoundaryPathNodes.forEach(({ node, feature }) => node.setAttribute("d", pathForGeometry(feature.geometry)));
     pathNodes.forEach(({ node, feature }) => node.setAttribute("d", pathForGeometry(feature.geometry)));
     externalPathNodes.forEach(({ node, feature }) => node.setAttribute("d", pathForGeometry(feature.geometry)));
     labelsLayer.replaceChildren();
@@ -145,6 +150,7 @@
       const [x, y] = screenPoint(park.lon, park.lat);
       if (x < -80 || x > map.clientWidth + 80 || y < -30 || y > map.clientHeight + 30) return;
       const label = document.createElement("span"); label.className = "park-label"; label.textContent = park.name;
+      label.style.backgroundColor = park.color;
       label.style.left = `${x}px`; label.style.top = `${y}px`; labelsLayer.append(label);
     });
     if (selectedPoint) {
@@ -176,6 +182,18 @@
     if (geometry.type === "Polygon") return pointInPolygon(point, geometry.coordinates);
     if (geometry.type === "MultiPolygon") return geometry.coordinates.some((polygon) => pointInPolygon(point, polygon));
     return false;
+  }
+
+  function parkAt(point) {
+    return parkBoundaryFeatures.find((feature) => pointInFeature(point, feature)) || null;
+  }
+
+  function setActiveParkBoundary(parkId) {
+    parkBoundaryPathNodes.forEach(({ node, feature }) => {
+      const matches = feature.properties.park_id === parkId;
+      node.classList.toggle("is-active", Boolean(parkId) && matches);
+      node.classList.toggle("is-muted", Boolean(parkId) && !matches);
+    });
   }
 
   function zoneAt(point) {
@@ -478,10 +496,11 @@
   }
 
   function updateAssessment(point) {
-    const zone = zoneAt(point); const activity = activitySelect.value; const result = assessSelection(zone, activity); const park = nearestPark(point);
+    const zone = zoneAt(point); const activity = activitySelect.value; const result = assessSelection(zone, activity); const boundary = parkAt(point); const park = boundary ? parks[boundary.properties.park_id] : nearestPark(point);
     document.getElementById("assessment-title").textContent = `${park.name} 일원·${activityLabels[activity]} 1차 검토`;
     const grade = document.getElementById("assessment-grade"); grade.className = `grade ${result.grade}`; grade.textContent = gradeLabels[result.grade];
-    document.getElementById("selected-park").textContent = `${park.name} 약 ${park.distance.toFixed(1)}km`;
+    document.getElementById("selected-park").textContent = boundary ? `${park.name} 참고경계 내` : `${park.name} 인근 · 약 ${park.distance.toFixed(1)}km`;
+    setActiveParkBoundary(boundary ? boundary.properties.park_id : null);
     document.getElementById("selected-zone").textContent = zoneLabels[zone];
     document.getElementById("selected-activity").textContent = activityLabels[activity];
     document.getElementById("selected-coordinate").textContent = `${point[1].toFixed(6)}, ${point[0].toFixed(6)}`;
@@ -515,7 +534,10 @@
   document.getElementById("zoom-reset").addEventListener("click", () => setView(INITIAL.lon, INITIAL.lat, INITIAL.zoom));
   document.querySelectorAll("[data-park]").forEach((button) => button.addEventListener("click", () => {
     document.querySelectorAll("[data-park]").forEach((item) => item.classList.toggle("is-active", item === button));
-    const park = parks[button.dataset.park]; setView(park.lon, park.lat, park.zoom);
+    const park = parks[button.dataset.park]; setActiveParkBoundary(park.id); setView(park.lon, park.lat, park.zoom);
+  }));
+  document.querySelectorAll("[data-park-boundary-layer]").forEach((input) => input.addEventListener("change", () => {
+    parkBoundaryPathNodes.forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
   }));
   document.querySelectorAll("[data-layer]").forEach((input) => input.addEventListener("change", () => {
     pathNodes.filter((item) => item.feature.properties.zone_type === input.dataset.layer).forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
@@ -583,5 +605,27 @@
   }).catch(() => {
     document.querySelector(".map-instruction").textContent = "규제도형을 불러오지 못했습니다. 발행파일 경로를 확인하십시오.";
     renderTiles();
+  });
+
+  Promise.all([
+    fetch("park_boundaries.geojson", { cache: "no-store" }).then((response) => response.json()),
+    fetch("park_boundary_source_metadata.json", { cache: "no-store" }).then((response) => response.json()),
+  ]).then(([collection, metadata]) => {
+    parkBoundaryFeatures = collection.features;
+    parkBoundaryFeatures.forEach((feature) => {
+      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      path.setAttribute("class", "park-boundary");
+      path.setAttribute("fill", feature.properties.color);
+      path.setAttribute("stroke", feature.properties.color);
+      path.setAttribute("fill-rule", "evenodd");
+      path.dataset.parkId = feature.properties.park_id;
+      parkBoundaryOverlay.append(path);
+      parkBoundaryPathNodes.push({ node: path, feature });
+    });
+    document.getElementById("park-boundary-legend").title = `${metadata.display_label} · 법적 효력 없음`;
+    renderOverlay();
+  }).catch(() => {
+    const help = document.querySelector(".park-boundary-help");
+    help.textContent = "공원 참고경계를 불러오지 못했습니다. 공원 빠른 이동과 규제도형만 사용할 수 있습니다.";
   });
 })();

@@ -1,0 +1,68 @@
+{
+  "title": "낙동강 5개 생태공원 관리범위 참고경계",
+  "generated_at": "2026-08-29",
+  "feature_count": 5,
+  "geometry_source": {
+    "system": "RIMGIS",
+    "source_file": "river_layers.geojson",
+    "retrieved_at": "2026-08-28T14:46:56+09:00",
+    "method": "공원 중심점과 부산시 공식 안내지도에 대응하는 RIMGIS 하천 관리지구 도형을 공원별로 묶음"
+  },
+  "official_information": {
+    "system": "부산광역시 낙동강관리본부",
+    "overview_url": "https://www.busan.go.kr/nakdong/ndheadinfo01",
+    "parks": [
+      {
+        "park_id": "hwamyeong",
+        "park_name": "화명생태공원",
+        "official_management_area_sq_km": 3.03,
+        "management_length_km": 7.74,
+        "official_info_url": "https://www.busan.go.kr/nakdong/hwamyungpark"
+      },
+      {
+        "park_id": "daejeo",
+        "park_name": "대저생태공원",
+        "official_management_area_sq_km": 3.43,
+        "management_length_km": 7.62,
+        "official_info_url": "https://www.busan.go.kr/nakdong/daejeopark01"
+      },
+      {
+        "park_id": "samrak",
+        "park_name": "삼락생태공원",
+        "official_management_area_sq_km": 4.89,
+        "management_length_km": 7.04,
+        "official_info_url": "https://www.busan.go.kr/nakdong/samrakpark"
+      },
+      {
+        "park_id": "maekdo",
+        "park_name": "맥도생태공원",
+        "official_management_area_sq_km": 2.51,
+        "management_length_km": 6.9,
+        "official_info_url": "https://www.busan.go.kr/nakdong/macdopark"
+      },
+      {
+        "park_id": "eulsukdo",
+        "park_name": "을숙도생태공원",
+        "official_management_area_sq_km": 3.2,
+        "management_length_km": 4.5,
+        "official_info_url": "https://www.busan.go.kr/nakdong/eulsukdo01"
+      }
+    ]
+  },
+  "area_consistency": {
+    "park_page_sum_sq_km": 17.06,
+    "headquarters_total_sq_km": 14.38,
+    "difference_sq_km": 2.68,
+    "handling": "공식 페이지 간 집계 불일치로 면적값을 도형 생성·보정에 사용하지 않음"
+  },
+  "boundary_status": "reference_interpretation",
+  "legal_effect": false,
+  "display_label": "관리범위 참고경계",
+  "sha256": "fa136754d6658f2ebd52a4d23d11182ff4b2e21b62fbce16962d2013c431f0f8",
+  "limitations": [
+    "공원별 법정·지적 경계 또는 도시계획시설 결정도형이 아니다.",
+    "공원색은 위치 구분용이며 행위 허용·제한 등급을 의미하지 않는다.",
+    "배경지도 시설명은 VWorld POI이므로 공원 관리범위 명칭과 다를 수 있다.",
+    "인허가 검토에는 최신 고시도면과 낙동강관리본부·하천관리청 공식 의견이 필요하다."
+  ]
+}

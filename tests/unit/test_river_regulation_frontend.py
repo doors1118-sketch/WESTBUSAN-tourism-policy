@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
+
+from shapely.geometry import Point, shape
 
 ASSET_ROOT = (
     Path(__file__).parents[2]
@@ -25,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-legal-basis-v8"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-park-boundaries-v9"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -78,6 +81,76 @@ def test_river_map_exposes_five_parks_layers_and_click_assessment() -> None:
     assert "법적 효력" in html
     assert "인허가 처분 또는 관리청 공식의견을 대체하지 않습니다" in html
     assert "@media (max-width: 760px)" in stylesheet
+
+
+def test_river_map_distinguishes_five_reference_park_boundaries() -> None:
+    html = _read(RIVER_ROOT / "index.html")
+    script = _read(RIVER_ROOT / "map.js")
+    stylesheet = _read(RIVER_ROOT / "map.css")
+    boundaries = json.loads(_read(RIVER_ROOT / "park_boundaries.geojson"))
+    metadata = json.loads(
+        _read(RIVER_ROOT / "park_boundary_source_metadata.json")
+    )
+
+    assert boundaries["type"] == "FeatureCollection"
+    assert len(boundaries["features"]) == 5
+    properties = [feature["properties"] for feature in boundaries["features"]]
+    assert {item["park_id"] for item in properties} == {
+        "hwamyeong",
+        "daejeo",
+        "samrak",
+        "maekdo",
+        "eulsukdo",
+    }
+    assert len({item["color"] for item in properties}) == 5
+    assert all(item["boundary_status"] == "reference_interpretation" for item in properties)
+    assert all(item["legal_effect"] is False for item in properties)
+    assert all(feature["geometry"]["type"] in {"Polygon", "MultiPolygon"} for feature in boundaries["features"])
+
+    assert metadata["feature_count"] == 5
+    assert metadata["legal_effect"] is False
+    assert metadata["geometry_source"]["system"] == "RIMGIS"
+    assert metadata["official_information"]["system"] == "부산광역시 낙동강관리본부"
+    assert len(metadata["official_information"]["parks"]) == 5
+    assert metadata["area_consistency"]["park_page_sum_sq_km"] == 17.06
+    assert metadata["area_consistency"]["headquarters_total_sq_km"] == 14.38
+    assert len(metadata["sha256"]) == 64
+
+    assert 'id="park-boundary-overlay"' in html
+    assert 'data-park-boundary-layer="park_boundary"' in html
+    assert 'id="park-boundary-legend"' in html
+    assert "관리범위 참고경계" in html
+    assert 'fetch("park_boundaries.geojson"' in script
+    assert 'fetch("park_boundary_source_metadata.json"' in script
+    assert "parkAt" in script
+    assert "setActiveParkBoundary" in script
+    assert ".park-boundary" in stylesheet
+    assert ".park-boundary.is-active" in stylesheet
+    assert "공원색은 규제등급을 의미하지 않습니다" in html
+
+
+def test_reference_park_boundaries_cover_each_published_map_label() -> None:
+    boundary_path = RIVER_ROOT / "park_boundaries.geojson"
+    boundary_bytes = boundary_path.read_bytes()
+    boundaries = json.loads(boundary_bytes.decode("utf-8"))
+    metadata = json.loads(
+        _read(RIVER_ROOT / "park_boundary_source_metadata.json")
+    )
+    label_points = {
+        "hwamyeong": (129.00547, 35.23847),
+        "daejeo": (128.98894, 35.21074),
+        "samrak": (128.9763, 35.1711),
+        "maekdo": (128.95709, 35.15138),
+        "eulsukdo": (128.9523, 35.1172),
+    }
+    by_id = {
+        feature["properties"]["park_id"]: feature
+        for feature in boundaries["features"]
+    }
+
+    for park_id, coordinates in label_points.items():
+        assert shape(by_id[park_id]["geometry"]).covers(Point(*coordinates))
+    assert hashlib.sha256(boundary_bytes).hexdigest() == metadata["sha256"]
 
 
 def test_river_tab_remains_independent_from_investment_and_vacant_maps() -> None:

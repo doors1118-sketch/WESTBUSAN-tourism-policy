@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>낙동강 친수공원 관광개발 규제 검토</title>
-  <link rel="stylesheet" href="map.css?v=20260829-parcel-law-v7">
+  <link rel="stylesheet" href="map.css?v=20260829-park-boundaries-v9">
 </head>
 <body>
   <header class="page-head">
@@ -67,6 +67,16 @@
 
       <section>
         <h2>공간 레이어</h2>
+        <label class="layer-toggle"><input type="checkbox" data-park-boundary-layer="park_boundary" checked><i class="swatch park-boundaries"></i>5개 생태공원 참고경계</label>
+        <div id="park-boundary-legend" class="park-boundary-legend" aria-label="생태공원 색상 범례">
+          <span style="--park-color:#2563EB">화명</span>
+          <span style="--park-color:#D97706">대저</span>
+          <span style="--park-color:#059669">삼락</span>
+          <span style="--park-color:#7C3AED">맥도</span>
+          <span style="--park-color:#DB2777">을숙도</span>
+        </div>
+        <p class="control-help park-boundary-help">부산시 공원 안내도와 RIMGIS 도형을 교차 확인한 관리범위 참고경계입니다. 공원색은 규제등급을 의미하지 않습니다.</p>
+        <div class="layer-divider" aria-hidden="true"></div>
         <label class="layer-toggle"><input type="checkbox" data-layer="river_area" checked><i class="swatch river"></i>하천구역</label>
         <label class="layer-toggle"><input type="checkbox" data-layer="general_conservation" checked><i class="swatch conservation"></i>일반보전지구</label>
         <label class="layer-toggle"><input type="checkbox" data-layer="waterfront" checked><i class="swatch waterfront"></i>근린친수지구</label>
@@ -76,7 +86,7 @@
         <label class="layer-toggle"><input type="checkbox" data-regulation-layer="heritage" checked><i class="swatch heritage"></i>국가유산</label>
         <label class="layer-toggle"><input type="checkbox" data-regulation-layer="urban_park" checked><i class="swatch urban-park"></i>도시공원</label>
         <label class="layer-toggle"><input type="checkbox" data-regulation-layer="land_use" checked><i class="swatch land-use"></i>용도지역(대분류)</label>
-        <p class="control-help">하천 관리구역과 국가유산 지정·보호·허용기준은 승인 스냅샷, 습지·도시공원·용도지역은 VWorld 지점조회입니다. 조회 실패는 ‘중첩 없음’으로 처리하지 않습니다.</p>
+        <p class="control-help">공원 경계는 위치 구분용 참고도형이며 법정·지적 경계가 아닙니다. 배경지도 시설명은 VWorld POI라 공원 관리범위 명칭과 다를 수 있습니다. 하천 관리구역과 국가유산 지정·보호·허용기준은 승인 스냅샷, 습지·도시공원·용도지역은 VWorld 지점조회입니다.</p>
       </section>
     </aside>
 
@@ -90,6 +100,7 @@
         <div id="river-map" data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png" tabindex="0" aria-label="낙동강 생태공원 규제지도">
           <div id="tile-layer" aria-hidden="true"></div>
           <svg id="river-overlay" aria-hidden="true"></svg>
+          <svg id="park-boundary-overlay" aria-hidden="true"></svg>
           <svg id="external-regulation-overlay" aria-hidden="true"></svg>
           <div id="park-labels" aria-hidden="true"></div>
           <div id="click-marker" hidden aria-hidden="true"></div>
@@ -103,7 +114,7 @@
           <div class="assessment-actions"><strong id="assessment-grade" class="grade idle">미선택</strong><button id="policy-insight-button" type="button" disabled>AI 정책인사이트</button></div>
         </div>
         <div class="assessment-facts">
-          <div><span>인근 공원</span><strong id="selected-park">-</strong></div>
+          <div><span>공원 관리범위</span><strong id="selected-park">-</strong></div>
           <div><span>관리구역</span><strong id="selected-zone">-</strong></div>
           <div><span>검토 행위</span><strong id="selected-activity">산책·탐방</strong></div>
           <div><span>좌표</span><strong id="selected-coordinate">-</strong></div>
@@ -134,6 +145,6 @@
     </section>
   </main>
 
-  <script src="map.js?v=20260829-legal-basis-v8"></script>
+  <script src="map.js?v=20260829-park-boundaries-v9"></script>
 </body>
 </html>
