@@ -12,7 +12,7 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel, ConfigDict
 
-LEGAL_BASIS_VERSION = "2026-08-29-v1"
+LEGAL_BASIS_VERSION = "2026-08-29-v2"
 SOURCE_CHECKED_AT = "2026-08-29"
 MANDATORY_POLICY_DISCLAIMER = (
     "이 정책해설은 공간중첩과 확인된 근거법령에 따른 1차 검토이며, "
@@ -68,6 +68,8 @@ def legal_bases_for(
     planning = spatial_evidence.get("parcel_planning")
     if "land_use" in categories or _planning_matched(planning):
         bases.append(_LAND_USE_BASIS)
+    if any("개발제한구역" in name for name in designations):
+        bases.append(_DEVELOPMENT_RESTRICTED_AREA_BASIS)
     if any("도시개발구역" in name for name in designations):
         bases.append(_URBAN_DEVELOPMENT_BASIS)
 
@@ -211,6 +213,20 @@ _LAND_USE_BASIS = LegalBasis(
     rationale="건축·공작물 설치·토지 형질변경과 용도지역별 개발행위 검토의 기본 근거입니다.",
     review_effect="용도지역·지구·구역·지구단위계획과 개발행위허가 기준 확인",
     official_url="https://www.law.go.kr/법령/국토의계획및이용에관한법률",
+)
+_DEVELOPMENT_RESTRICTED_AREA_BASIS = LegalBasis(
+    code="development_restricted_area",
+    law_name="개발제한구역의 지정 및 관리에 관한 특별조치법",
+    articles="제12조(개발제한구역에서의 행위 제한)",
+    rationale=(
+        "개발제한구역에서는 건축·용도변경·공작물 설치·토지 형질변경 등이 "
+        "원칙적으로 제한되며 법정 예외와 허가요건을 확인해야 합니다."
+    ),
+    review_effect="법 제12조와 시행령 별표의 허용시설·규모·입지요건 대조",
+    official_url=(
+        "https://www.law.go.kr/법령/"
+        "개발제한구역의지정및관리에관한특별조치법"
+    ),
 )
 _URBAN_DEVELOPMENT_BASIS = LegalBasis(
     code="urban_development_zone",

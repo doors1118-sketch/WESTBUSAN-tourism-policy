@@ -57,7 +57,7 @@
   };
   const gradeLabels = {
     conditional: "관리청 협의 전제 검토",
-    principally_restricted: "원칙적 불가 가능성 높음",
+    principally_restricted: "원칙적 제한 우세·예외 확인 필요",
     outside_scope: "하천구역 외·별도 법령 검토",
   };
   const regulationLabels = {
@@ -791,6 +791,72 @@
     });
   }
 
+  function appendPolicyFact(root, label, value, { wide = false } = {}) {
+    const card = document.createElement("div");
+    if (wide) card.className = "is-wide";
+    const caption = document.createElement("span"); caption.textContent = label;
+    const strong = document.createElement("strong"); strong.textContent = value;
+    card.append(caption, strong); root.append(card);
+  }
+
+  function renderPolicyEvidenceCounts(review) {
+    const root = document.getElementById("policy-evidence-counts");
+    root.replaceChildren();
+    const riverCount = selectedPoint ? riverOverlapItems(selectedPoint).length : 0;
+    const matches = review && Array.isArray(review.matches) ? review.matches : [];
+    const externalCount = new Set(matches.map((match) => match && match.category).filter(Boolean)).size;
+    const planning = review && review.parcel_planning;
+    const planningCount = planning && planning.status === "matched"
+      ? uniqueText((planning.designations || []).map((item) => item && item.name)).length
+      : 0;
+    [
+      ["하천·공간관리", riverCount, selectedPoint ? "지도 도형" : "미선택"],
+      ["외부 공간규제", externalCount, review ? "지점 교차조회" : "조회 전"],
+      ["필지 도시계획 지정", planningCount, planning && planning.status === "matched" ? "PNU 기준" : "필지 미확정"],
+    ].forEach(([label, count, source]) => {
+      const card = document.createElement("div");
+      const caption = document.createElement("span"); caption.textContent = label;
+      const strong = document.createElement("strong"); strong.textContent = `${count}개`;
+      const small = document.createElement("small"); small.textContent = source;
+      card.append(caption, strong, small); root.append(card);
+    });
+  }
+
+  function renderPolicyParcelFacts(review) {
+    const root = document.getElementById("policy-parcel-facts");
+    const status = document.getElementById("policy-parcel-facts-status");
+    root.replaceChildren();
+    const planning = review && review.parcel_planning;
+    if (!planning || planning.status !== "matched") {
+      status.className = "is-unconfirmed";
+      status.textContent = selectedPnu ? "필지 자료 미확인" : "PNU 미확정";
+      const message = document.createElement("p");
+      message.textContent = planning && planning.reason
+        ? planning.reason
+        : "주소·지번 검색 또는 지도 클릭 PNU 자동연결 후 필지 사실을 확인합니다.";
+      root.append(message);
+      return;
+    }
+    const sourceDate = planning.source_date || (planning.checked_at || "").slice(0, 10) || "기준일 미확인";
+    status.className = "is-confirmed";
+    status.textContent = `확인됨 · ${sourceDate}`;
+    const characteristics = planning.characteristics || {};
+    const coordinates = selectedPoint
+      ? `${selectedPoint[1].toFixed(6)}, ${selectedPoint[0].toFixed(6)}`
+      : "미확인";
+    const area = Number.isFinite(characteristics.parcel_area)
+      ? `${characteristics.parcel_area.toLocaleString("ko-KR")}㎡`
+      : "미확인";
+    const designations = uniqueText((planning.designations || []).map((item) => item && item.name));
+    appendPolicyFact(root, "PNU", planning.pnu || selectedPnu || "미확인");
+    appendPolicyFact(root, "좌표", coordinates);
+    appendPolicyFact(root, "지목", characteristics.land_category || "미확인");
+    appendPolicyFact(root, "필지면적", area);
+    appendPolicyFact(root, "도로접면", characteristics.road_side || "미확인");
+    appendPolicyFact(root, "이용상황", characteristics.land_use_situation || "미확인");
+    appendPolicyFact(root, "도시계획 지정", designations.length ? designations.join(" · ") : "공식 지정명 미확인", { wide: true });
+  }
+
   async function queryPolicyInsight() {
     if (!selectedPoint || policyInsightButton.disabled) return;
     if (policyInsightController) policyInsightController.abort();
@@ -801,10 +867,13 @@
     document.getElementById("policy-insight-title").textContent = "선택지 정책인사이트";
     document.getElementById("policy-insight-copy").textContent = "공간판정과 내부 법령근거 캐시를 확인하고 있습니다.";
     document.getElementById("policy-evidence-summary").textContent = "선택지 공간중첩, 검토 행위, PNU 도시계획 판정과 근거법령을 연결하고 있습니다.";
+    renderPolicyEvidenceCounts(latestRegulationReview);
+    renderPolicyParcelFacts(latestRegulationReview);
     fillList(document.getElementById("policy-options"), []);
     fillList(document.getElementById("required-consultations"), []);
     document.getElementById("legal-source-links").replaceChildren();
     document.getElementById("policy-insight-limit").textContent = "";
+    document.getElementById("policy-insight-meta").textContent = "생성 상태와 근거자료 버전을 확인하고 있습니다.";
     const zone = zoneAt(selectedPoint);
     const body = {
       longitude: selectedPoint[0],
@@ -827,11 +896,8 @@
       const insight = await response.json();
       document.getElementById("policy-insight-title").textContent = insight.headline;
       document.getElementById("policy-insight-copy").textContent = insight.policy_insight;
-      const overlapCount = latestRegulationReview && Array.isArray(latestRegulationReview.matches)
-        ? new Set(latestRegulationReview.matches.map((match) => match.category).filter(Boolean)).size
-        : 0;
       const legalCount = Array.isArray(insight.legal_bases) ? insight.legal_bases.length : 0;
-      document.getElementById("policy-evidence-summary").textContent = `1차 판정: ${insight.deterministic_label} · 외부 규제범주 ${overlapCount}개 중첩 · 근거법령 ${legalCount}건 연결. AI는 공간판정 등급을 변경하지 않고 정책 검토경로만 설명합니다.`;
+      document.getElementById("policy-evidence-summary").textContent = `현재 단계: ${insight.deterministic_label} · 근거법령 ${legalCount}건 연결. AI는 공간판정 등급을 변경하지 않고 원안·조정안·대체입지의 검토경로만 설명합니다.`;
       const evidenceLabel = insight.legal_evidence_source === "curated_registry_and_mcp"
         ? "공식 근거법령 + MCP 보조검색"
         : insight.legal_evidence_source === "curated_registry"
@@ -841,6 +907,8 @@
         ? `${insight.cached ? "AI 해설 캐시" : "AI 정책해설"}`
         : "기본 정책해설";
       document.getElementById("policy-insight-status").textContent = `${explanationLabel} · ${evidenceLabel}`;
+      renderPolicyEvidenceCounts(latestRegulationReview);
+      renderPolicyParcelFacts(latestRegulationReview);
       fillList(document.getElementById("policy-options"), insight.policy_options);
       fillList(document.getElementById("required-consultations"), insight.required_consultations);
       const sourceRoot = document.getElementById("legal-source-links");
@@ -861,11 +929,16 @@
         });
       }
       document.getElementById("policy-insight-limit").textContent = insight.limitations;
+      const generatedAt = insight.generated_at
+        ? new Date(insight.generated_at).toLocaleString("ko-KR", { hour12: false })
+        : "생성시각 미확인";
+      document.getElementById("policy-insight-meta").textContent = `${insight.cached ? "캐시 재사용" : "신규 생성"} · ${generatedAt} · 법령 ${insight.legal_basis_version || "버전 미확인"} · 모델 ${insight.model || "미확인"}`;
     } catch (error) {
       if (error.name === "AbortError") return;
       document.getElementById("policy-insight-status").textContent = "생성 실패";
       document.getElementById("policy-insight-copy").textContent = "정책해설 서비스에 연결하지 못했습니다. 위 공간판정과 선행 확인사항만 사용하십시오.";
       document.getElementById("policy-evidence-summary").textContent = "AI 해설은 실패했지만 서버 결정규칙의 공간중첩·1차 판정근거는 그대로 유지됩니다.";
+      document.getElementById("policy-insight-meta").textContent = "AI 생성 실패 · 위의 결정규칙 기반 판정과 필지 사실만 사용하십시오.";
     } finally {
       policyInsightButton.disabled = false;
     }

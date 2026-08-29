@@ -24,6 +24,7 @@ def test_legal_bases_cover_matched_river_environment_heritage_and_planning() -> 
                 "status": "matched",
                 "designations": [
                     {"name": "자연녹지지역", "category": "land_use_zone"},
+                    {"name": "개발제한구역", "category": "land_use_area"},
                     {"name": "도시개발구역", "category": "land_use_area"},
                 ],
             },
@@ -40,6 +41,7 @@ def test_legal_bases_cover_matched_river_environment_heritage_and_planning() -> 
         "heritage_impact_assessment",
         "urban_park",
         "land_use_and_development",
+        "development_restricted_area",
         "urban_development_zone",
         "building_permission",
         "tourism_business_registration",
@@ -49,6 +51,11 @@ def test_legal_bases_cover_matched_river_environment_heritage_and_planning() -> 
         for basis in bases
     )
     assert all(basis.source_checked_at == "2026-08-29" for basis in bases)
+    greenbelt = next(
+        basis for basis in bases if basis.code == "development_restricted_area"
+    )
+    assert greenbelt.law_name == "개발제한구역의 지정 및 관리에 관한 특별조치법"
+    assert "제12조" in greenbelt.articles
 
 
 def test_river_law_is_not_claimed_outside_published_river_area() -> None:

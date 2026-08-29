@@ -241,6 +241,8 @@ def test_river_policy_payload_cannot_replace_deterministic_grade() -> None:
     assert "tools" not in payload
     instructions = payload["input"][0]["content"][0]["text"]
     assert "절대 변경" in instructions
+    assert "숙박시설" in instructions
+    assert "가설·이동식 숙박" in instructions
 
 
 class _StubGenerator:

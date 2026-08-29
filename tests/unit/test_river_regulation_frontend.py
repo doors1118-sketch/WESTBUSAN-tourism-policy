@@ -28,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-layer-clear-v17"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-ai-decision-v18"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -75,10 +75,17 @@ def test_river_map_exposes_five_parks_layers_and_click_assessment() -> None:
     assert 'id="assessment-basis-list"' in html
     assert 'id="assessment-check-list"' in html
     assert 'id="policy-evidence-summary"' in html
+    assert 'id="policy-evidence-counts"' in html
+    assert 'id="policy-parcel-facts"' in html
+    assert 'id="policy-insight-meta"' in html
     assert 'fetch("/tourism/api/regulations/insight"' in script
     assert "legal_evidence_source" in script
     assert "basis.law_name" in script
     assert "basis.articles" in script
+    assert "function renderPolicyParcelFacts" in script
+    assert "하천·공간관리" in script
+    assert "필지 도시계획 지정" in script
+    assert "외부 규제범주" not in script
     assert "parcel_resolution" in script
     assert 'query.set("height_m"' in script
     assert 'query.set("roof_type"' in script
@@ -191,6 +198,9 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
     assert ".overlap-badge" in stylesheet
     assert ".assessment-support-list" in stylesheet
     assert ".policy-evidence-summary" in stylesheet
+    assert ".policy-evidence-counts" in stylesheet
+    assert ".policy-parcel-facts" in stylesheet
+    assert ".policy-insight-meta" in stylesheet
     assert ".focus-feature-label" in stylesheet
     assert "#river-map.has-focused-layer #tile-layer" in stylesheet
     assert "stroke-opacity:.72" in stylesheet
@@ -198,7 +208,7 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
 
     assert html.count(">강조</button>") == 4
 
-    version = "20260829-layer-clear-v17"
+    version = "20260829-ai-decision-v18"
     assert f"map.css?v={version}" in html
     assert f"map.js?v={version}" in html
     assert f'river-map/index.html?v={version}' in dashboard_html

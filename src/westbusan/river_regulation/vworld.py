@@ -470,7 +470,7 @@ def _combine_results(
     labels = {
         "outside_scope": "하천구역 외·별도 법령 검토",
         "conditional": "복수 규제 조건부 검토",
-        "principally_restricted": "원칙적 불가 가능성 높음",
+        "principally_restricted": "원칙적 제한 우세·예외 확인 필요",
     }
     matched_categories = sorted({match.category for match in matches})
     external_reason = (

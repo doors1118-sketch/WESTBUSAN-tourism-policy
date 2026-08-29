@@ -722,7 +722,7 @@ def test_river_policy_insight_uses_cached_legal_evidence_and_ai_result(
         "https://www.law.go.kr/법령/관광진흥법",
     ]
     assert first.json()["source"] == "openai"
-    assert first.json()["prompt_version"].endswith("-river-v4")
+    assert first.json()["prompt_version"].endswith("-river-v5")
     assert first.json()["cached"] is False
     assert second.json()["cached"] is True
     assert law_client.calls == 1
@@ -821,6 +821,8 @@ def test_river_policy_keeps_grounded_basic_explanation_when_ai_is_unavailable(
     assert "1차 판정" in response.json()["policy_insight"]
     assert "공간중첩" in response.json()["policy_insight"]
     assert any("대체입지" in item for item in response.json()["policy_options"])
+    assert not any("가설" in item for item in response.json()["policy_options"])
+    assert any("숙박 원안" in item for item in response.json()["policy_options"])
     assert any("사업계획" in item for item in response.json()["required_consultations"])
     assert "인허가 처분 또는 관리청 공식의견을 대체하지 않습니다" in (
         response.json()["limitations"]

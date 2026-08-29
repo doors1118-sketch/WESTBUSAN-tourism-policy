@@ -208,6 +208,7 @@ class RiverPolicyInsightService:
         return self.cache.get_or_generate(
             identity=identity,
             generate=lambda: self._generate_response(
+                request=request,
                 spatial=spatial_evidence,
                 bases=bases,
                 legal_text=legal_text,
@@ -251,6 +252,7 @@ class RiverPolicyInsightService:
     def _generate_response(
         self,
         *,
+        request: RiverPolicyInsightRequest,
         spatial: dict[str, object],
         bases: tuple[LegalBasis, ...],
         legal_text: str,
@@ -261,14 +263,17 @@ class RiverPolicyInsightService:
         if bases or mcp_legal is not None:
             try:
                 model_value = self.generator.generate_river_policy_insight(
-                    spatial_evidence=_safe_spatial_evidence(spatial),
+                    spatial_evidence=_safe_spatial_evidence(
+                        spatial,
+                        request=request,
+                    ),
                     legal_evidence=legal_text,
                 )
                 source = "openai"
             except (RuntimeError, TypeError, ValueError):
-                model_value = _fallback(spatial, bases=bases)
+                model_value = _fallback(spatial, bases=bases, request=request)
         else:
-            model_value = _fallback(spatial, bases=bases)
+            model_value = _fallback(spatial, bases=bases, request=request)
         source_urls = list(
             dict.fromkeys(
                 [basis.official_url for basis in bases]
@@ -369,8 +374,12 @@ def _spatial_identity(spatial: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _safe_spatial_evidence(spatial: Mapping[str, object]) -> dict[str, object]:
-    return {
+def _safe_spatial_evidence(
+    spatial: Mapping[str, object],
+    *,
+    request: RiverPolicyInsightRequest,
+) -> dict[str, object]:
+    evidence = {
         key: value
         for key, value in spatial.items()
         if key
@@ -387,10 +396,19 @@ def _safe_spatial_evidence(spatial: Mapping[str, object]) -> dict[str, object]:
             "parcel_planning",
         }
     }
+    evidence["selected_activity"] = request.activity
+    evidence["selected_coordinate"] = {
+        "longitude": request.longitude,
+        "latitude": request.latitude,
+    }
+    return evidence
 
 
 def _fallback(
-    spatial: Mapping[str, object], *, bases: Sequence[LegalBasis]
+    spatial: Mapping[str, object],
+    *,
+    bases: Sequence[LegalBasis],
+    request: RiverPolicyInsightRequest,
 ) -> ModelRiverPolicyInsight:
     label = str(spatial.get("label") or "사전검토 미완료")
     reason = str(spatial.get("reason") or "공간규제 자료를 확인해야 합니다.")
@@ -416,11 +434,18 @@ def _fallback(
     )
     grade = str(spatial.get("grade") or "unreviewed")
     if grade == "principally_restricted":
-        options = [
-            "원안은 제한 가능성을 전제로 관리청 사전협의 후 유지 여부 결정",
-            "영구구조물·점용면적·차량진입을 줄인 가설·철거가능 대안 비교",
-            "동일 수요권의 규제중첩이 적은 하천구역 밖 대체입지 병행 검토",
-        ]
+        if request.activity == "lodging":
+            options = [
+                "숙박 원안은 현 단계에서 보류하고 법정 예외와 관리청 사전협의 결과로 재검토",
+                "동일 수요권의 규제중첩이 적은 하천구역 밖 배후부지를 대체입지로 우선 비교",
+                "하천구역 안 대안은 숙박이 아닌 최소점용형 공공·관광활동으로 분리 검토",
+            ]
+        else:
+            options = [
+                "원안은 제한 가능성을 전제로 관리청 사전협의 후 유지 여부 결정",
+                "영구구조물·점용면적·차량진입을 줄인 가설·철거가능 대안 비교",
+                "동일 수요권의 규제중첩이 적은 하천구역 밖 대체입지 병행 검토",
+            ]
     elif grade == "conditional":
         options = [
             "사업규모·운영기간·홍수기 철거계획을 명시한 조건부 원안 검토",
