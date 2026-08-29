@@ -642,6 +642,7 @@
     try {
       const response = await fetch(`/tourism/api/regulations/point?${query}`, {
         headers: { Accept: "application/json" },
+        cache: "no-store",
         signal: regulationController.signal,
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);

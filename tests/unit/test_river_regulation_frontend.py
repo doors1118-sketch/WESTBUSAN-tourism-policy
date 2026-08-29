@@ -28,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-wetland-extent-v12"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-wetland-extent-v13"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -163,6 +163,7 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
     assert 'fetch("wetland_boundary_source_metadata.json"' in script
     assert "full_extent_snapshot" in script
     assert "전수경계 지도 표시" in script
+    assert 'cache: "no-store"' in script
 
     assert ".layer-focus-button" in stylesheet
     assert ".is-focus-layer" in stylesheet
@@ -172,7 +173,7 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
     assert ".focus-feature-label" in stylesheet
     assert "#river-map.has-focused-layer #tile-layer" in stylesheet
 
-    version = "20260829-wetland-extent-v12"
+    version = "20260829-wetland-extent-v13"
     assert f"map.css?v={version}" in html
     assert f"map.js?v={version}" in html
     assert f'river-map/index.html?v={version}' in dashboard_html
