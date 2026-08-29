@@ -722,7 +722,7 @@ def test_river_policy_insight_uses_cached_legal_evidence_and_ai_result(
         "https://www.law.go.kr/법령/관광진흥법",
     ]
     assert first.json()["source"] == "openai"
-    assert first.json()["prompt_version"].endswith("-river-v3")
+    assert first.json()["prompt_version"].endswith("-river-v4")
     assert first.json()["cached"] is False
     assert second.json()["cached"] is True
     assert law_client.calls == 1
