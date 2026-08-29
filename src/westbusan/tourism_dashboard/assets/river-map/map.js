@@ -20,6 +20,8 @@
   const parcelSearchState = document.getElementById("parcel-search-state");
   const policyInsightButton = document.getElementById("policy-insight-button");
   const policyInsightPanel = document.getElementById("policy-insight-panel");
+  const layerFocusStatus = document.getElementById("layer-focus-status");
+  const resetLayerFocus = document.getElementById("reset-layer-focus");
   const tileNodes = new Map();
   const parkBoundaryPathNodes = [];
   const pathNodes = [];
@@ -32,6 +34,7 @@
   let regulationController = null;
   let regulationSequence = 0;
   let policyInsightController = null;
+  let focusedLayer = null;
 
   const parks = {
     hwamyeong: { id: "hwamyeong", name: "화명생태공원", color: "#2563EB", lon: 129.00547, lat: 35.23847, zoom: 14 },
@@ -60,6 +63,13 @@
     heritage: "국가유산",
     urban_park: "도시공원",
     land_use: "용도지역",
+  };
+  const layerDisplayLabels = {
+    river_area: "하천구역",
+    general_conservation: "일반보전지구",
+    waterfront: "근린친수지구",
+    restoration: "복원지구",
+    ...regulationLabels,
   };
   const regulationStatusLabels = {
     no_overlap: "선택 지점 중첩 없음",
@@ -196,6 +206,113 @@
     });
   }
 
+  function inputForLayer(layer) {
+    return document.querySelector(`[data-layer="${layer}"], [data-regulation-layer="${layer}"]`);
+  }
+
+  function applyLayerReadability() {
+    const hasFocus = Boolean(focusedLayer);
+    map.classList.toggle("has-focused-layer", hasFocus);
+    pathNodes.forEach(({ node, feature }) => {
+      const layer = feature.properties.zone_type;
+      node.classList.toggle("is-focus-layer", hasFocus && layer === focusedLayer);
+      node.classList.toggle("is-context-layer", hasFocus && layer !== focusedLayer);
+    });
+    externalPathNodes.forEach(({ node, feature }) => {
+      const layer = feature.properties.category;
+      node.classList.toggle("is-focus-layer", hasFocus && layer === focusedLayer);
+      node.classList.toggle("is-context-layer", hasFocus && layer !== focusedLayer);
+    });
+    parkBoundaryPathNodes.forEach(({ node }) => node.classList.toggle("is-regulation-context", hasFocus));
+    document.querySelectorAll("[data-focus-layer]").forEach((button) => {
+      const active = hasFocus && button.dataset.focusLayer === focusedLayer;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+      button.textContent = active ? "강조 중" : "강조";
+    });
+    resetLayerFocus.disabled = !hasFocus;
+    layerFocusStatus.classList.toggle("is-active", hasFocus);
+    layerFocusStatus.textContent = hasFocus
+      ? `${layerDisplayLabels[focusedLayer]}만 면으로 강조하고, 나머지는 윤곽으로 표시합니다.`
+      : "전체 레이어를 함께 표시합니다.";
+  }
+
+  function setFocusedLayer(layer) {
+    focusedLayer = layer && focusedLayer !== layer ? layer : null;
+    if (focusedLayer) {
+      const input = inputForLayer(focusedLayer);
+      if (input) input.checked = true;
+      pathNodes.filter((item) => item.feature.properties.zone_type === focusedLayer)
+        .forEach((item) => item.node.classList.remove("is-hidden"));
+      externalPathNodes.filter((item) => item.feature.properties.category === focusedLayer)
+        .forEach((item) => item.node.classList.remove("is-hidden"));
+    }
+    applyLayerReadability();
+  }
+
+  function riverOverlapItems(point) {
+    if (!point) return [];
+    const found = new Set();
+    return features.filter((feature) => pointInFeature(point, feature)).reduce((items, feature) => {
+      const layer = feature.properties.zone_type;
+      if (!layerDisplayLabels[layer] || found.has(layer)) return items;
+      found.add(layer);
+      items.push({ layer, label: layerDisplayLabels[layer] });
+      return items;
+    }, []);
+  }
+
+  function renderOverlapSummary(review = null, pending = false) {
+    const root = document.getElementById("overlap-badges");
+    const count = document.getElementById("overlap-count");
+    const note = document.getElementById("overlap-summary-note");
+    root.replaceChildren();
+    if (!selectedPoint) {
+      const empty = document.createElement("span");
+      empty.className = "overlap-empty";
+      empty.textContent = "지도에서 지점을 선택하십시오.";
+      root.append(empty);
+      count.textContent = "위치 선택 전";
+      note.textContent = "색상 합성 대신 실제 중첩 레이어를 명칭으로 확인합니다.";
+      return;
+    }
+    const items = riverOverlapItems(selectedPoint);
+    const matches = review && Array.isArray(review.matches) ? review.matches : [];
+    const statuses = review && Array.isArray(review.layer_statuses) ? review.layer_statuses : [];
+    Object.keys(regulationLabels).forEach((category) => {
+      const categoryMatches = matches.filter((match) => match.category === category);
+      const status = statuses.find((item) => item.category === category);
+      if (!categoryMatches.length && (!status || status.status !== "matched")) return;
+      const names = [...new Set(categoryMatches.map((match) => match.label).filter(Boolean))];
+      items.push({
+        layer: category,
+        label: names.length ? `${regulationLabels[category]} · ${names.join(" · ")}` : regulationLabels[category],
+      });
+    });
+    const byLayer = new Map();
+    items.forEach((item) => { if (!byLayer.has(item.layer)) byLayer.set(item.layer, item); });
+    byLayer.forEach((item) => {
+      const badge = document.createElement("button");
+      badge.type = "button";
+      badge.className = `overlap-badge overlap-${item.layer}`;
+      badge.dataset.overlapLayer = item.layer;
+      badge.textContent = item.label;
+      badge.title = `${item.label} 레이어 강조`;
+      badge.addEventListener("click", () => setFocusedLayer(item.layer));
+      root.append(badge);
+    });
+    count.textContent = `${byLayer.size}개 레이어 중첩`;
+    const missing = statuses.filter((status) => ["provider_error", "invalid_response"].includes(status.status))
+      .map((status) => regulationLabels[status.category]).filter(Boolean);
+    if (pending) {
+      note.textContent = "하천 관리구역을 먼저 표시했습니다. 외부 규제 레이어는 조회 중입니다.";
+    } else if (missing.length) {
+      note.textContent = `미판정: ${missing.join("·")} · 조회 실패는 중첩 없음으로 해석하지 않습니다.`;
+    } else {
+      note.textContent = "배지를 누르면 해당 레이어만 강조하고 나머지는 윤곽으로 전환합니다.";
+    }
+  }
+
   function zoneAt(point) {
     const hits = features.filter((feature) => pointInFeature(point, feature));
     const specific = hits.filter((feature) => feature.properties.zone_type !== "river_area")
@@ -280,6 +397,7 @@
       const zone = heritage.zone_name ? ` · ${heritage.zone_name}` : "";
       heritageCard.querySelector("small").textContent = `${checked} 승인 스냅샷${zone}`;
     }
+    renderOverlapSummary(review);
   }
 
   function renderExternalRegulations(collection) {
@@ -295,6 +413,7 @@
       externalOverlay.append(path);
       externalPathNodes.push({ node: path, feature });
     });
+    applyLayerReadability();
     renderOverlay();
   }
 
@@ -364,6 +483,9 @@
       grade: "unreviewed",
       label: "필지 규제 조회 실패·미판정",
       reason: message,
+    });
+    renderOverlapSummary({
+      layer_statuses: Object.keys(regulationLabels).map((category) => ({ category, status: "provider_error" })),
     });
   }
 
@@ -509,6 +631,7 @@
     policyInsightButton.disabled = true;
     policyInsightPanel.hidden = true;
     setRegulationResultsLoading();
+    renderOverlapSummary(null, true);
     regulationSequence += 1;
     void queryRegulations(point, zone, activity, regulationSequence);
   }
@@ -541,11 +664,20 @@
   }));
   document.querySelectorAll("[data-layer]").forEach((input) => input.addEventListener("change", () => {
     pathNodes.filter((item) => item.feature.properties.zone_type === input.dataset.layer).forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
+    if (!input.checked && focusedLayer === input.dataset.layer) focusedLayer = null;
+    applyLayerReadability();
   }));
   document.querySelectorAll("[data-regulation-layer]").forEach((input) => input.addEventListener("change", () => {
     externalPathNodes.filter((item) => item.feature.properties.category === input.dataset.regulationLayer)
       .forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
+    if (!input.checked && focusedLayer === input.dataset.regulationLayer) focusedLayer = null;
+    applyLayerReadability();
   }));
+  document.querySelectorAll("[data-focus-layer]").forEach((button) => button.addEventListener("click", () => {
+    setFocusedLayer(button.dataset.focusLayer);
+  }));
+  resetLayerFocus.addEventListener("click", () => setFocusedLayer(null));
+  applyLayerReadability();
   activitySelect.addEventListener("change", () => { document.getElementById("selected-activity").textContent = activityLabels[activitySelect.value]; if (selectedPoint) updateAssessment(selectedPoint); });
   structureHeight.addEventListener("change", () => { if (selectedPoint) updateAssessment(selectedPoint); });
   roofType.addEventListener("change", () => { if (selectedPoint) updateAssessment(selectedPoint); });
@@ -601,6 +733,7 @@
       path.setAttribute("class", `zone-feature zone-${feature.properties.zone_type}`); path.setAttribute("fill-rule", "evenodd");
       overlay.append(path); pathNodes.push({ node: path, feature });
     });
+    applyLayerReadability();
     render();
   }).catch(() => {
     document.querySelector(".map-instruction").textContent = "규제도형을 불러오지 못했습니다. 발행파일 경로를 확인하십시오.";

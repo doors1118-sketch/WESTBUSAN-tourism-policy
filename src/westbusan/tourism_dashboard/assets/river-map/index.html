@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>낙동강 친수공원 관광개발 규제 검토</title>
-  <link rel="stylesheet" href="map.css?v=20260829-park-boundaries-v9">
+  <link rel="stylesheet" href="map.css?v=20260829-layer-focus-v10">
 </head>
 <body>
   <header class="page-head">
@@ -77,15 +77,17 @@
         </div>
         <p class="control-help park-boundary-help">부산시 공원 안내도와 RIMGIS 도형을 교차 확인한 관리범위 참고경계입니다. 공원색은 규제등급을 의미하지 않습니다.</p>
         <div class="layer-divider" aria-hidden="true"></div>
-        <label class="layer-toggle"><input type="checkbox" data-layer="river_area" checked><i class="swatch river"></i>하천구역</label>
-        <label class="layer-toggle"><input type="checkbox" data-layer="general_conservation" checked><i class="swatch conservation"></i>일반보전지구</label>
-        <label class="layer-toggle"><input type="checkbox" data-layer="waterfront" checked><i class="swatch waterfront"></i>근린친수지구</label>
-        <label class="layer-toggle"><input type="checkbox" data-layer="restoration" checked><i class="swatch restoration"></i>복원지구</label>
+        <div class="layer-readability-head"><strong>규제 레이어 판독</strong><button id="reset-layer-focus" type="button">전체 중첩</button></div>
+        <p id="layer-focus-status" class="layer-focus-status" role="status">전체 레이어를 함께 표시합니다.</p>
+        <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-layer="river_area" checked><i class="swatch river"></i>하천구역</label><button type="button" class="layer-focus-button" data-focus-layer="river_area" aria-pressed="false">강조</button></div>
+        <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-layer="general_conservation" checked><i class="swatch conservation"></i>일반보전지구</label><button type="button" class="layer-focus-button" data-focus-layer="general_conservation" aria-pressed="false">강조</button></div>
+        <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-layer="waterfront" checked><i class="swatch waterfront"></i>근린친수지구</label><button type="button" class="layer-focus-button" data-focus-layer="waterfront" aria-pressed="false">강조</button></div>
+        <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-layer="restoration" checked><i class="swatch restoration"></i>복원지구</label><button type="button" class="layer-focus-button" data-focus-layer="restoration" aria-pressed="false">강조</button></div>
         <div class="layer-divider" aria-hidden="true"></div>
-        <label class="layer-toggle"><input type="checkbox" data-regulation-layer="wetland" checked><i class="swatch wetland"></i>습지보호구역</label>
-        <label class="layer-toggle"><input type="checkbox" data-regulation-layer="heritage" checked><i class="swatch heritage"></i>국가유산</label>
-        <label class="layer-toggle"><input type="checkbox" data-regulation-layer="urban_park" checked><i class="swatch urban-park"></i>도시공원</label>
-        <label class="layer-toggle"><input type="checkbox" data-regulation-layer="land_use" checked><i class="swatch land-use"></i>용도지역(대분류)</label>
+        <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-regulation-layer="wetland" checked><i class="swatch wetland"></i>습지보호구역</label><button type="button" class="layer-focus-button" data-focus-layer="wetland" aria-pressed="false">강조</button></div>
+        <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-regulation-layer="heritage" checked><i class="swatch heritage"></i>국가유산</label><button type="button" class="layer-focus-button" data-focus-layer="heritage" aria-pressed="false">강조</button></div>
+        <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-regulation-layer="urban_park" checked><i class="swatch urban-park"></i>도시공원</label><button type="button" class="layer-focus-button" data-focus-layer="urban_park" aria-pressed="false">강조</button></div>
+        <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-regulation-layer="land_use" checked><i class="swatch land-use"></i>용도지역(대분류)</label><button type="button" class="layer-focus-button" data-focus-layer="land_use" aria-pressed="false">강조</button></div>
         <p class="control-help">공원 경계는 위치 구분용 참고도형이며 법정·지적 경계가 아닙니다. 배경지도 시설명은 VWorld POI라 공원 관리범위 명칭과 다를 수 있습니다. 하천 관리구역과 국가유산 지정·보호·허용기준은 승인 스냅샷, 습지·도시공원·용도지역은 VWorld 지점조회입니다.</p>
       </section>
     </aside>
@@ -119,6 +121,11 @@
           <div><span>검토 행위</span><strong id="selected-activity">산책·탐방</strong></div>
           <div><span>좌표</span><strong id="selected-coordinate">-</strong></div>
         </div>
+        <section id="overlap-summary" class="overlap-summary" aria-labelledby="overlap-summary-title">
+          <div class="overlap-summary-head"><span id="overlap-summary-title">선택지 공간중첩</span><strong id="overlap-count">위치 선택 전</strong></div>
+          <div id="overlap-badges" class="overlap-badges"><span class="overlap-empty">지도에서 지점을 선택하십시오.</span></div>
+          <p id="overlap-summary-note">색상 합성 대신 실제 중첩 레이어를 명칭으로 확인합니다.</p>
+        </section>
         <div class="assessment-copy">
           <div><h3>1차 판정 근거</h3><p id="assessment-reason">위치 선택 전입니다.</p></div>
           <div><h3>선행 확인사항</h3><p id="assessment-next">최신 고시도면·사업계획·관리청 공식의견이 필요합니다.</p></div>
@@ -145,6 +152,6 @@
     </section>
   </main>
 
-  <script src="map.js?v=20260829-park-boundaries-v9"></script>
+  <script src="map.js?v=20260829-layer-focus-v10"></script>
 </body>
 </html>

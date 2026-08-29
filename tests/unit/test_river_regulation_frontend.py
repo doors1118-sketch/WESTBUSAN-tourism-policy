@@ -28,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-park-boundaries-v9"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-layer-focus-v10"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -127,6 +127,42 @@ def test_river_map_distinguishes_five_reference_park_boundaries() -> None:
     assert ".park-boundary" in stylesheet
     assert ".park-boundary.is-active" in stylesheet
     assert "공원색은 규제등급을 의미하지 않습니다" in html
+
+
+def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
+    html = _read(RIVER_ROOT / "index.html")
+    script = _read(RIVER_ROOT / "map.js")
+    stylesheet = _read(RIVER_ROOT / "map.css")
+    dashboard_html = _read(ASSET_ROOT / "index.html")
+
+    assert 'id="layer-focus-status"' in html
+    assert 'id="reset-layer-focus"' in html
+    assert html.count('class="layer-focus-button"') == 8
+    assert html.count('aria-pressed="false"') >= 8
+    assert 'id="overlap-summary"' in html
+    assert 'id="overlap-count"' in html
+    assert 'id="overlap-badges"' in html
+    assert 'id="overlap-summary-note"' in html
+
+    assert "function setFocusedLayer" in script
+    assert "function applyLayerReadability" in script
+    assert "function renderOverlapSummary" in script
+    assert 'classList.toggle("is-focus-layer"' in script
+    assert 'classList.toggle("is-context-layer"' in script
+    assert 'setAttribute("aria-pressed"' in script
+    assert "provider_error" in script
+    assert "invalid_response" in script
+
+    assert ".layer-focus-button" in stylesheet
+    assert ".is-focus-layer" in stylesheet
+    assert ".is-context-layer" in stylesheet
+    assert ".overlap-summary" in stylesheet
+    assert ".overlap-badge" in stylesheet
+
+    version = "20260829-layer-focus-v10"
+    assert f"map.css?v={version}" in html
+    assert f"map.js?v={version}" in html
+    assert f'river-map/index.html?v={version}' in dashboard_html
 
 
 def test_reference_park_boundaries_cover_each_published_map_label() -> None:
