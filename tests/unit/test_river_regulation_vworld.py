@@ -53,6 +53,8 @@ def test_point_review_queries_allowlisted_layers_and_returns_cumulative_matches(
         requested.append(request)
         dataset = request.url.params["data"]
         if dataset == "LT_C_UM901":
+            return _ok(_feature("습지보호지역"), _feature("습지보호지역"))
+        if dataset == "LT_C_WGISARWET":
             return _ok(_feature("낙동강하구 습지보호지역"))
         if dataset == "LT_C_UO301":
             return _ok(_feature("낙동강 하류 철새 도래지"))
@@ -106,6 +108,11 @@ def test_point_review_queries_allowlisted_layers_and_returns_cumulative_matches(
         "자연환경보전지역",
     }
     assert "을숙도 광장" not in {match.label for match in review.matches}
+    assert [match.category for match in review.matches].count("wetland") == 1
+    wetland_status = next(
+        status for status in review.layer_statuses if status.category == "wetland"
+    )
+    assert wetland_status.feature_count == 1
     document = json.loads(json.dumps(review.as_public_dict(), ensure_ascii=False))
     assert "sentinel-secret" not in json.dumps(document)
     assert "internal_code" not in json.dumps(document)

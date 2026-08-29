@@ -428,7 +428,9 @@ def _combine_results(
     results: tuple[_DatasetResult, ...],
 ) -> PointRegulationReview:
     river = assess_activity(river_zone, activity)
-    matches = tuple(match for result in results for match in result.matches)
+    matches = _deduplicate_matches(
+        tuple(match for result in results for match in result.matches)
+    )
     categories: tuple[LayerCategory, ...] = (
         "wetland",
         "heritage",
@@ -439,7 +441,7 @@ def _combine_results(
     missing: list[LayerCategory] = []
     for category in categories:
         category_results = [result for result in results if result.spec.category == category]
-        category_matches = [match for result in category_results for match in result.matches]
+        category_matches = [match for match in matches if match.category == category]
         failures = [
             result.status
             for result in category_results
@@ -506,6 +508,48 @@ def _combine_results(
         layer_statuses=tuple(statuses),
         missing_categories=tuple(missing),
     )
+
+
+def _deduplicate_matches(
+    matches: tuple[RegulationMatch, ...],
+) -> tuple[RegulationMatch, ...]:
+    deduplicated: list[RegulationMatch] = []
+    for candidate in matches:
+        duplicate_index = next(
+            (
+                index
+                for index, existing in enumerate(deduplicated)
+                if existing.category == candidate.category
+                and _same_regulation_geometry(existing.geometry, candidate.geometry)
+            ),
+            None,
+        )
+        if duplicate_index is None:
+            deduplicated.append(candidate)
+            continue
+        existing = deduplicated[duplicate_index]
+        if len(candidate.label) > len(existing.label):
+            deduplicated[duplicate_index] = candidate
+    return tuple(deduplicated)
+
+
+def _same_regulation_geometry(
+    left: dict[str, object] | None,
+    right: dict[str, object] | None,
+) -> bool:
+    if left is None or right is None:
+        return False
+    try:
+        left_geometry = shape(left)
+        right_geometry = shape(right)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if left_geometry.equals(right_geometry):
+        return True
+    reference_area = max(left_geometry.area, right_geometry.area)
+    if reference_area <= 0:
+        return False
+    return left_geometry.symmetric_difference(right_geometry).area / reference_area <= 0.0001
 
 
 def _validate_request(
