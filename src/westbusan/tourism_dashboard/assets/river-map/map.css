@@ -20,3 +20,6 @@ html,body{overflow-x:hidden}.page-head>div,.controls,.controls section,.map-colu
 
 .assessment-support-list{display:grid;gap:6px;margin:10px 0 0;padding:10px 10px 10px 27px;border-radius:9px;background:#f7fafc;color:#355067;font-size:10px;line-height:1.55}.assessment-support-list li::marker{color:#176bff;font-weight:900}.policy-evidence-summary{margin-top:12px;padding:10px 12px;border-left:4px solid #0b6f85;border-radius:8px;background:#eaf7f8;color:#285465;font-size:10px;font-weight:700;line-height:1.55}.layer-readability-head button{min-width:96px}.layer-readability-head button:not(:disabled):hover{border-color:#176bff;background:#eaf2ff;color:#0f5bc0}
 @media (max-width:440px){.assessment-support-list{padding-left:25px}.assessment-actions{align-items:stretch;flex-direction:column}.assessment-actions button{width:100%}.policy-evidence-summary{font-size:9px}}
+
+/* v15: keep the five park reference boundaries readable during regulation focus. */
+#park-boundary-overlay{z-index:5}.park-boundary{stroke-width:4.5;filter:drop-shadow(0 0 1px rgba(255,255,255,.96))}.park-boundary.is-muted{opacity:.42}#river-map.has-focused-layer .park-boundary.is-regulation-context{fill-opacity:.03;stroke-opacity:.72;stroke-width:4.5;opacity:.78}#river-map.has-focused-layer .park-label{opacity:.86}

@@ -306,7 +306,7 @@
           ? "지도 지점을 선택한 뒤 중첩 도형이 반환되면 사용할 수 있습니다."
           : "발행된 도형이 없습니다.";
       if (!button.classList.contains("is-active")) {
-        button.textContent = count ? "보기" : button.dataset.pointLayer === "true" ? "지점조회 후" : "도형 없음";
+        button.textContent = count ? "강조" : button.dataset.pointLayer === "true" ? "지점조회 후" : "도형 없음";
       }
     });
   }
@@ -329,13 +329,13 @@
       const active = hasFocus && button.dataset.focusLayer === focusedLayer;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
-      if (active) button.textContent = "단독 표시";
+      if (active) button.textContent = "강조 중";
     });
     resetLayerFocus.disabled = false;
     layerFocusStatus.classList.toggle("is-active", hasFocus);
     const count = hasFocus ? focusItemsForLayer(focusedLayer).length : 0;
     layerFocusStatus.textContent = focusMessageOverride || (hasFocus
-      ? `${layerDisplayLabels[focusedLayer]} ${count}개 도형으로 자동 이동했습니다. 다른 규제·공원경계는 숨겼습니다.`
+      ? `${layerDisplayLabels[focusedLayer]} ${count}개 도형으로 자동 이동했습니다. 다른 규제 레이어는 숨기고 공원 참고경계는 유지합니다.`
       : "전체 레이어를 함께 표시합니다.");
     updateFocusButtons();
   }
@@ -364,12 +364,14 @@
 
   function showAllLayers() {
     focusedLayer = null;
-    focusMessageOverride = "전체 규제 레이어를 다시 켰습니다. 중첩 색상은 아래 선택지 공간중첩 명칭과 함께 판독하십시오.";
-    document.querySelectorAll("[data-layer], [data-regulation-layer]").forEach((input) => {
+    focusMessageOverride = "전체 규제 레이어와 5개 생태공원 참고경계를 다시 켰습니다. 중첩 색상은 아래 선택지 공간중첩 명칭과 함께 판독하십시오.";
+    document.querySelectorAll("[data-park-boundary-layer], [data-layer], [data-regulation-layer]").forEach((input) => {
       input.checked = true;
     });
     pathNodes.forEach(({ node }) => node.classList.remove("is-hidden"));
     externalPathNodes.forEach(({ node }) => node.classList.remove("is-hidden"));
+    parkBoundaryPathNodes.forEach(({ node }) => node.classList.remove("is-hidden"));
+    setActiveParkBoundary(null);
     applyLayerReadability();
     renderOverlay();
   }
