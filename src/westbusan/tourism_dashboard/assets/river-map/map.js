@@ -34,6 +34,7 @@
   let regulationController = null;
   let regulationSequence = 0;
   let policyInsightController = null;
+  let latestRegulationReview = null;
   let focusedLayer = null;
   let focusMessageOverride = "";
 
@@ -330,7 +331,7 @@
       button.setAttribute("aria-pressed", String(active));
       if (active) button.textContent = "단독 표시";
     });
-    resetLayerFocus.disabled = !hasFocus;
+    resetLayerFocus.disabled = false;
     layerFocusStatus.classList.toggle("is-active", hasFocus);
     const count = hasFocus ? focusItemsForLayer(focusedLayer).length : 0;
     layerFocusStatus.textContent = focusMessageOverride || (hasFocus
@@ -359,6 +360,18 @@
     }
     applyLayerReadability();
     if (focusedLayer) fitFocusedFeatures(focusedLayer);
+  }
+
+  function showAllLayers() {
+    focusedLayer = null;
+    focusMessageOverride = "전체 규제 레이어를 다시 켰습니다. 중첩 색상은 아래 선택지 공간중첩 명칭과 함께 판독하십시오.";
+    document.querySelectorAll("[data-layer], [data-regulation-layer]").forEach((input) => {
+      input.checked = true;
+    });
+    pathNodes.forEach(({ node }) => node.classList.remove("is-hidden"));
+    externalPathNodes.forEach(({ node }) => node.classList.remove("is-hidden"));
+    applyLayerReadability();
+    renderOverlay();
   }
 
   function riverOverlapItems(point) {
@@ -422,6 +435,67 @@
     } else {
       note.textContent = "배지를 누르면 해당 레이어만 강조하고 나머지는 윤곽으로 전환합니다.";
     }
+  }
+
+  function uniqueText(values) {
+    return [...new Set(values.filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim()))];
+  }
+
+  function replaceSupportList(elementId, values) {
+    const root = document.getElementById(elementId);
+    root.replaceChildren();
+    uniqueText(values).slice(0, 6).forEach((value) => {
+      const item = document.createElement("li");
+      item.textContent = value;
+      root.append(item);
+    });
+  }
+
+  function renderDecisionBasis(review = null, pending = false) {
+    if (!selectedPoint) {
+      replaceSupportList("assessment-basis-list", ["지도에서 검토 위치와 행위를 선택하십시오."]);
+      replaceSupportList("assessment-check-list", ["주소·지번을 입력하면 PNU 기준 도시계획 정보를 추가 확인합니다."]);
+      return;
+    }
+    const zone = zoneAt(selectedPoint);
+    const activity = activityLabels[activitySelect.value];
+    const basis = [`하천공간관리 중첩: ${zoneLabels[zone]} · 검토행위: ${activity}`];
+    const matches = review && Array.isArray(review.matches) ? review.matches : [];
+    const groupedMatches = new Map();
+    matches.forEach((match) => {
+      if (!match || !regulationLabels[match.category]) return;
+      const labels = groupedMatches.get(match.category) || [];
+      if (match.label) labels.push(match.label);
+      groupedMatches.set(match.category, labels);
+    });
+    groupedMatches.forEach((labels, category) => {
+      const names = uniqueText(labels);
+      basis.push(`공간중첩: ${regulationLabels[category]}${names.length ? ` · ${names.join(" · ")}` : ""}`);
+    });
+    const planning = review && review.parcel_planning;
+    if (planning && planning.status === "matched") {
+      const designationNames = (planning.designations || []).map((item) => item && item.name).filter(Boolean);
+      basis.push(`필지 도시계획: ${designationNames.length ? uniqueText(designationNames).join(" · ") : "공식 지정명 원문 확인 필요"}`);
+    } else if (!selectedPnu) {
+      basis.push("필지 도시계획: PNU 미확정으로 용도지구·용도구역 상세판정 전");
+    }
+    if (pending) basis.push("습지·국가유산·도시공원·용도지역 공간서비스 조회 중");
+    replaceSupportList("assessment-basis-list", basis);
+
+    const checks = [];
+    if (review && review.next_check) checks.push(review.next_check);
+    if (!selectedPnu) checks.push("주소·지번 검색 또는 지도 클릭 PNU 자동연결로 필지를 확정한 뒤 토지이용계획확인서를 대조");
+    const statuses = review && Array.isArray(review.layer_statuses) ? review.layer_statuses : [];
+    const unavailable = statuses
+      .filter((status) => ["provider_error", "invalid_response"].includes(status.status))
+      .map((status) => regulationLabels[status.category]).filter(Boolean);
+    if (unavailable.length) checks.push(`${uniqueText(unavailable).join("·")} 조회 실패: 중첩 없음으로 해석하지 말고 공간서비스 재조회`);
+    const heritage = review && review.heritage_criteria;
+    if (heritage && ["individual_review_required", "exceeds_published_criteria", "project_input_required"].includes(heritage.code)) {
+      checks.push("국가유산별 역사문화환경 보존지역 허용기준과 건축물 최고높이·지붕형태를 사업계획서로 재확인");
+    }
+    checks.push("최신 고시도면·공원조성계획과 소관 관리청의 사업계획 기반 사전협의 결과를 최종 판단자료로 사용");
+    replaceSupportList("assessment-check-list", checks);
   }
 
   function zoneAt(point) {
@@ -523,6 +597,7 @@
       heritageCard.querySelector("small").textContent = `${checked} 승인 스냅샷${zone}`;
     }
     renderOverlapSummary(review);
+    renderDecisionBasis(review);
   }
 
   function appendExternalRegulations(collection, { staticSnapshot = false } = {}) {
@@ -608,6 +683,7 @@
   }
 
   function markRegulationsUnavailable(message) {
+    latestRegulationReview = null;
     clearExternalRegulations();
     applyLayerReadability();
     document.querySelectorAll("[data-regulation-result]").forEach((card) => {
@@ -622,6 +698,10 @@
       reason: message,
     });
     renderOverlapSummary({
+      layer_statuses: Object.keys(regulationLabels).map((category) => ({ category, status: "provider_error" })),
+    });
+    renderDecisionBasis({
+      next_check: message,
       layer_statuses: Object.keys(regulationLabels).map((category) => ({ category, status: "provider_error" })),
     });
   }
@@ -648,6 +728,7 @@
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const review = await response.json();
       if (sequence !== regulationSequence) return;
+      latestRegulationReview = review;
       const resolution = review.parcel_resolution || {};
       if (!selectedPnu && resolution.status === "matched" && resolution.pnu) {
         selectedPnu = resolution.pnu;
@@ -691,6 +772,7 @@
     document.getElementById("policy-insight-status").textContent = "법령 근거·정책대안 생성 중";
     document.getElementById("policy-insight-title").textContent = "선택지 정책인사이트";
     document.getElementById("policy-insight-copy").textContent = "공간판정과 내부 법령근거 캐시를 확인하고 있습니다.";
+    document.getElementById("policy-evidence-summary").textContent = "선택지 공간중첩, 검토 행위, PNU 도시계획 판정과 근거법령을 연결하고 있습니다.";
     fillList(document.getElementById("policy-options"), []);
     fillList(document.getElementById("required-consultations"), []);
     document.getElementById("legal-source-links").replaceChildren();
@@ -717,6 +799,11 @@
       const insight = await response.json();
       document.getElementById("policy-insight-title").textContent = insight.headline;
       document.getElementById("policy-insight-copy").textContent = insight.policy_insight;
+      const overlapCount = latestRegulationReview && Array.isArray(latestRegulationReview.matches)
+        ? new Set(latestRegulationReview.matches.map((match) => match.category).filter(Boolean)).size
+        : 0;
+      const legalCount = Array.isArray(insight.legal_bases) ? insight.legal_bases.length : 0;
+      document.getElementById("policy-evidence-summary").textContent = `1차 판정: ${insight.deterministic_label} · 외부 규제범주 ${overlapCount}개 중첩 · 근거법령 ${legalCount}건 연결. AI는 공간판정 등급을 변경하지 않고 정책 검토경로만 설명합니다.`;
       const evidenceLabel = insight.legal_evidence_source === "curated_registry_and_mcp"
         ? "공식 근거법령 + MCP 보조검색"
         : insight.legal_evidence_source === "curated_registry"
@@ -750,6 +837,7 @@
       if (error.name === "AbortError") return;
       document.getElementById("policy-insight-status").textContent = "생성 실패";
       document.getElementById("policy-insight-copy").textContent = "정책해설 서비스에 연결하지 못했습니다. 위 공간판정과 선행 확인사항만 사용하십시오.";
+      document.getElementById("policy-evidence-summary").textContent = "AI 해설은 실패했지만 서버 결정규칙의 공간중첩·1차 판정근거는 그대로 유지됩니다.";
     } finally {
       policyInsightButton.disabled = false;
     }
@@ -768,8 +856,10 @@
     document.getElementById("assessment-next").textContent = result.next;
     policyInsightButton.disabled = true;
     policyInsightPanel.hidden = true;
+    latestRegulationReview = null;
     setRegulationResultsLoading();
     renderOverlapSummary(null, true);
+    renderDecisionBasis(null, true);
     regulationSequence += 1;
     void queryRegulations(point, zone, activity, regulationSequence);
   }
@@ -814,7 +904,7 @@
   document.querySelectorAll("[data-focus-layer]").forEach((button) => button.addEventListener("click", () => {
     setFocusedLayer(button.dataset.focusLayer);
   }));
-  resetLayerFocus.addEventListener("click", () => setFocusedLayer(null));
+  resetLayerFocus.addEventListener("click", showAllLayers);
   updateFocusButtons();
   applyLayerReadability();
   activitySelect.addEventListener("change", () => { document.getElementById("selected-activity").textContent = activityLabels[activitySelect.value]; if (selectedPoint) updateAssessment(selectedPoint); });

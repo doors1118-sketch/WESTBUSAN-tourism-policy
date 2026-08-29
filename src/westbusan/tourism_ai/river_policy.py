@@ -398,25 +398,76 @@ def _fallback(
         spatial.get("next_check")
         or "최신 고시도면과 관리청 공식 의견을 확인하십시오."
     )
-    basis_summary = "·".join(dict.fromkeys(basis.law_name for basis in bases))
-    evidence_note = (
-        f" 확인된 기본 근거법령은 {basis_summary}입니다."
-        if basis_summary
-        else " 적용 근거법령은 공간규제와 최신 고시를 추가 확인해야 합니다."
+    overlap_labels = _fallback_overlap_labels(spatial)
+    overlap_summary = (
+        " · ".join(overlap_labels[:5])
+        if overlap_labels
+        else "외부 규제도형 중첩 없음 또는 상세명 미확인"
     )
+    basis_summary = " · ".join(
+        dict.fromkeys(f"{basis.law_name} {basis.articles}" for basis in bases)
+    )
+    legal_effects = list(dict.fromkeys(basis.review_effect for basis in bases))
+    evidence_note = (
+        f"확인된 기본 근거는 {basis_summary}이며, 실무 검토효과는 "
+        f"{' · '.join(legal_effects[:4])}입니다."
+        if basis_summary
+        else "적용 근거법령은 공간규제와 최신 고시를 추가 확인해야 합니다."
+    )
+    grade = str(spatial.get("grade") or "unreviewed")
+    if grade == "principally_restricted":
+        options = [
+            "원안은 제한 가능성을 전제로 관리청 사전협의 후 유지 여부 결정",
+            "영구구조물·점용면적·차량진입을 줄인 가설·철거가능 대안 비교",
+            "동일 수요권의 규제중첩이 적은 하천구역 밖 대체입지 병행 검토",
+        ]
+    elif grade == "conditional":
+        options = [
+            "사업규모·운영기간·홍수기 철거계획을 명시한 조건부 원안 검토",
+            "최소점용·가설구조·단계적 실증안으로 허가쟁점 축소",
+            "배후부지와 연계해 하천구역 내 시설 설치를 최소화하는 대안 비교",
+        ]
+    else:
+        options = [
+            "PNU와 최신 고시도면을 먼저 확정한 뒤 원안의 적용법령 재검토",
+            "하천·공원·국가유산·도시계획을 분리한 대체입지 비교표 작성",
+        ]
+    consultations = [next_check]
+    consultations.extend(legal_effects)
+    consultations.append("관할 관리청 · 사업계획서와 배치도 · 원안·조정안·대체입지의 협의 가능 범위")
     return ModelRiverPolicyInsight(
         headline=label,
         policy_insight=(
-            f"결정규칙상 판단은 '{label}'입니다. {reason}{evidence_note} "
-            "법령명과 조문만으로 개별 사업의 허용 여부를 확정하지 않습니다."
+            f"선택 행위의 결정규칙상 1차 판정은 '{label}'입니다. 확인된 공간중첩은 "
+            f"{overlap_summary}입니다. {reason} {evidence_note} 법령명과 조문만으로 "
+            "개별 사업의 허용 여부를 확정하지 않으며, 원안·조정안·대체입지를 "
+            "동일 기준으로 비교하는 정책 검토자료로 사용해야 합니다."
         ),
-        policy_options=[
-            "현 위치안과 하천구역 밖 대체입지안을 병행 비교",
-            "영구구조물·점용면적·차량진입을 줄인 최소개입 대안 작성",
-        ],
-        required_consultations=[next_check, "관할 관리청에 사업계획서 기반 사전협의"],
+        policy_options=options,
+        required_consultations=list(dict.fromkeys(consultations))[:6],
         limitations=MANDATORY_POLICY_DISCLAIMER,
     )
+
+
+def _fallback_overlap_labels(spatial: Mapping[str, object]) -> list[str]:
+    labels: list[str] = []
+    matches = spatial.get("matches")
+    if isinstance(matches, list):
+        labels.extend(
+            str(item["label"])
+            for item in matches
+            if isinstance(item, dict) and item.get("label")
+        )
+    planning = spatial.get("parcel_planning")
+    if isinstance(planning, dict):
+        designations = planning.get("designations")
+        if isinstance(designations, list):
+            labels.extend(
+                str(item["name"])
+                for item in designations
+                if isinstance(item, dict) and item.get("name")
+            )
+    return list(dict.fromkeys(labels))
 
 
 def _with_mandatory_disclaimer(value: str) -> str:

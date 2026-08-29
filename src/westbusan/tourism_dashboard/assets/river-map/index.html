@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>낙동강 친수공원 관광개발 규제 검토</title>
-  <link rel="stylesheet" href="map.css?v=20260829-wetland-extent-v13">
+  <link rel="stylesheet" href="map.css?v=20260829-decision-support-v14">
 </head>
 <body>
   <header class="page-head">
@@ -77,7 +77,7 @@
         </div>
         <p class="control-help park-boundary-help">부산시 공원 안내도와 RIMGIS 도형을 교차 확인한 관리범위 참고경계입니다. 공원색은 규제등급을 의미하지 않습니다.</p>
         <div class="layer-divider" aria-hidden="true"></div>
-        <div class="layer-readability-head"><strong>규제 레이어 판독</strong><button id="reset-layer-focus" type="button">전체 중첩</button></div>
+        <div class="layer-readability-head"><strong>규제 레이어 판독</strong><button id="reset-layer-focus" type="button">전체 레이어 복원</button></div>
         <p id="layer-focus-status" class="layer-focus-status" role="status">전체 레이어를 함께 표시합니다.</p>
         <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-layer="river_area" checked><i class="swatch river"></i>하천구역</label><button type="button" class="layer-focus-button" data-focus-layer="river_area" aria-pressed="false" disabled>보기</button></div>
         <div class="layer-control-row"><label class="layer-toggle"><input type="checkbox" data-layer="general_conservation" checked><i class="swatch conservation"></i>하천공간관리 일반보전지구</label><button type="button" class="layer-focus-button" data-focus-layer="general_conservation" aria-pressed="false" disabled>보기</button></div>
@@ -120,7 +120,7 @@
       <section class="assessment" aria-live="polite">
         <div class="assessment-head">
           <div><p class="eyebrow">CLICK-BASED ACTIVITY REVIEW</p><h2 id="assessment-title">지도에서 검토 위치를 선택하십시오</h2></div>
-          <div class="assessment-actions"><strong id="assessment-grade" class="grade idle">미선택</strong><button id="policy-insight-button" type="button" disabled>AI 정책인사이트</button></div>
+          <div class="assessment-actions"><strong id="assessment-grade" class="grade idle">미선택</strong><button id="policy-insight-button" type="button" disabled>법령기반 AI 정책인사이트</button></div>
         </div>
         <div class="assessment-facts">
           <div><span>공원 관리범위</span><strong id="selected-park">-</strong></div>
@@ -134,8 +134,8 @@
           <p id="overlap-summary-note">색상 합성 대신 실제 중첩 레이어를 명칭으로 확인합니다.</p>
         </section>
         <div class="assessment-copy">
-          <div><h3>1차 판정 근거</h3><p id="assessment-reason">위치 선택 전입니다.</p></div>
-          <div><h3>선행 확인사항</h3><p id="assessment-next">최신 고시도면·사업계획·관리청 공식의견이 필요합니다.</p></div>
+          <div><h3>공간중첩·1차 판정근거</h3><p id="assessment-reason">위치 선택 전입니다.</p><ul id="assessment-basis-list" class="assessment-support-list"><li>지도에서 검토 위치와 행위를 선택하십시오.</li></ul></div>
+          <div><h3>선행 확인사항</h3><p id="assessment-next">최신 고시도면·사업계획·관리청 공식의견이 필요합니다.</p><ul id="assessment-check-list" class="assessment-support-list"><li>주소·지번을 입력하면 PNU 기준 도시계획 정보를 추가 확인합니다.</li></ul></div>
         </div>
         <div id="regulation-results" class="regulation-results" aria-label="규제별 교차조회 결과">
           <article data-regulation-result="wetland"><span>습지보호구역</span><strong>위치 선택 전</strong><small>VWorld 지점조회</small></article>
@@ -149,8 +149,9 @@
         </section>
         <section id="policy-insight-panel" class="policy-insight" aria-labelledby="policy-insight-title" hidden>
           <div class="policy-insight-head"><div><span>POLICY INTERPRETATION + VERIFIED LEGAL BASIS</span><h3 id="policy-insight-title">선택지 정책인사이트</h3></div><strong id="policy-insight-status">대기</strong></div>
+          <div id="policy-evidence-summary" class="policy-evidence-summary">공간중첩 판정과 검토 행위를 기준으로 법령 근거를 연결합니다.</div>
           <p id="policy-insight-copy">AI 정책인사이트 버튼을 누르면 공간판정 등급은 유지하고, 법령 근거·대안·협의사항을 추가 설명합니다.</p>
-          <div class="policy-insight-grid"><div><h4>정책대안</h4><ul id="policy-options"></ul></div><div><h4>필수 협의</h4><ul id="required-consultations"></ul></div></div>
+          <div class="policy-insight-grid"><div><h4>정책 판단 지원</h4><ul id="policy-options"></ul></div><div><h4>선행 확인·협의</h4><ul id="required-consultations"></ul></div></div>
           <div id="legal-source-links" class="legal-source-links"></div>
           <p id="policy-insight-limit" class="policy-insight-limit"></p>
         </section>
@@ -159,6 +160,6 @@
     </section>
   </main>
 
-  <script src="map.js?v=20260829-wetland-extent-v13"></script>
+  <script src="map.js?v=20260829-decision-support-v14"></script>
 </body>
 </html>

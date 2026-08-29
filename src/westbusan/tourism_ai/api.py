@@ -188,7 +188,7 @@ def create_app(
     river_policy_service = RiverPolicyInsightService(
         generator=river_policy_generator,
         model=settings.tourism_ai_model,
-        prompt_version=f"{settings.tourism_ai_prompt_version}-river-v2",
+        prompt_version=f"{settings.tourism_ai_prompt_version}-river-v3",
         cache=RiverPolicyInsightCache(settings.tourism_ai_cache_dir),
         law_client=law_mcp_client,
         evidence_store=legal_evidence_store,
