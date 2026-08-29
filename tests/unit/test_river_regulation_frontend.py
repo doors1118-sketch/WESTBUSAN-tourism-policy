@@ -28,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-layer-focus-v10"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-layer-visibility-v11"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -152,14 +152,23 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
     assert 'setAttribute("aria-pressed"' in script
     assert "provider_error" in script
     assert "invalid_response" in script
+    assert "function fitFocusedFeatures" in script
+    assert "function updateFocusButtons" in script
+    assert "GeometryCollection" in script
+    assert 'className = "focus-feature-label"' in script
+    assert "공원 경계가 아닌 RIMGIS 하천공간관리 구간" in html
+    assert "잠정 변경정보" in html
+    assert "도형 미확보" in html
 
     assert ".layer-focus-button" in stylesheet
     assert ".is-focus-layer" in stylesheet
     assert ".is-context-layer" in stylesheet
     assert ".overlap-summary" in stylesheet
     assert ".overlap-badge" in stylesheet
+    assert ".focus-feature-label" in stylesheet
+    assert "#river-map.has-focused-layer #tile-layer" in stylesheet
 
-    version = "20260829-layer-focus-v10"
+    version = "20260829-layer-visibility-v11"
     assert f"map.css?v={version}" in html
     assert f"map.js?v={version}" in html
     assert f'river-map/index.html?v={version}' in dashboard_html
@@ -219,14 +228,42 @@ def test_river_reference_bundle_has_traceable_precise_geometry() -> None:
         "waterfront",
         "restoration",
     }
+    assert all(
+        item["geometry"]["type"] in {"Polygon", "MultiPolygon"}
+        and shape(item["geometry"]).is_valid
+        and not shape(item["geometry"]).is_empty
+        and shape(item["geometry"]).area > 0
+        for item in data["features"]
+    )
+    layer_counts = {
+        layer: sum(
+            item["properties"]["zone_type"] == layer for item in data["features"]
+        )
+        for layer in ("river_area", "general_conservation", "waterfront", "restoration")
+    }
+    assert layer_counts == {
+        "river_area": 18,
+        "general_conservation": 2,
+        "waterfront": 5,
+        "restoration": 1,
+    }
     assert metadata["source_system"] == "RIMGIS"
-    assert metadata["retrieved_at"].startswith("2026-08-28")
+    assert metadata["retrieved_at"].startswith("2026-08-29")
     assert metadata["legal_effect"] is False
+    assert metadata["geometry_interpretation"]["waterfront_is_park_boundary"] is False
+    assert metadata["preliminary_change_context"][0]["geometry_available"] is False
     assert len(metadata["sha256"]) == 64
     assert regulation_metadata["legal_effect"] is False
+    assert regulation_metadata["published_at"] == "2026-08-29"
     assert {source["category"] for source in regulation_metadata["sources"]} == {
         "wetland",
         "heritage",
         "urban_park",
         "land_use",
     }
+    wetland_source = next(
+        source for source in regulation_metadata["sources"]
+        if source["category"] == "wetland"
+    )
+    assert wetland_source["full_extent_published"] is False
+    assert "no_overlap" in wetland_source["limitation"]

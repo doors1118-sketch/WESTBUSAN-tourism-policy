@@ -35,6 +35,7 @@
   let regulationSequence = 0;
   let policyInsightController = null;
   let focusedLayer = null;
+  let focusMessageOverride = "";
 
   const parks = {
     hwamyeong: { id: "hwamyeong", name: "화명생태공원", color: "#2563EB", lon: 129.00547, lat: 35.23847, zoom: 14 },
@@ -49,8 +50,8 @@
     culture: "공연·문화시설", lodging: "숙박시설", parking: "주차장·진입도로",
   };
   const zoneLabels = {
-    waterfront: "근린친수지구", general_conservation: "일반보전지구",
-    restoration: "복원지구", river_area_unclassified: "하천구역·세부지구 미확인",
+    waterfront: "하천공간관리 근린친수지구", general_conservation: "하천공간관리 일반보전지구",
+    restoration: "하천공간관리 복원지구", river_area_unclassified: "하천구역·세부지구 미확인",
     outside_river_area: "조회 기준 하천구역 외",
   };
   const gradeLabels = {
@@ -66,9 +67,9 @@
   };
   const layerDisplayLabels = {
     river_area: "하천구역",
-    general_conservation: "일반보전지구",
-    waterfront: "근린친수지구",
-    restoration: "복원지구",
+    general_conservation: "하천공간관리 일반보전지구",
+    waterfront: "하천공간관리 근린친수지구",
+    restoration: "하천공간관리 복원지구",
     ...regulationLabels,
   };
   const regulationStatusLabels = {
@@ -119,7 +120,68 @@
   function pathForGeometry(geometry) {
     if (geometry.type === "Polygon") return geometry.coordinates.map(pathForRing).join(" ");
     if (geometry.type === "MultiPolygon") return geometry.coordinates.flatMap((polygon) => polygon.map(pathForRing)).join(" ");
+    if (geometry.type === "GeometryCollection") return (geometry.geometries || []).map(pathForGeometry).filter(Boolean).join(" ");
     return "";
+  }
+
+  function visitGeometryPoints(geometry, visitor) {
+    if (!geometry) return;
+    if (geometry.type === "GeometryCollection") {
+      (geometry.geometries || []).forEach((member) => visitGeometryPoints(member, visitor));
+      return;
+    }
+    const walk = (value) => {
+      if (!Array.isArray(value)) return;
+      if (value.length >= 2 && Number.isFinite(value[0]) && Number.isFinite(value[1])) {
+        visitor(value[0], value[1]);
+        return;
+      }
+      value.forEach(walk);
+    };
+    walk(geometry.coordinates);
+  }
+
+  function featureBounds(items) {
+    const bounds = { minLon: Infinity, minLat: Infinity, maxLon: -Infinity, maxLat: -Infinity };
+    items.forEach(({ feature }) => visitGeometryPoints(feature.geometry, (lon, lat) => {
+      bounds.minLon = Math.min(bounds.minLon, lon); bounds.minLat = Math.min(bounds.minLat, lat);
+      bounds.maxLon = Math.max(bounds.maxLon, lon); bounds.maxLat = Math.max(bounds.maxLat, lat);
+    }));
+    return Number.isFinite(bounds.minLon) ? bounds : null;
+  }
+
+  function featureCenter(feature) {
+    const bounds = featureBounds([{ feature }]);
+    return bounds ? [(bounds.minLon + bounds.maxLon) / 2, (bounds.minLat + bounds.maxLat) / 2] : null;
+  }
+
+  function focusItemsForLayer(layer) {
+    return pathNodes.filter((item) => item.feature.properties.zone_type === layer)
+      .concat(externalPathNodes.filter((item) => item.feature.properties.category === layer));
+  }
+
+  function fitFocusedFeatures(layer) {
+    const items = focusItemsForLayer(layer);
+    const bounds = featureBounds(items);
+    if (!bounds || map.clientWidth <= 0 || map.clientHeight <= 0) return false;
+    const usableWidth = Math.max(120, map.clientWidth - 100);
+    const usableHeight = Math.max(120, map.clientHeight - 100);
+    let targetZoom = MIN_ZOOM;
+    for (let zoom = MAX_ZOOM; zoom >= MIN_ZOOM; zoom -= 1) {
+      const topLeft = worldPixel(bounds.minLon, bounds.maxLat, zoom);
+      const bottomRight = worldPixel(bounds.maxLon, bounds.minLat, zoom);
+      if (Math.abs(bottomRight[0] - topLeft[0]) <= usableWidth && Math.abs(bottomRight[1] - topLeft[1]) <= usableHeight) {
+        targetZoom = zoom;
+        break;
+      }
+    }
+    const northWest = worldPixel(bounds.minLon, bounds.maxLat, targetZoom);
+    const southEast = worldPixel(bounds.maxLon, bounds.minLat, targetZoom);
+    state.zoom = targetZoom;
+    state.centerX = (northWest[0] + southEast[0]) / 2;
+    state.centerY = (northWest[1] + southEast[1]) / 2;
+    render();
+    return true;
   }
 
   function renderTiles() {
@@ -163,6 +225,27 @@
       label.style.backgroundColor = park.color;
       label.style.left = `${x}px`; label.style.top = `${y}px`; labelsLayer.append(label);
     });
+    if (focusedLayer) {
+      const focusedItems = focusItemsForLayer(focusedLayer);
+      const labelTargets = focusedItems.length > 6
+        ? [{ center: (() => {
+          const bounds = featureBounds(focusedItems);
+          return bounds ? [(bounds.minLon + bounds.maxLon) / 2, (bounds.minLat + bounds.maxLat) / 2] : null;
+        })(), text: `${layerDisplayLabels[focusedLayer]} · ${focusedItems.length}개 도형` }]
+        : focusedItems.map(({ feature }, index) => ({
+          center: featureCenter(feature),
+          text: `${layerDisplayLabels[focusedLayer]} · ${index + 1}/${focusedItems.length}`,
+        }));
+      labelTargets.forEach(({ center, text: labelText }) => {
+        if (!center) return;
+        const [x, y] = screenPoint(center[0], center[1]);
+        if (x < -120 || x > map.clientWidth + 120 || y < -50 || y > map.clientHeight + 50) return;
+        const label = document.createElement("span");
+        label.className = "focus-feature-label";
+        label.textContent = labelText;
+        label.style.left = `${x}px`; label.style.top = `${y}px`; labelsLayer.append(label);
+      });
+    }
     if (selectedPoint) {
       const [x, y] = screenPoint(selectedPoint[0], selectedPoint[1]);
       clickMarker.hidden = false; clickMarker.style.left = `${x}px`; clickMarker.style.top = `${y}px`;
@@ -191,6 +274,7 @@
     const geometry = feature.geometry;
     if (geometry.type === "Polygon") return pointInPolygon(point, geometry.coordinates);
     if (geometry.type === "MultiPolygon") return geometry.coordinates.some((polygon) => pointInPolygon(point, polygon));
+    if (geometry.type === "GeometryCollection") return (geometry.geometries || []).some((member) => pointInFeature(point, { geometry: member }));
     return false;
   }
 
@@ -208,6 +292,22 @@
 
   function inputForLayer(layer) {
     return document.querySelector(`[data-layer="${layer}"], [data-regulation-layer="${layer}"]`);
+  }
+
+  function updateFocusButtons() {
+    document.querySelectorAll("[data-focus-layer]").forEach((button) => {
+      const layer = button.dataset.focusLayer;
+      const count = focusItemsForLayer(layer).length;
+      button.disabled = count === 0;
+      button.title = count
+        ? `${layerDisplayLabels[layer]} ${count}개 도형 단독 표시`
+        : button.dataset.pointLayer === "true"
+          ? "지도 지점을 선택한 뒤 중첩 도형이 반환되면 사용할 수 있습니다."
+          : "발행된 도형이 없습니다.";
+      if (!button.classList.contains("is-active")) {
+        button.textContent = count ? "보기" : button.dataset.pointLayer === "true" ? "지점조회 후" : "도형 없음";
+      }
+    });
   }
 
   function applyLayerReadability() {
@@ -228,17 +328,27 @@
       const active = hasFocus && button.dataset.focusLayer === focusedLayer;
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
-      button.textContent = active ? "강조 중" : "강조";
+      if (active) button.textContent = "단독 표시";
     });
     resetLayerFocus.disabled = !hasFocus;
     layerFocusStatus.classList.toggle("is-active", hasFocus);
-    layerFocusStatus.textContent = hasFocus
-      ? `${layerDisplayLabels[focusedLayer]}만 면으로 강조하고, 나머지는 윤곽으로 표시합니다.`
-      : "전체 레이어를 함께 표시합니다.";
+    const count = hasFocus ? focusItemsForLayer(focusedLayer).length : 0;
+    layerFocusStatus.textContent = focusMessageOverride || (hasFocus
+      ? `${layerDisplayLabels[focusedLayer]} ${count}개 도형으로 자동 이동했습니다. 다른 규제·공원경계는 숨겼습니다.`
+      : "전체 레이어를 함께 표시합니다.");
+    updateFocusButtons();
   }
 
   function setFocusedLayer(layer) {
-    focusedLayer = layer && focusedLayer !== layer ? layer : null;
+    focusMessageOverride = "";
+    if (!layer || focusedLayer === layer) {
+      focusedLayer = null;
+    } else if (!focusItemsForLayer(layer).length) {
+      focusedLayer = null;
+      focusMessageOverride = `${layerDisplayLabels[layer]} 도형이 현재 지도에 없습니다. 지점조회 결과 없음과 규제 없음은 같은 뜻이 아닙니다.`;
+    } else {
+      focusedLayer = layer;
+    }
     if (focusedLayer) {
       const input = inputForLayer(focusedLayer);
       if (input) input.checked = true;
@@ -248,6 +358,7 @@
         .forEach((item) => item.node.classList.remove("is-hidden"));
     }
     applyLayerReadability();
+    if (focusedLayer) fitFocusedFeatures(focusedLayer);
   }
 
   function riverOverlapItems(point) {
@@ -350,6 +461,8 @@
   }
 
   function setRegulationResultsLoading() {
+    clearExternalRegulations();
+    applyLayerReadability();
     document.querySelectorAll("[data-regulation-result]").forEach((card) => {
       card.className = "is-loading";
       card.querySelector("strong").textContent = "조회 중";
@@ -362,6 +475,8 @@
 
   function clearExternalRegulations() {
     externalPathNodes.splice(0).forEach(({ node }) => node.remove());
+    if (focusedLayer && regulationLabels[focusedLayer]) focusedLayer = null;
+    updateFocusButtons();
   }
 
   function regulationLayerEnabled(category) {
@@ -384,7 +499,9 @@
         : regulationStatusLabels[statusCode] || "응답 없음·미판정";
       card.querySelector("small").textContent = statusCode === "matched"
         ? `${categoryMatches.length}개 도형 중첩`
-        : "조회 결과와 법정 고시도면은 다를 수 있음";
+        : category === "wetland" && statusCode === "no_overlap"
+          ? "지점조회 결과 없음 · 전수경계 미적재"
+          : "조회 결과와 법정 고시도면은 다를 수 있음";
     });
     const heritage = review.heritage_criteria;
     const heritageCard = document.querySelector('[data-regulation-result="heritage"]');
@@ -413,6 +530,7 @@
       externalOverlay.append(path);
       externalPathNodes.push({ node: path, feature });
     });
+    updateFocusButtons();
     applyLayerReadability();
     renderOverlay();
   }
@@ -473,6 +591,7 @@
 
   function markRegulationsUnavailable(message) {
     clearExternalRegulations();
+    applyLayerReadability();
     document.querySelectorAll("[data-regulation-result]").forEach((card) => {
       card.className = "is-missing";
       card.querySelector("strong").textContent = "조회 실패·미판정";
@@ -677,6 +796,7 @@
     setFocusedLayer(button.dataset.focusLayer);
   }));
   resetLayerFocus.addEventListener("click", () => setFocusedLayer(null));
+  updateFocusButtons();
   applyLayerReadability();
   activitySelect.addEventListener("change", () => { document.getElementById("selected-activity").textContent = activityLabels[activitySelect.value]; if (selectedPoint) updateAssessment(selectedPoint); });
   structureHeight.addEventListener("change", () => { if (selectedPoint) updateAssessment(selectedPoint); });
@@ -733,6 +853,7 @@
       path.setAttribute("class", `zone-feature zone-${feature.properties.zone_type}`); path.setAttribute("fill-rule", "evenodd");
       overlay.append(path); pathNodes.push({ node: path, feature });
     });
+    updateFocusButtons();
     applyLayerReadability();
     render();
   }).catch(() => {

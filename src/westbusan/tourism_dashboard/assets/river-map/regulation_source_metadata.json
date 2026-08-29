@@ -1,5 +1,5 @@
 {
-  "published_at": "2026-08-28",
+  "published_at": "2026-08-29",
   "query_mode": "approved_snapshot_plus_server_side_point_intersection",
   "coordinate_system": "EPSG:4326",
   "legal_effect": false,
@@ -8,7 +8,10 @@
       "category": "wetland",
       "provider": "VWorld 국가공간정보포털",
       "datasets": ["LT_C_UM901", "LT_C_WGISARWET"],
-      "reference_url": "https://www.vworld.kr/"
+      "reference_url": "https://www.vworld.kr/",
+      "geometry_delivery": "선택 지점 교차조회 결과만 화면 표시",
+      "full_extent_published": false,
+      "limitation": "5개 생태공원 중심점 점검에서 중첩 도형이 반환되지 않았으며, 공식 습지보호구역 전수경계를 별도 대조하지 못함. no_overlap을 보호구역 부재로 해석하지 않음"
     },
     {
       "category": "heritage",
@@ -16,6 +19,7 @@
       "datasets": ["CHL_SPCN_AS", "CHL_PRTN_AS", "CHL_SPCL_AS", "CHL_PRTL_AS", "CHL_PMPG_AS_1", "CHL_PMPG_AS_23"],
       "reference_url": "https://gis-heritage.go.kr/newMap.do",
       "storage": "DuckDB 승인 스냅샷",
+      "full_extent_published": true,
       "limitation": "수치 높이기준은 자동판정하되 비정형 문구와 공통조건은 원문·관리청 검토 필요"
     },
     {
@@ -23,13 +27,17 @@
       "provider": "VWorld 국가공간정보포털",
       "datasets": ["LT_C_UPISUQ153"],
       "filter": "공간시설 명칭에 공원 포함",
-      "reference_url": "https://www.vworld.kr/"
+      "reference_url": "https://www.vworld.kr/",
+      "geometry_delivery": "선택 지점 교차조회 결과만 화면 표시",
+      "full_extent_published": false
     },
     {
       "category": "land_use",
       "provider": "VWorld 국가공간정보포털",
       "datasets": ["LT_C_UQ111", "LT_C_UQ112", "LT_C_UQ113", "LT_C_UQ114"],
       "reference_url": "https://www.vworld.kr/",
+      "geometry_delivery": "선택 지점 교차조회 결과만 화면 표시",
+      "full_extent_published": false,
       "limitation": "도시·관리·농림·자연환경보전지역 대분류이며 세분 용도지역·용도지구·용도구역은 미연계"
     }
   ],

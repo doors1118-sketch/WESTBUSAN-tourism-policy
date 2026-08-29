@@ -9,11 +9,20 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
-from shapely.geometry import box, mapping, shape
+from shapely import make_valid
+from shapely.geometry import (
+    GeometryCollection,
+    MultiPolygon,
+    Polygon,
+    box,
+    mapping,
+    shape,
+)
+from shapely.ops import unary_union
 
 ENDPOINT = "https://www.river.go.kr/geoserver/rimgis/wfs"
 RIVER_PLAN_CODE = "2000010200912"
-MAP_BOUNDS = (128.90, 35.08, 129.03, 35.28)
+MAP_BOUNDS = (128.90, 35.08, 129.03, 35.30)
 LAYERS = {
     "rc100": ("river_area", "하천구역", 1),
     "rc161_dst": ("general_conservation", "일반보전지구", 2),
@@ -28,6 +37,26 @@ OUTPUT = (
     / "assets"
     / "river-map"
 )
+
+
+def polygonal_part(geometry: object) -> Polygon | MultiPolygon | None:
+    """Discard line/point remnants introduced when a polygon is clipped."""
+
+    if isinstance(geometry, (Polygon, MultiPolygon)):
+        return geometry
+    if not isinstance(geometry, GeometryCollection):
+        return None
+    polygon_parts: list[Polygon] = []
+    for member in geometry.geoms:
+        candidate = polygonal_part(member)
+        if isinstance(candidate, Polygon):
+            polygon_parts.append(candidate)
+        elif isinstance(candidate, MultiPolygon):
+            polygon_parts.extend(candidate.geoms)
+    if not polygon_parts:
+        return None
+    merged = unary_union(polygon_parts)
+    return merged if isinstance(merged, (Polygon, MultiPolygon)) else None
 
 
 def fetch_layer(client: httpx.Client, layer: str) -> dict[str, object]:
@@ -69,11 +98,11 @@ def main() -> None:
                 if properties.get("rmp_code") != RIVER_PLAN_CODE:
                     continue
                 matched += 1
-                geometry = shape(feature["geometry"])
+                geometry = make_valid(shape(feature["geometry"]))
                 if not geometry.intersects(clip):
                     continue
-                clipped = geometry.intersection(clip)
-                if clipped.is_empty:
+                clipped = polygonal_part(geometry.intersection(clip))
+                if clipped is None or clipped.is_empty:
                     continue
                 published += 1
                 output_features.append(
@@ -117,6 +146,16 @@ def main() -> None:
         "bbox": list(MAP_BOUNDS),
         "river_plan_code": RIVER_PLAN_CODE,
         "geometry_version": "RIMGIS WFS 응답에 기준일·고시번호 필드 없음",
+        "geometry_interpretation": {
+            "waterfront_is_park_boundary": False,
+            "waterfront_meaning": (
+                "근린친수지구 도형은 공원 시설경계가 아니라 RIMGIS 하천공간관리 "
+                "구간이므로 개별 생태공원보다 넓게 보일 수 있음"
+            ),
+            "park_boundaries": (
+                "별도 5개 생태공원 참고경계로 표시하며 법정·지적 경계가 아님"
+            ),
+        },
         "official_notice_context": [
             {
                 "notice": "환경부 낙동강유역환경청 고시 제2026-11호",
@@ -131,6 +170,32 @@ def main() -> None:
                 "subject": "낙동강(국가하천) 홍수관리구역 지정 및 지형도면",
                 "url": "https://www.eum.go.kr/web/gs/gv/gvGosiDet.jsp?seq=633773",
                 "geometry_matched": False,
+            },
+        ],
+        "preliminary_change_context": [
+            {
+                "source": "낙동강유역환경청 공고 제2024-84호",
+                "date": "2024-06-05",
+                "subject": "낙동강 하류권역 하천기본계획 전략환경영향평가 주민의견 반영결과",
+                "url": (
+                    "https://mcee.go.kr/ndg/web/board/read.do?boardId=1679830"
+                    "&boardMasterId=156&menuId=3284"
+                ),
+                "summary": (
+                    "대저·맥도 일부 일반보전·근린친수 구간의 친수거점 전환과 "
+                    "대저 일부 근린친수 구간의 일반보전 전환이 검토·반영되었다는 "
+                    "문서상 기록"
+                ),
+                "geometry_available": False,
+                "application": "문구형 잠정 변경정보만 제공하며 지도 도형에는 미반영",
+            },
+            {
+                "source": "2025-03 언론보도(2024-12 계획 변경 인용)",
+                "date": "2025-03-09",
+                "subject": "화명생태공원 상류·화명2지구 약 730,400㎡ 친수지구 변경 보도",
+                "url": "https://v.daum.net/v/20250309191307134",
+                "geometry_available": False,
+                "application": "내부 참고용 잠정정보이며 최종 고시도형 확보 후 교체",
             },
         ],
         "feature_count": len(output_features),

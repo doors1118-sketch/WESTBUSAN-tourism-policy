@@ -2,16 +2,21 @@
   "source_system": "RIMGIS",
   "source_map": "https://www.river.go.kr/map/rimMap.do",
   "source_service": "https://www.river.go.kr/geoserver/rimgis/wfs",
-  "retrieved_at": "2026-08-28T14:46:56+09:00",
+  "retrieved_at": "2026-08-29T18:38:00+09:00",
   "scope": "낙동강 화명·대저·삼락·맥도·을숙도 생태공원 일원",
   "bbox": [
     128.9,
     35.08,
     129.03,
-    35.28
+    35.3
   ],
   "river_plan_code": "2000010200912",
   "geometry_version": "RIMGIS WFS 응답에 기준일·고시번호 필드 없음",
+  "geometry_interpretation": {
+    "waterfront_is_park_boundary": false,
+    "waterfront_meaning": "근린친수지구 도형은 공원 시설경계가 아니라 RIMGIS 하천공간관리 구간이므로 개별 생태공원보다 넓게 보일 수 있음",
+    "park_boundaries": "별도 5개 생태공원 참고경계로 표시하며 법정·지적 경계가 아님"
+  },
   "official_notice_context": [
     {
       "notice": "환경부 낙동강유역환경청 고시 제2026-11호",
@@ -28,15 +33,34 @@
       "geometry_matched": false
     }
   ],
-  "feature_count": 20,
+  "preliminary_change_context": [
+    {
+      "source": "낙동강유역환경청 공고 제2024-84호",
+      "date": "2024-06-05",
+      "subject": "낙동강 하류권역 하천기본계획 전략환경영향평가 주민의견 반영결과",
+      "url": "https://mcee.go.kr/ndg/web/board/read.do?boardId=1679830&boardMasterId=156&menuId=3284",
+      "summary": "대저·맥도 일부 일반보전·근린친수 구간의 친수거점 전환과 대저 일부 근린친수 구간의 일반보전 전환이 검토·반영되었다는 문서상 기록",
+      "geometry_available": false,
+      "application": "문구형 잠정 변경정보만 제공하며 지도 도형에는 미반영"
+    },
+    {
+      "source": "2025-03 언론보도(2024-12 계획 변경 인용)",
+      "date": "2025-03-09",
+      "subject": "화명생태공원 상류·화명2지구 약 730,400㎡ 친수지구 변경 보도",
+      "url": "https://v.daum.net/v/20250309191307134",
+      "geometry_available": false,
+      "application": "내부 참고용 잠정정보이며 최종 고시도형 확보 후 교체"
+    }
+  ],
+  "feature_count": 26,
   "source_counts": {
     "rc100": {
       "matched": 73,
-      "published": 13
+      "published": 18
     },
     "rc161_dst": {
       "matched": 6,
-      "published": 1
+      "published": 2
     },
     "rc164_dst": {
       "matched": 6,
@@ -47,7 +71,7 @@
       "published": 1
     }
   },
-  "sha256": "acec3076cc37ea851ea5778cb1a76b60ed1f80508b693204b089fd613d132ad1",
+  "sha256": "578afaab4b08830884dfc412b371b28068a258473f0e7bf850a9eec23f1f83b0",
   "legal_effect": false,
   "limitation": "RIMGIS 정보는 공간 검토용 참고자료이며 법적 효력을 갖는 허가·규제 판정이 아닙니다. WFS 도형을 2026-11·12호 고시도면과 형상·필지 단위로 대조하지 못했으며, 최종 고시도면과 관리청 공식 의견으로 재확인해야 합니다."
 }
