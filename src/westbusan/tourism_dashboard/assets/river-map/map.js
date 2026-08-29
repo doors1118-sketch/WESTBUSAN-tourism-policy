@@ -474,8 +474,16 @@
   }
 
   function clearExternalRegulations() {
-    externalPathNodes.splice(0).forEach(({ node }) => node.remove());
-    if (focusedLayer && regulationLabels[focusedLayer]) focusedLayer = null;
+    const preserved = [];
+    externalPathNodes.splice(0).forEach((item) => {
+      if (item.feature && item.feature.properties && item.feature.properties.delivery === "full_extent_snapshot") {
+        preserved.push(item);
+      } else {
+        item.node.remove();
+      }
+    });
+    externalPathNodes.push(...preserved);
+    if (focusedLayer && regulationLabels[focusedLayer] && !focusItemsForLayer(focusedLayer).length) focusedLayer = null;
     updateFocusButtons();
   }
 
@@ -500,7 +508,7 @@
       card.querySelector("small").textContent = statusCode === "matched"
         ? `${categoryMatches.length}개 도형 중첩`
         : category === "wetland" && statusCode === "no_overlap"
-          ? "지점조회 결과 없음 · 전수경계 미적재"
+          ? "선택 지점 비중첩 · 전수경계 지도 표시"
           : "조회 결과와 법정 고시도면은 다를 수 있음";
     });
     const heritage = review.heritage_criteria;
@@ -517,12 +525,17 @@
     renderOverlapSummary(review);
   }
 
-  function renderExternalRegulations(collection) {
-    clearExternalRegulations();
+  function appendExternalRegulations(collection, { staticSnapshot = false } = {}) {
     const externalFeatures = collection && Array.isArray(collection.features) ? collection.features : [];
+    const staticCategories = new Set(
+      externalPathNodes
+        .filter((item) => item.feature && item.feature.properties && item.feature.properties.delivery === "full_extent_snapshot")
+        .map((item) => item.feature.properties.category),
+    );
     externalFeatures.forEach((feature) => {
       const category = feature && feature.properties ? feature.properties.category : "";
       if (!regulationLabels[category] || !feature.geometry) return;
+      if (!staticSnapshot && staticCategories.has(category)) return;
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("class", `external-feature external-${category}`);
       path.setAttribute("fill-rule", "evenodd");
@@ -533,6 +546,11 @@
     updateFocusButtons();
     applyLayerReadability();
     renderOverlay();
+  }
+
+  function renderExternalRegulations(collection) {
+    clearExternalRegulations();
+    appendExternalRegulations(collection);
   }
 
   function renderParcelPlanning(review) {
@@ -859,6 +877,18 @@
   }).catch(() => {
     document.querySelector(".map-instruction").textContent = "규제도형을 불러오지 못했습니다. 발행파일 경로를 확인하십시오.";
     renderTiles();
+  });
+
+  Promise.all([
+    fetch("wetland_boundary.geojson", { cache: "no-store" }).then((response) => response.json()),
+    fetch("wetland_boundary_source_metadata.json", { cache: "no-store" }).then((response) => response.json()),
+  ]).then(([collection, metadata]) => {
+    appendExternalRegulations(collection, { staticSnapshot: true });
+    const button = document.querySelector('[data-focus-layer="wetland"]');
+    if (button) button.title = `${metadata.feature_count}개 중복제거 도형 · ${metadata.notice.number}`;
+  }).catch(() => {
+    const button = document.querySelector('[data-focus-layer="wetland"]');
+    if (button) button.title = "습지보호구역 전수경계를 불러오지 못했습니다. 지점조회 결과만 사용할 수 있습니다.";
   });
 
   Promise.all([

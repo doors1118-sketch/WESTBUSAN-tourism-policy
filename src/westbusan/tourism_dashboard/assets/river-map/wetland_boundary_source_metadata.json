@@ -1,0 +1,25 @@
+{
+  "source_system": "VWorld 국가공간정보플랫폼",
+  "source_endpoint": "https://api.vworld.kr/req/data",
+  "datasets": [
+    "LT_C_UM901",
+    "LT_C_WGISARWET"
+  ],
+  "dataset_feature_counts": {
+    "LT_C_UM901": 2,
+    "LT_C_WGISARWET": 1
+  },
+  "retrieved_at": "2026-08-29T20:10:00+09:00",
+  "coordinate_system": "EPSG:4326",
+  "feature_count": 1,
+  "deduplication": "동일 낙동강하구 경계가 행정구역·제공 레이어별로 중복 반환되어 기하 동등성 기준으로 1건만 게시",
+  "notice": {
+    "title": "낙동강하구 습지보호지역 지형도면 등 변경고시",
+    "number": "환경부 고시 제2009-34호",
+    "date": "2009-03-13",
+    "reference_url": "https://www.eum.go.kr/web/gs/gv/gvGosiDet.jsp?seq=1510"
+  },
+  "legal_effect": false,
+  "limitation": "VWorld 제공도형의 내부 검토용 스냅샷이며 최신 고시도면 및 낙동강유역환경청 공식 의견을 대체하지 않음",
+  "sha256": "8ad8f4c115ba83eb444249e7c31a920b3515bd7c53bb960d1d5723abec5b49f1"
+}

@@ -9,9 +9,11 @@
       "provider": "VWorld 국가공간정보포털",
       "datasets": ["LT_C_UM901", "LT_C_WGISARWET"],
       "reference_url": "https://www.vworld.kr/",
-      "geometry_delivery": "선택 지점 교차조회 결과만 화면 표시",
-      "full_extent_published": false,
-      "limitation": "5개 생태공원 중심점 점검에서 중첩 도형이 반환되지 않았으며, 공식 습지보호구역 전수경계를 별도 대조하지 못함. no_overlap을 보호구역 부재로 해석하지 않음"
+      "geometry_delivery": "부산 범위 전수경계 스냅샷과 선택 지점 교차조회 결과를 함께 표시",
+      "full_extent_published": true,
+      "deduplicated_feature_count": 1,
+      "notice": "환경부 고시 제2009-34호(2009-03-13)",
+      "limitation": "VWorld 내부 검토용 스냅샷이며 최신 고시도면과 낙동강유역환경청 공식 의견으로 재확인 필요"
     },
     {
       "category": "heritage",

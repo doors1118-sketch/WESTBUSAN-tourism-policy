@@ -28,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-layer-visibility-v11"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-wetland-extent-v12"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -159,6 +159,10 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
     assert "공원 경계가 아닌 RIMGIS 하천공간관리 구간" in html
     assert "잠정 변경정보" in html
     assert "도형 미확보" in html
+    assert 'fetch("wetland_boundary.geojson"' in script
+    assert 'fetch("wetland_boundary_source_metadata.json"' in script
+    assert "full_extent_snapshot" in script
+    assert "전수경계 지도 표시" in script
 
     assert ".layer-focus-button" in stylesheet
     assert ".is-focus-layer" in stylesheet
@@ -168,7 +172,7 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
     assert ".focus-feature-label" in stylesheet
     assert "#river-map.has-focused-layer #tile-layer" in stylesheet
 
-    version = "20260829-layer-visibility-v11"
+    version = "20260829-wetland-extent-v12"
     assert f"map.css?v={version}" in html
     assert f"map.js?v={version}" in html
     assert f'river-map/index.html?v={version}' in dashboard_html
@@ -265,5 +269,41 @@ def test_river_reference_bundle_has_traceable_precise_geometry() -> None:
         source for source in regulation_metadata["sources"]
         if source["category"] == "wetland"
     )
-    assert wetland_source["full_extent_published"] is False
-    assert "no_overlap" in wetland_source["limitation"]
+    assert wetland_source["full_extent_published"] is True
+    assert wetland_source["deduplicated_feature_count"] == 1
+    assert wetland_source["notice"].startswith("환경부 고시 제2009-34호")
+
+
+def test_wetland_full_extent_snapshot_is_valid_deduplicated_and_traceable() -> None:
+    boundary_path = RIVER_ROOT / "wetland_boundary.geojson"
+    boundary_bytes = boundary_path.read_bytes()
+    collection = json.loads(boundary_bytes.decode("utf-8"))
+    metadata = json.loads(
+        _read(RIVER_ROOT / "wetland_boundary_source_metadata.json")
+    )
+
+    assert collection["type"] == "FeatureCollection"
+    assert len(collection["features"]) == 1
+    feature = collection["features"][0]
+    geometry = shape(feature["geometry"])
+    assert geometry.geom_type == "MultiPolygon"
+    assert geometry.is_valid and not geometry.is_empty
+    assert geometry.bounds[0] < 128.89
+    assert geometry.bounds[1] < 35.04
+    assert geometry.bounds[2] > 128.96
+    assert geometry.bounds[3] > 35.11
+    assert feature["properties"]["category"] == "wetland"
+    assert feature["properties"]["label"] == "낙동강하구 습지보호지역"
+    assert feature["properties"]["delivery"] == "full_extent_snapshot"
+    assert feature["properties"]["corroborating_datasets"] == [
+        "LT_C_UM901",
+        "LT_C_WGISARWET",
+    ]
+
+    assert metadata["feature_count"] == 1
+    assert metadata["dataset_feature_counts"] == {
+        "LT_C_UM901": 2,
+        "LT_C_WGISARWET": 1,
+    }
+    assert metadata["notice"]["number"] == "환경부 고시 제2009-34호"
+    assert hashlib.sha256(boundary_bytes).hexdigest() == metadata["sha256"]
