@@ -219,13 +219,15 @@
     pathNodes.forEach(({ node, feature }) => node.setAttribute("d", pathForGeometry(feature.geometry)));
     externalPathNodes.forEach(({ node, feature }) => node.setAttribute("d", pathForGeometry(feature.geometry)));
     labelsLayer.replaceChildren();
-    Object.values(parks).forEach((park) => {
-      const [x, y] = screenPoint(park.lon, park.lat);
-      if (x < -80 || x > map.clientWidth + 80 || y < -30 || y > map.clientHeight + 30) return;
-      const label = document.createElement("span"); label.className = "park-label"; label.textContent = park.name;
-      label.style.backgroundColor = park.color;
-      label.style.left = `${x}px`; label.style.top = `${y}px`; labelsLayer.append(label);
-    });
+    if (parkBoundaryLayerEnabled()) {
+      Object.values(parks).forEach((park) => {
+        const [x, y] = screenPoint(park.lon, park.lat);
+        if (x < -80 || x > map.clientWidth + 80 || y < -30 || y > map.clientHeight + 30) return;
+        const label = document.createElement("span"); label.className = "park-label"; label.textContent = park.name;
+        label.style.backgroundColor = park.color;
+        label.style.left = `${x}px`; label.style.top = `${y}px`; labelsLayer.append(label);
+      });
+    }
     if (focusedLayer) {
       const focusedItems = focusItemsForLayer(focusedLayer);
       const labelTargets = focusedItems.length > 6
@@ -289,6 +291,26 @@
       node.classList.toggle("is-active", Boolean(parkId) && matches);
       node.classList.toggle("is-muted", Boolean(parkId) && !matches);
     });
+  }
+
+  function parkBoundaryLayerEnabled() {
+    const input = document.querySelector("[data-park-boundary-layer]");
+    return !input || input.checked;
+  }
+
+  function setParkBoundaryLayerVisible(visible) {
+    document.querySelectorAll("[data-park-boundary-layer]").forEach((input) => {
+      input.checked = visible;
+    });
+    parkBoundaryPathNodes.forEach(({ node }) => node.classList.toggle("is-hidden", !visible));
+    if (!visible) {
+      setActiveParkBoundary(null);
+      document.querySelectorAll("[data-park]").forEach((button) => {
+        button.classList.remove("is-active");
+        button.setAttribute("aria-pressed", "false");
+      });
+    }
+    renderOverlay();
   }
 
   function inputForLayer(layer) {
@@ -886,12 +908,17 @@
   document.getElementById("zoom-out").addEventListener("click", () => { const [lon, lat] = lonLatFromWorld(state.centerX, state.centerY, state.zoom); setView(lon, lat, state.zoom - 1); });
   document.getElementById("zoom-reset").addEventListener("click", () => setView(INITIAL.lon, INITIAL.lat, INITIAL.zoom));
   document.querySelectorAll("[data-park]").forEach((button) => button.addEventListener("click", () => {
-    document.querySelectorAll("[data-park]").forEach((item) => item.classList.toggle("is-active", item === button));
+    setParkBoundaryLayerVisible(true);
+    document.querySelectorAll("[data-park]").forEach((item) => {
+      const active = item === button;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-pressed", String(active));
+    });
     const park = parks[button.dataset.park]; setActiveParkBoundary(park.id); setView(park.lon, park.lat, park.zoom);
   }));
-  document.querySelectorAll("[data-park-boundary-layer]").forEach((input) => input.addEventListener("change", () => {
-    parkBoundaryPathNodes.forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
-  }));
+  document.querySelectorAll("[data-park-boundary-layer]").forEach((input) => {
+    input.addEventListener("change", () => setParkBoundaryLayerVisible(input.checked));
+  });
   document.querySelectorAll("[data-layer]").forEach((input) => input.addEventListener("change", () => {
     pathNodes.filter((item) => item.feature.properties.zone_type === input.dataset.layer).forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
     if (!input.checked && focusedLayer === input.dataset.layer) focusedLayer = null;
@@ -996,6 +1023,7 @@
       path.setAttribute("stroke", feature.properties.color);
       path.setAttribute("fill-rule", "evenodd");
       path.dataset.parkId = feature.properties.park_id;
+      path.classList.toggle("is-hidden", !parkBoundaryLayerEnabled());
       parkBoundaryOverlay.append(path);
       parkBoundaryPathNodes.push({ node: path, feature });
     });

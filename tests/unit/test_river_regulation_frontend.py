@@ -28,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-boundary-focus-v15"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-park-layer-v16"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -128,6 +128,11 @@ def test_river_map_distinguishes_five_reference_park_boundaries() -> None:
     assert 'fetch("park_boundary_source_metadata.json"' in script
     assert "parkAt" in script
     assert "setActiveParkBoundary" in script
+    assert "function parkBoundaryLayerEnabled" in script
+    assert "function setParkBoundaryLayerVisible" in script
+    assert "if (parkBoundaryLayerEnabled())" in script
+    assert 'input.addEventListener("change", () => setParkBoundaryLayerVisible(input.checked))' in script
+    assert 'setParkBoundaryLayerVisible(true)' in script
     assert ".park-boundary" in stylesheet
     assert ".park-boundary.is-active" in stylesheet
     assert "공원색은 규제등급을 의미하지 않습니다" in html
@@ -190,7 +195,7 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
 
     assert html.count(">강조</button>") == 4
 
-    version = "20260829-boundary-focus-v15"
+    version = "20260829-park-layer-v16"
     assert f"map.css?v={version}" in html
     assert f"map.js?v={version}" in html
     assert f'river-map/index.html?v={version}' in dashboard_html
