@@ -33,6 +33,8 @@ def test_law_mcp_unit_is_pinned_loopback_and_secret_is_environment_only() -> Non
     assert "MCP_HTTP_HOST=127.0.0.1" in unit
     assert "ALLOW_QUERY_API_KEY=0" in unit
     assert "--mode http --port 18082" in unit
+    assert "ExecStart=/opt/westbusan-korean-law-mcp/node/bin/node" in unit
+    assert "WorkingDirectory=/opt/westbusan-korean-law-mcp/current" in unit
     assert "/opt/westbusan-korean-law-mcp/current/build/index.js" in unit
     assert "NoNewPrivileges=true" in unit
     assert "MemoryDenyWriteExecute=true" not in unit

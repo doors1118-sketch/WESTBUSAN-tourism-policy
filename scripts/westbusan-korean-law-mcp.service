@@ -11,7 +11,8 @@ EnvironmentFile=/etc/westbusan-tourism-ai/law-mcp.env
 Environment=MCP_HTTP_HOST=127.0.0.1
 Environment=ALLOW_QUERY_API_KEY=0
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/node /opt/westbusan-korean-law-mcp/current/build/index.js --mode http --port 18082
+WorkingDirectory=/opt/westbusan-korean-law-mcp/current
+ExecStart=/opt/westbusan-korean-law-mcp/node/bin/node /opt/westbusan-korean-law-mcp/current/build/index.js --mode http --port 18082
 Restart=on-failure
 RestartSec=5s
 NoNewPrivileges=true
