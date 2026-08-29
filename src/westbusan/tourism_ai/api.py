@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import asdict
 from typing import Any, Literal
@@ -11,6 +12,11 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
+from westbusan.river_regulation.geometry import (
+    NakdongParcelGeometryCatalogue,
+    load_nakdong_parcel_geometry_catalogue,
+    unavailable_geometry_resolution,
+)
 from westbusan.river_regulation.heritage import (
     HeritageCriteriaCatalogue,
     HeritageProject,
@@ -33,6 +39,7 @@ from westbusan.tourism_ai.cache import (
     InsightCache,
 )
 from westbusan.tourism_ai.config import TourismAISettings
+from westbusan.tourism_ai.legal_mcp import KoreanLawMCPClient, LegalEvidenceStore
 from westbusan.tourism_ai.models import (
     ComprehensiveReportRequest,
     EvidenceMetric,
@@ -53,6 +60,13 @@ from westbusan.tourism_ai.report_models import ModelComprehensiveReport
 from westbusan.tourism_ai.report_service import (
     ComprehensiveReportGenerator,
     ComprehensiveReportService,
+)
+from westbusan.tourism_ai.river_policy import (
+    ModelRiverPolicyInsight,
+    RiverPolicyInsightCache,
+    RiverPolicyInsightGenerator,
+    RiverPolicyInsightRequest,
+    RiverPolicyInsightService,
 )
 from westbusan.tourism_ai.service import InsightGenerator, InsightService
 from westbusan.tourism_ai.vworld_proxy import (
@@ -89,6 +103,17 @@ class _ReportGenerator(ComprehensiveReportGenerator):
         raise NotImplementedError
 
 
+class _RiverGenerator(RiverPolicyInsightGenerator):
+    def generate_river_policy_insight(
+        self,
+        *,
+        spatial_evidence: dict[str, object],
+        legal_evidence: str,
+    ) -> ModelRiverPolicyInsight:
+        del spatial_evidence, legal_evidence
+        raise NotImplementedError
+
+
 def create_app(
     settings: TourismAISettings,
     *,
@@ -99,6 +124,9 @@ def create_app(
     vacant_catalogue: AddressAnalysisCatalogue | None = None,
     heritage_catalogue: HeritageCriteriaCatalogue | None = None,
     parcel_catalogue: NakdongParcelCatalogue | None = None,
+    parcel_geometry_catalogue: NakdongParcelGeometryCatalogue | None = None,
+    law_mcp_client: KoreanLawMCPClient | None = None,
+    river_policy_generator: RiverPolicyInsightGenerator | None = None,
 ) -> FastAPI:
     """Create the isolated application with explicit dependencies."""
 
@@ -144,6 +172,27 @@ def create_app(
         daily_limit=settings.tourism_ai_daily_limit,
         cooldown_seconds=settings.tourism_ai_client_cooldown_seconds,
     )
+    if river_policy_generator is None:
+        river_policy_generator = openai_client or _RiverGenerator()
+    if law_mcp_client is None and settings.tourism_ai_law_mcp_endpoint is not None:
+        law_mcp_client = KoreanLawMCPClient(
+            endpoint=settings.tourism_ai_law_mcp_endpoint,
+            access_token=settings.tourism_ai_law_mcp_access_token,
+            package_version=settings.tourism_ai_law_mcp_package_version,
+        )
+    legal_evidence_store = (
+        LegalEvidenceStore(settings.tourism_ai_legal_db_path)
+        if settings.tourism_ai_legal_db_path is not None
+        else None
+    )
+    river_policy_service = RiverPolicyInsightService(
+        generator=river_policy_generator,
+        model=settings.tourism_ai_model,
+        prompt_version=f"{settings.tourism_ai_prompt_version}-river-v1",
+        cache=RiverPolicyInsightCache(settings.tourism_ai_cache_dir),
+        law_client=law_mcp_client,
+        evidence_store=legal_evidence_store,
+    )
     app = FastAPI(
         title="West Busan Tourism AI",
         docs_url=None,
@@ -177,6 +226,14 @@ def create_app(
                 parcel_catalogue = load_nakdong_parcel_catalogue(connection)
         except duckdb.Error:
             parcel_catalogue = None
+    if parcel_geometry_catalogue is None and regulation_db_path is not None:
+        try:
+            with duckdb.connect(str(regulation_db_path), read_only=True) as connection:
+                parcel_geometry_catalogue = load_nakdong_parcel_geometry_catalogue(
+                    connection
+                )
+        except duckdb.Error:
+            parcel_geometry_catalogue = None
     if settings.vworld_api_key is not None:
         upstream = vworld_client or httpx.Client(timeout=15.0)
         vworld = VWorldBasemapProxy(
@@ -210,6 +267,7 @@ def create_app(
             "/report",
             "/vworld/geocode",
             "/vacant/address-analysis",
+            "/regulations/insight",
         }:
             if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
                 return JSONResponse(status_code=415, content={"detail": "json_required"})
@@ -306,14 +364,28 @@ def create_app(
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        if pnu is None:
+        resolved_pnu = pnu
+        if pnu is not None and parcel_geometry_catalogue is not None:
+            parcel_resolution = parcel_geometry_catalogue.provided(pnu)
+        elif pnu is not None or parcel_geometry_catalogue is None:
+            parcel_resolution = unavailable_geometry_resolution()
+        else:
+            try:
+                parcel_resolution = parcel_geometry_catalogue.resolve(
+                    longitude=longitude,
+                    latitude=latitude,
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from error
+            resolved_pnu = parcel_resolution.pnu
+        if resolved_pnu is None:
             parcel_planning = pnu_required_review()
         elif parcel_catalogue is None:
-            parcel_planning = catalogue_unavailable_review(pnu)
+            parcel_planning = catalogue_unavailable_review(resolved_pnu)
         else:
             try:
                 parcel_planning = parcel_catalogue.review_pnu(
-                    pnu=pnu,
+                    pnu=resolved_pnu,
                     activity=activity,
                 )
             except ValueError as error:
@@ -321,6 +393,7 @@ def create_app(
         content = review.as_public_dict()
         heritage_public = heritage.as_public_dict()
         content["heritage_criteria"] = heritage_public
+        content["parcel_resolution"] = parcel_resolution.as_public_dict()
         content["parcel_planning"] = parcel_planning.as_public_dict()
         feature_collection = content.get("feature_collection")
         heritage_collection = heritage_public.get("feature_collection")
@@ -349,6 +422,26 @@ def create_app(
             media_type="image/png",
             headers={"Cache-Control": "public, max-age=86400"},
         )
+
+    @app.post("/regulations/insight")
+    def regulation_insight(
+        payload: RiverPolicyInsightRequest,
+    ) -> dict[str, object]:
+        point_response = regulation_point(
+            longitude=float(payload.longitude),
+            latitude=float(payload.latitude),
+            activity=payload.activity,
+            river_zone=payload.river_zone,
+            height_m=(float(payload.height_m) if payload.height_m is not None else None),
+            roof_type=payload.roof_type,
+            pnu=payload.pnu,
+        )
+        spatial_evidence = json.loads(bytes(point_response.body))
+        response = river_policy_service.generate(
+            request=payload,
+            spatial_evidence=spatial_evidence,
+        )
+        return response.model_dump(mode="json")
 
     @app.get(
         "/vworld/tiles/{zoom}/{column}/{row}.png",

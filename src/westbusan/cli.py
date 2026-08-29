@@ -10,6 +10,7 @@ from typing import Annotated, NoReturn
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
+import duckdb
 import httpx
 import typer
 
@@ -17,6 +18,11 @@ from westbusan.buildings.load import backfill_building_investment_profiles
 from westbusan.db import migrate_legacy_run
 from westbusan.orchestrator import Pipeline, RunSummary, export_current, redact_for_log
 from westbusan.quality.checks import approve_schema_baseline, observed_schema_contracts
+from westbusan.river_regulation.geometry import (
+    collect_nakdong_parcel_geometries,
+    load_current_nakdong_regulation_pnus,
+    publish_nakdong_parcel_geometry_snapshot,
+)
 from westbusan.river_regulation.heritage import (
     collect_heritage_snapshot,
     publish_heritage_snapshot,
@@ -32,6 +38,7 @@ from westbusan.spatial.geocode import VWorldGeocoder
 from westbusan.spatial.grid import build_grid
 from westbusan.spatial.models import BoundaryMetadata
 from westbusan.spatial.orchestrator import SpatialPipeline
+from westbusan.vacant_house.cadastral import VWorldCadastralClient
 from westbusan.vacant_house.fencing import (
     VacantHouseFenceError,
     VacantHouseLeaseUnavailable,
@@ -866,6 +873,98 @@ def nakdong_parcel_regulation_sync(
             "checked_at": checked_at,
             "parcel_count": len(records),
             "land_use_coverage": 1.0,
+        }
+    )
+
+
+@app.command("nakdong-parcel-geometry-sync")
+def nakdong_parcel_geometry_sync(
+    pnu_file: Annotated[
+        Path,
+        typer.Option(
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            readable=True,
+            help="UTF-8 text file containing one 19-digit review PNU per line.",
+        ),
+    ],
+    root: Annotated[Path | None, typer.Option(help="Repository root.")] = None,
+) -> None:
+    """Publish cadastral geometries for click-to-PNU resolution on the river map."""
+    api_key = os.getenv("VWORLD_API_KEY", "").strip()
+    if not api_key:
+        _print_json({"status": "BLOCKED", "reason": "vworld_api_key_missing"})
+        raise typer.Exit(1)
+    domain = os.getenv("VWORLD_API_DOMAIN", "busanproduct.co.kr").strip()
+    pnus = [
+        line.strip()
+        for line in pnu_file.read_text(encoding="utf-8-sig").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    pipeline = _pipeline(root)
+    pipeline.db.migrate()
+    try:
+        approved_pnus = load_current_nakdong_regulation_pnus(
+            pipeline.db.connection
+        )
+    except (duckdb.Error, ValueError) as error:
+        _print_json({"status": "BLOCKED", "reason": str(error)})
+        raise typer.Exit(1) from error
+    if len(pnus) != len(set(pnus)):
+        _print_json({"status": "BLOCKED", "reason": "duplicate_pnu_in_input"})
+        raise typer.Exit(1)
+    if set(pnus) != set(approved_pnus):
+        _print_json(
+            {
+                "status": "BLOCKED",
+                "reason": "approved_pnu_membership_mismatch",
+                "input_count": len(pnus),
+                "approved_count": len(approved_pnus),
+                "missing_count": len(set(approved_pnus) - set(pnus)),
+                "unexpected_count": len(set(pnus) - set(approved_pnus)),
+            }
+        )
+        raise typer.Exit(1)
+    run_id = uuid4()
+    checked_at = datetime.now(ZoneInfo("Asia/Seoul"))
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(30.0, connect=10.0),
+            follow_redirects=False,
+            headers={"User-Agent": "westbusan-policy-screen/1.0"},
+        ) as client:
+            records = collect_nakdong_parcel_geometries(
+                pnus,
+                client=VWorldCadastralClient(
+                    api_key=api_key,
+                    domain=domain,
+                    client=client,
+                ),
+            )
+        publish_nakdong_parcel_geometry_snapshot(
+            pipeline.db,
+            run_id=run_id,
+            checked_at=checked_at,
+            records=records,
+        )
+    except Exception as error:
+        safe_reason = (
+            str(error)
+            if isinstance(error, (TypeError, ValueError))
+            else "nakdong_parcel_geometry_sync_failed"
+        )
+        _print_json({"status": "BLOCKED", "reason": safe_reason})
+        raise typer.Exit(1) from error
+    matched_count = sum(record["status"] == "matched" for record in records)
+    _print_json(
+        {
+            "status": "PUBLISHED",
+            "run_id": run_id,
+            "checked_at": checked_at,
+            "target_count": len(records),
+            "matched_count": matched_count,
+            "coverage": matched_count / len(records),
         }
     )
 

@@ -10,6 +10,7 @@ import httpx
 from westbusan.tourism_ai.models import EvidenceMetric, MapSelection, ModelInsight
 from westbusan.tourism_ai.report_metrics import ReportEvidenceCatalogue
 from westbusan.tourism_ai.report_models import ModelComprehensiveReport
+from westbusan.tourism_ai.river_policy import ModelRiverPolicyInsight
 
 
 class OpenAIInsightError(RuntimeError):
@@ -47,6 +48,17 @@ metric_id만 인용하십시오. 서부산의 관광수요를 숙박·체류·�
 각 절의 findings는 1~2개로 제한하고 narrative는 2~4문장으로 간결하게
 작성하십시오. actions는 실행 우선순위가 있는 절에만 작성하되 보고서 전체에서
 5개를 넘지 마십시오. 같은 지표나 정책수단을 여러 절에서 반복하지 마십시오.
+""".strip()
+
+_RIVER_POLICY_INSTRUCTIONS = """
+당신은 부산시 낙동강 친수공원 관광개발 입지의 내부 사전검토를 지원합니다.
+spatial_evidence의 deterministic grade와 label은 서버 결정규칙의 결과이므로
+절대 변경하거나 완화하지 마십시오. legal_evidence에서 확인되는 내용만 법적
+근거로 사용하고, 법령명·조문·허용요건을 새로 만들지 마십시오. 공간중첩은
+법적 허용 또는 금지를 자동 확정하지 않으며, 최신 고시도면·개별 허용기준과
+하천관리청 공식의견이 필요하다는 한계를 명시하십시오. 정책대안은 대체입지,
+최소점용, 가설·철거가능 구조, 배후부지 연계, 단계적 실증처럼 실행 가능한
+방향으로 제시하되 인허가·사업성·안전성을 확정하지 마십시오.
 """.strip()
 
 
@@ -230,6 +242,77 @@ class OpenAIResponsesClient:
             if len(texts) != 1 or not isinstance(texts[0], str):
                 raise OpenAIInsightError("openai_output_missing")
             return ModelComprehensiveReport.model_validate_json(texts[0])
+        except OpenAIInsightError:
+            raise
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError, TypeError) as error:
+            raise OpenAIInsightError("openai_request_failed") from error
+
+    def generate_river_policy_insight(
+        self,
+        *,
+        spatial_evidence: dict[str, object],
+        legal_evidence: str,
+    ) -> ModelRiverPolicyInsight:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "input": [
+                {
+                    "role": "developer",
+                    "content": [
+                        {"type": "input_text", "text": _RIVER_POLICY_INSTRUCTIONS}
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": json.dumps(
+                                {
+                                    "spatial_evidence": spatial_evidence,
+                                    "legal_evidence": legal_evidence,
+                                },
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            ),
+                        }
+                    ],
+                },
+            ],
+            "max_output_tokens": min(self.max_output_tokens, 1800),
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "nakdong_river_policy_insight",
+                    "strict": True,
+                    "schema": ModelRiverPolicyInsight.model_json_schema(),
+                },
+                "verbosity": "low",
+            },
+        }
+        try:
+            response = self._client.post(
+                self.endpoint,
+                headers={
+                    "Authorization": f"Bearer {self._api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            body = response.json()
+            if body.get("status") != "completed":
+                raise OpenAIInsightError("openai_response_incomplete")
+            texts = [
+                content.get("text")
+                for output in body.get("output", [])
+                if isinstance(output, dict) and output.get("type") == "message"
+                for content in output.get("content", [])
+                if isinstance(content, dict) and content.get("type") == "output_text"
+            ]
+            if len(texts) != 1 or not isinstance(texts[0], str):
+                raise OpenAIInsightError("openai_output_missing")
+            return ModelRiverPolicyInsight.model_validate_json(texts[0])
         except OpenAIInsightError:
             raise
         except (httpx.HTTPError, json.JSONDecodeError, ValueError, TypeError) as error:

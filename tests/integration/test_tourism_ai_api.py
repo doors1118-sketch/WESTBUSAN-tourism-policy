@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -13,6 +14,7 @@ from pydantic import SecretStr
 
 from tests.unit.test_tourism_ai_metrics import RUN_ID, _write_dashboard
 from tests.unit.test_tourism_ai_service import _model_document
+from westbusan.river_regulation.geometry import NakdongParcelGeometryCatalogue
 from westbusan.river_regulation.heritage import (
     HeritageCriteriaCatalogue,
     parse_criteria_html,
@@ -20,7 +22,9 @@ from westbusan.river_regulation.heritage import (
 from westbusan.river_regulation.parcel import NakdongParcelCatalogue
 from westbusan.tourism_ai.api import create_app
 from westbusan.tourism_ai.config import TourismAISettings
+from westbusan.tourism_ai.legal_mcp import MCPResearchResult
 from westbusan.tourism_ai.models import EvidenceMetric, ModelInsight
+from westbusan.tourism_ai.river_policy import ModelRiverPolicyInsight
 from westbusan.vacant_house.address_analysis import AddressAnalysisCatalogue
 
 
@@ -61,6 +65,72 @@ class _RecoveringGenerator(_CountingGenerator):
             catalogue,
             focus_region=focus_region,
             focus_selection=focus_selection,
+        )
+
+
+class _CountingLawClient:
+    package_version = "4.12.0"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def research(self, *, query: str, task: str) -> MCPResearchResult:
+        assert "낙동강" in query
+        assert task == "action_basis"
+        self.calls += 1
+        return MCPResearchResult(
+            tool_name="legal_research",
+            arguments={"query": query, "task": task},
+            package_version=self.package_version,
+            text=(
+                "하천법 제33조와 하천점용허가 절차를 원문으로 재확인해야 합니다. "
+                "https://www.law.go.kr/법령/하천법"
+            ),
+            response_sha256="e" * 64,
+            source_urls=("https://www.law.go.kr/법령/하천법",),
+            retrieved_at=datetime(2026, 8, 29, tzinfo=UTC),
+        )
+
+
+class _CountingRiverGenerator:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate_river_policy_insight(
+        self,
+        *,
+        spatial_evidence: dict[str, object],
+        legal_evidence: str,
+    ) -> ModelRiverPolicyInsight:
+        assert spatial_evidence["grade"] == "principally_restricted"
+        assert "하천법 제33조" in legal_evidence
+        self.calls += 1
+        return ModelRiverPolicyInsight(
+            headline="숙박시설은 대체입지와 최소점용 대안을 우선 검토",
+            policy_insight=(
+                "현재 공간판정의 원칙적 제약 등급을 유지하면서 관리청 협의 전에 "
+                "사업규모와 구조물 영구성을 축소해야 합니다."
+            ),
+            policy_options=[
+                "하천구역 밖 배후부지로 숙박기능을 이전하고 친수공원에는 비건축형 콘텐츠를 배치",
+                "최소점용·가설형 대안을 작성해 홍수소통과 철거계획을 사전협의",
+            ],
+            required_consultations=["하천관리청 사전협의", "최신 고시·허용기준 원문확인"],
+            limitations="지도와 법령조회는 허가처분을 대체하지 않습니다.",
+        )
+
+
+class _UncitedLawClient(_CountingLawClient):
+    def research(self, *, query: str, task: str) -> MCPResearchResult:
+        result = super().research(query=query, task=task)
+        return MCPResearchResult(
+            tool_name=result.tool_name,
+            arguments=result.arguments,
+            package_version=result.package_version,
+            text="공식 원문 URL이 포함되지 않은 검색 응답",
+            response_sha256="f" * 64,
+            source_urls=(),
+            retrieved_at=result.retrieved_at,
         )
 
 
@@ -520,6 +590,165 @@ def test_regulation_point_uses_independent_nakdong_parcel_catalogue(
     assert result["grade"] == "principally_restricted"
     assert result["snapshot_id"] == "nakdong-test-1"
     assert response.json()["complete"] is False
+
+
+def test_regulation_point_resolves_pnu_from_published_parcel_geometry(
+    tmp_path: Path,
+) -> None:
+    from shapely.geometry import Polygon
+
+    pnu = "2632010100100010000"
+    parcel_catalogue = NakdongParcelCatalogue.from_records(
+        snapshot_id="nakdong-test-auto-pnu",
+        checked_at="2026-08-29T00:00:00+00:00",
+        parcels=[
+            {
+                "pnu": pnu,
+                "land_use_status": "matched",
+                "land_use_designations": ["화명지구단위계획구역"],
+                "land_use_response_sha256": "a" * 64,
+                "land_characteristics_status": "not_found",
+                "land_characteristics_response_sha256": "b" * 64,
+                "land_characteristics": None,
+                "source_date": "2026-08-28",
+            }
+        ],
+    )
+    geometry_catalogue = NakdongParcelGeometryCatalogue.from_records(
+        snapshot_id="geometry-test-auto-pnu",
+        checked_at="2026-08-29T00:00:00+00:00",
+        records=[
+            {
+                "pnu": pnu,
+                "status": "matched",
+                "request_identity": "request:test",
+                "response_sha256": "c" * 64,
+                "geometry": Polygon(
+                    [
+                        (129.0100, 35.2060),
+                        (129.0105, 35.2060),
+                        (129.0105, 35.2065),
+                        (129.0100, 35.2065),
+                    ]
+                ),
+                "geometry_hash": "d" * 64,
+                "source_date": "2026-08-28",
+            }
+        ],
+    )
+    settings = _settings(tmp_path).model_copy(update={"vworld_api_key": None})
+    client = TestClient(
+        create_app(
+            settings,
+            generator=_CountingGenerator(_model_document()),
+            parcel_catalogue=parcel_catalogue,
+            parcel_geometry_catalogue=geometry_catalogue,
+        )
+    )
+
+    response = client.get(
+        "/regulations/point",
+        params={
+            "longitude": 129.01025,
+            "latitude": 35.2061,
+            "activity": "lodging",
+            "river_zone": "waterfront",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["parcel_resolution"] == {
+        "status": "matched",
+        "pnu": pnu,
+        "candidate_pnus": [pnu],
+        "snapshot_id": "geometry-test-auto-pnu",
+        "checked_at": "2026-08-29T00:00:00+00:00",
+        "target_count": 1,
+        "matched_count": 1,
+        "complete": True,
+    }
+    assert response.json()["parcel_planning"]["status"] == "matched"
+
+
+def test_river_policy_insight_uses_cached_legal_evidence_and_ai_result(
+    tmp_path: Path,
+) -> None:
+    law_client = _CountingLawClient()
+    river_generator = _CountingRiverGenerator()
+    settings = _settings(tmp_path).model_copy(
+        update={
+            "vworld_api_key": None,
+            "tourism_ai_legal_db_path": tmp_path / "law-evidence.duckdb",
+        }
+    )
+    client = TestClient(
+        create_app(
+            settings,
+            generator=_CountingGenerator(_model_document()),
+            law_mcp_client=law_client,
+            river_policy_generator=river_generator,
+        )
+    )
+    payload = {
+        "longitude": 128.953,
+        "latitude": 35.117,
+        "activity": "lodging",
+        "river_zone": "waterfront",
+        "roof_type": "unknown",
+    }
+
+    first = client.post("/regulations/insight", json=payload)
+    second = client.post("/regulations/insight", json=payload)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["deterministic_grade"] == "principally_restricted"
+    assert first.json()["legal_evidence_status"] == "retrieved"
+    assert first.json()["legal_source_urls"] == [
+        "https://www.law.go.kr/법령/하천법"
+    ]
+    assert first.json()["source"] == "openai"
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is True
+    assert law_client.calls == 1
+    assert river_generator.calls == 1
+
+
+def test_river_policy_rejects_uncited_law_response_and_negative_caches_it(
+    tmp_path: Path,
+) -> None:
+    law_client = _UncitedLawClient()
+    river_generator = _CountingRiverGenerator()
+    settings = _settings(tmp_path).model_copy(
+        update={
+            "vworld_api_key": None,
+            "tourism_ai_legal_db_path": tmp_path / "law-evidence.duckdb",
+        }
+    )
+    client = TestClient(
+        create_app(
+            settings,
+            generator=_CountingGenerator(_model_document()),
+            law_mcp_client=law_client,
+            river_policy_generator=river_generator,
+        )
+    )
+    payload = {
+        "longitude": 128.953,
+        "latitude": 35.117,
+        "activity": "lodging",
+        "river_zone": "waterfront",
+        "roof_type": "unknown",
+    }
+
+    first = client.post("/regulations/insight", json=payload)
+    second = client.post("/regulations/insight", json=payload)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["legal_evidence_status"] == "unavailable"
+    assert first.json()["legal_source_urls"] == []
+    assert first.json()["source"] == "rule_fallback"
+    assert law_client.calls == 1
+    assert river_generator.calls == 0
 
 
 def test_regulation_point_rejects_invalid_pnu(tmp_path: Path) -> None:

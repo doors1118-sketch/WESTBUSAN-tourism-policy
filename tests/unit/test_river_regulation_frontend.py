@@ -25,7 +25,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-nakdong-title-v5"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-parcel-law-v7"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -66,6 +66,10 @@ def test_river_map_exposes_five_parks_layers_and_click_assessment() -> None:
     assert 'query.set("pnu"' in script
     assert 'fetch("/tourism/api/vworld/geocode"' in script
     assert "parcel_planning" in script
+    assert 'id="policy-insight-button"' in html
+    assert 'id="policy-insight-panel"' in html
+    assert 'fetch("/tourism/api/regulations/insight"' in script
+    assert "parcel_resolution" in script
     assert 'query.set("height_m"' in script
     assert 'query.set("roof_type"' in script
     assert "법적 효력" in html
@@ -80,7 +84,7 @@ def test_river_tab_remains_independent_from_investment_and_vacant_maps() -> None
     assert 'data-tab-panel="vacant"' in html
     assert 'data-vacant-map-src="vacant-map/index.html?v=20260827-poi-filters-v66"' in html
     assert 'data-tab-panel="river"' in html
-    assert "낙동강 생태공원 관광개발 규제검토" in html
+    assert "낙동강 친수공원 관광개발 규제 검토" in html
     assert (
         "하천·환경·국가유산·도시계획 규제를 중첩하여 "
         "관광개발 가능성을 사전 검토합니다."

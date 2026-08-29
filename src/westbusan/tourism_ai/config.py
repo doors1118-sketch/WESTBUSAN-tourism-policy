@@ -18,6 +18,12 @@ class TourismAISettings(BaseSettings):
     tourism_ai_vacant_db_path: Path | None = None
     tourism_ai_report_db_path: Path | None = None
     tourism_ai_regulation_db_path: Path | None = None
+    tourism_ai_legal_db_path: Path | None = None
+    tourism_ai_law_mcp_endpoint: str | None = None
+    tourism_ai_law_mcp_access_token: SecretStr | None = None
+    tourism_ai_law_mcp_package_version: str = Field(
+        default="4.12.0", pattern=r"^\d+\.\d+\.\d+$"
+    )
     tourism_ai_vworld_domain: str = Field(
         default="tourism.busanproduct.co.kr", min_length=4, max_length=120
     )

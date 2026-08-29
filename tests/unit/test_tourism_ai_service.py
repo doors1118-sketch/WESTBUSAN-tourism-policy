@@ -17,6 +17,7 @@ from westbusan.tourism_ai.models import (
 )
 from westbusan.tourism_ai.openai_client import OpenAIResponsesClient
 from westbusan.tourism_ai.report_metrics import load_report_evidence
+from westbusan.tourism_ai.river_policy import ModelRiverPolicyInsight
 from westbusan.tourism_ai.service import InsightService
 
 from .test_tourism_ai_metrics import RUN_ID, _write_dashboard
@@ -206,6 +207,40 @@ def test_report_payload_reserves_complete_structured_output_budget(
     assert payload["text"]["verbosity"] == "low"
     instructions = payload["input"][0]["content"][0]["text"]
     assert "각 절의 findings는 1~2개" in instructions
+
+
+def test_river_policy_payload_cannot_replace_deterministic_grade() -> None:
+    recorded: list[dict[str, Any]] = []
+    document = {
+        "headline": "관리청 협의를 전제로 한 대안 검토",
+        "policy_insight": "공간중첩 판정과 공식 법령근거를 구분한 설명입니다.",
+        "policy_options": ["가설시설 중심의 최소개입 대안 검토"],
+        "required_consultations": ["하천관리청 사전협의"],
+        "limitations": "자동판정은 인허가 처분을 대체하지 않습니다.",
+    }
+    client = OpenAIResponsesClient(
+        api_key="test-key",
+        model="gpt-5.4-mini",
+        transport=_responses_transport(document, recorded),
+    )
+
+    result = client.generate_river_policy_insight(
+        spatial_evidence={
+            "grade": "principally_restricted",
+            "label": "원칙적 제한",
+            "matches": [],
+        },
+        legal_evidence="하천법 공식 근거 확인 결과",
+    )
+
+    assert isinstance(result, ModelRiverPolicyInsight)
+    payload = recorded[0]
+    schema = payload["text"]["format"]["schema"]
+    assert "deterministic_grade" not in schema.get("properties", {})
+    assert payload["text"]["format"]["strict"] is True
+    assert "tools" not in payload
+    instructions = payload["input"][0]["content"][0]["text"]
+    assert "절대 변경" in instructions
 
 
 class _StubGenerator:

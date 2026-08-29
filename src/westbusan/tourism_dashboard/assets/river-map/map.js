@@ -17,6 +17,8 @@
   const parcelAddress = document.getElementById("parcel-address");
   const parcelSearch = document.getElementById("parcel-search");
   const parcelSearchState = document.getElementById("parcel-search-state");
+  const policyInsightButton = document.getElementById("policy-insight-button");
+  const policyInsightPanel = document.getElementById("policy-insight-panel");
   const tileNodes = new Map();
   const pathNodes = [];
   const externalPathNodes = [];
@@ -26,6 +28,7 @@
   let dragOrigin = null;
   let regulationController = null;
   let regulationSequence = 0;
+  let policyInsightController = null;
 
   const parks = {
     hwamyeong: { name: "화명생태공원", lon: 129.00547, lat: 35.23847, zoom: 14 },
@@ -367,6 +370,15 @@
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const review = await response.json();
       if (sequence !== regulationSequence) return;
+      const resolution = review.parcel_resolution || {};
+      if (!selectedPnu && resolution.status === "matched" && resolution.pnu) {
+        selectedPnu = resolution.pnu;
+        parcelSearchState.textContent = `지도 클릭 좌표 · PNU 자동연결 완료 · 도형 ${resolution.matched_count}/${resolution.target_count}개 적재`;
+      } else if (!selectedPnu && resolution.status === "boundary_ambiguous") {
+        parcelSearchState.textContent = "필지 경계선 좌표입니다. 후보 PNU가 둘 이상이므로 주소·지번으로 확정하십시오.";
+      } else if (!selectedPnu && resolution.status === "scope_not_published") {
+        parcelSearchState.textContent = "현재 발행된 검토대상 필지도형 밖입니다. 주소·지번 검색으로 별도 확인하십시오.";
+      }
       renderRegulationCards(review);
       renderParcelPlanning(review.parcel_planning);
       renderExternalRegulations(review.feature_collection);
@@ -375,9 +387,78 @@
       grade.textContent = review.label || gradeLabels[review.grade] || "추가 확인 필요";
       document.getElementById("assessment-reason").textContent = review.reason;
       document.getElementById("assessment-next").textContent = review.next_check;
+      policyInsightButton.disabled = false;
     } catch (error) {
       if (error.name === "AbortError" || sequence !== regulationSequence) return;
       markRegulationsUnavailable("하천구역 판정만 유지·외부 규제 재조회 필요");
+      policyInsightButton.disabled = true;
+    }
+  }
+
+  function fillList(element, values) {
+    element.replaceChildren();
+    (Array.isArray(values) ? values : []).forEach((value) => {
+      const item = document.createElement("li");
+      item.textContent = value;
+      element.append(item);
+    });
+  }
+
+  async function queryPolicyInsight() {
+    if (!selectedPoint || policyInsightButton.disabled) return;
+    if (policyInsightController) policyInsightController.abort();
+    policyInsightController = new AbortController();
+    policyInsightPanel.hidden = false;
+    policyInsightButton.disabled = true;
+    document.getElementById("policy-insight-status").textContent = "법령 근거·정책대안 생성 중";
+    document.getElementById("policy-insight-title").textContent = "선택지 정책인사이트";
+    document.getElementById("policy-insight-copy").textContent = "공간판정과 내부 법령근거 캐시를 확인하고 있습니다.";
+    fillList(document.getElementById("policy-options"), []);
+    fillList(document.getElementById("required-consultations"), []);
+    document.getElementById("legal-source-links").replaceChildren();
+    document.getElementById("policy-insight-limit").textContent = "";
+    const zone = zoneAt(selectedPoint);
+    const body = {
+      longitude: selectedPoint[0],
+      latitude: selectedPoint[1],
+      activity: activitySelect.value,
+      river_zone: zone,
+      roof_type: roofType.value,
+    };
+    const height = Number(structureHeight.value);
+    if (structureHeight.value !== "" && Number.isFinite(height)) body.height_m = height;
+    if (selectedPnu) body.pnu = selectedPnu;
+    try {
+      const response = await fetch("/tourism/api/regulations/insight", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+        signal: policyInsightController.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const insight = await response.json();
+      document.getElementById("policy-insight-title").textContent = insight.headline;
+      document.getElementById("policy-insight-copy").textContent = insight.policy_insight;
+      document.getElementById("policy-insight-status").textContent = insight.legal_evidence_status === "retrieved"
+        ? `${insight.cached ? "캐시 재사용" : "신규 생성"} · 법령근거 조회`
+        : "결정규칙 설명 · 법령근거 미연결";
+      fillList(document.getElementById("policy-options"), insight.policy_options);
+      fillList(document.getElementById("required-consultations"), insight.required_consultations);
+      const sourceRoot = document.getElementById("legal-source-links");
+      sourceRoot.replaceChildren();
+      (insight.legal_source_urls || []).forEach((url, index) => {
+        const link = document.createElement("a");
+        link.href = url; link.target = "_blank"; link.rel = "noopener";
+        link.textContent = `공식 법령근거 ${index + 1} ↗`;
+        sourceRoot.append(link);
+      });
+      document.getElementById("policy-insight-limit").textContent = insight.limitations;
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      document.getElementById("policy-insight-status").textContent = "생성 실패";
+      document.getElementById("policy-insight-copy").textContent = "법령 MCP 또는 AI 서비스에 연결하지 못했습니다. 위 공간판정과 선행 확인사항만 사용하십시오.";
+    } finally {
+      policyInsightButton.disabled = false;
     }
   }
 
@@ -391,6 +472,8 @@
     document.getElementById("selected-coordinate").textContent = `${point[1].toFixed(6)}, ${point[0].toFixed(6)}`;
     document.getElementById("assessment-reason").textContent = result.reason;
     document.getElementById("assessment-next").textContent = result.next;
+    policyInsightButton.disabled = true;
+    policyInsightPanel.hidden = true;
     setRegulationResultsLoading();
     regulationSequence += 1;
     void queryRegulations(point, zone, activity, regulationSequence);
@@ -464,6 +547,7 @@
     }
   }
   parcelSearch.addEventListener("click", () => { void searchParcel(); });
+  policyInsightButton.addEventListener("click", () => { void queryPolicyInsight(); });
   parcelAddress.addEventListener("keydown", (event) => {
     if (event.key === "Enter") { event.preventDefault(); void searchParcel(); }
   });

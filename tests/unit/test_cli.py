@@ -3,6 +3,7 @@ import json
 from datetime import UTC, date, datetime
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -133,6 +134,7 @@ def test_cli_help_lists_all_operational_commands() -> None:
         "vacant-house-building-link",
         "vacant-house-parcel-context",
         "nakdong-parcel-regulation-sync",
+        "nakdong-parcel-geometry-sync",
     } <= set(result.stdout.split())
 
 
@@ -153,6 +155,75 @@ def test_nakdong_parcel_sync_blocks_before_opening_provider_without_key(
     assert json.loads(result.stdout) == {
         "reason": "vworld_api_key_missing",
         "status": "BLOCKED",
+    }
+
+
+def test_nakdong_parcel_geometry_sync_blocks_before_provider_without_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pnu_file = tmp_path / "nakdong-pnus.txt"
+    pnu_file.write_text("2632010100100010000\n", encoding="utf-8")
+    monkeypatch.delenv("VWORLD_API_KEY", raising=False)
+
+    result = CliRunner().invoke(
+        app,
+        ["nakdong-parcel-geometry-sync", "--pnu-file", str(pnu_file)],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "reason": "vworld_api_key_missing",
+        "status": "BLOCKED",
+    }
+
+
+def test_nakdong_geometry_sync_blocks_input_outside_approved_membership(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approved_pnu = "2632010100100010000"
+    unexpected_pnu = "2632010100100020000"
+    pnu_file = tmp_path / "nakdong-pnus.txt"
+    pnu_file.write_text(f"{unexpected_pnu}\n", encoding="utf-8")
+    db = Database(tmp_path / "membership.duckdb", Path("sql"))
+    db.migrate()
+    run_id = uuid4()
+    db.connection.execute(
+        """insert into nakdong_parcel_regulation_sync_run values (
+               ?, current_timestamp, current_timestamp, 1, 0,
+               'test', 'https://example.invalid', ?, 'PUBLISHED'
+           )""",
+        [run_id, "a" * 64],
+    )
+    db.connection.execute(
+        """insert into nakdong_parcel_regulation_snapshot values (
+               ?, ?, 'matched', ?, 'not_found', ?, null, null
+           )""",
+        [run_id, approved_pnu, "b" * 64, "c" * 64],
+    )
+    db.connection.execute(
+        """insert into nakdong_parcel_regulation_publication_current values (
+               'current', ?, current_timestamp
+           )""",
+        [run_id],
+    )
+    monkeypatch.setenv("VWORLD_API_KEY", "server-only-test-key")
+    monkeypatch.setattr(cli_module, "_pipeline", lambda _: SimpleNamespace(db=db))
+
+    result = CliRunner().invoke(
+        app,
+        ["nakdong-parcel-geometry-sync", "--pnu-file", str(pnu_file)],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == {
+        "approved_count": 1,
+        "input_count": 1,
+        "missing_count": 1,
+        "reason": "approved_pnu_membership_mismatch",
+        "status": "BLOCKED",
+        "unexpected_count": 1,
     }
 
 
