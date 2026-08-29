@@ -439,24 +439,39 @@
       const insight = await response.json();
       document.getElementById("policy-insight-title").textContent = insight.headline;
       document.getElementById("policy-insight-copy").textContent = insight.policy_insight;
-      document.getElementById("policy-insight-status").textContent = insight.legal_evidence_status === "retrieved"
-        ? `${insight.cached ? "캐시 재사용" : "신규 생성"} · 법령근거 조회`
-        : "결정규칙 설명 · 법령근거 미연결";
+      const evidenceLabel = insight.legal_evidence_source === "curated_registry_and_mcp"
+        ? "공식 근거법령 + MCP 보조검색"
+        : insight.legal_evidence_source === "curated_registry"
+          ? "공식 근거법령 연결"
+          : "법령근거 미연결";
+      const explanationLabel = insight.source === "openai"
+        ? `${insight.cached ? "AI 해설 캐시" : "AI 정책해설"}`
+        : "기본 정책해설";
+      document.getElementById("policy-insight-status").textContent = `${explanationLabel} · ${evidenceLabel}`;
       fillList(document.getElementById("policy-options"), insight.policy_options);
       fillList(document.getElementById("required-consultations"), insight.required_consultations);
       const sourceRoot = document.getElementById("legal-source-links");
       sourceRoot.replaceChildren();
-      (insight.legal_source_urls || []).forEach((url, index) => {
+      (insight.legal_bases || []).forEach((basis) => {
         const link = document.createElement("a");
-        link.href = url; link.target = "_blank"; link.rel = "noopener";
-        link.textContent = `공식 법령근거 ${index + 1} ↗`;
+        link.href = basis.official_url; link.target = "_blank"; link.rel = "noopener";
+        link.textContent = `${basis.law_name} ${basis.articles} ↗`;
+        link.title = `${basis.rationale} ${basis.review_effect}`;
         sourceRoot.append(link);
       });
+      if (!sourceRoot.children.length) {
+        (insight.legal_source_urls || []).forEach((url, index) => {
+          const link = document.createElement("a");
+          link.href = url; link.target = "_blank"; link.rel = "noopener";
+          link.textContent = `공식 법령근거 ${index + 1} ↗`;
+          sourceRoot.append(link);
+        });
+      }
       document.getElementById("policy-insight-limit").textContent = insight.limitations;
     } catch (error) {
       if (error.name === "AbortError") return;
       document.getElementById("policy-insight-status").textContent = "생성 실패";
-      document.getElementById("policy-insight-copy").textContent = "법령 MCP 또는 AI 서비스에 연결하지 못했습니다. 위 공간판정과 선행 확인사항만 사용하십시오.";
+      document.getElementById("policy-insight-copy").textContent = "정책해설 서비스에 연결하지 못했습니다. 위 공간판정과 선행 확인사항만 사용하십시오.";
     } finally {
       policyInsightButton.disabled = false;
     }

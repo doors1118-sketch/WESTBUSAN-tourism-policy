@@ -120,6 +120,18 @@ class _CountingRiverGenerator:
         )
 
 
+class _FailingRiverGenerator(_CountingRiverGenerator):
+    def generate_river_policy_insight(
+        self,
+        *,
+        spatial_evidence: dict[str, object],
+        legal_evidence: str,
+    ) -> ModelRiverPolicyInsight:
+        del spatial_evidence, legal_evidence
+        self.calls += 1
+        raise RuntimeError("ai_unavailable")
+
+
 class _UncitedLawClient(_CountingLawClient):
     def research(self, *, query: str, task: str) -> MCPResearchResult:
         result = super().research(query=query, task=task)
@@ -703,8 +715,11 @@ def test_river_policy_insight_uses_cached_legal_evidence_and_ai_result(
     assert first.status_code == second.status_code == 200
     assert first.json()["deterministic_grade"] == "principally_restricted"
     assert first.json()["legal_evidence_status"] == "retrieved"
+    assert first.json()["legal_evidence_source"] == "curated_registry_and_mcp"
     assert first.json()["legal_source_urls"] == [
-        "https://www.law.go.kr/법령/하천법"
+        "https://www.law.go.kr/법령/하천법",
+        "https://www.law.go.kr/법령/건축법",
+        "https://www.law.go.kr/법령/관광진흥법",
     ]
     assert first.json()["source"] == "openai"
     assert first.json()["cached"] is False
@@ -713,7 +728,7 @@ def test_river_policy_insight_uses_cached_legal_evidence_and_ai_result(
     assert river_generator.calls == 1
 
 
-def test_river_policy_rejects_uncited_law_response_and_negative_caches_it(
+def test_river_policy_uses_curated_legal_basis_when_mcp_response_is_uncited(
     tmp_path: Path,
 ) -> None:
     law_client = _UncitedLawClient()
@@ -744,11 +759,68 @@ def test_river_policy_rejects_uncited_law_response_and_negative_caches_it(
     second = client.post("/regulations/insight", json=payload)
 
     assert first.status_code == second.status_code == 200
-    assert first.json()["legal_evidence_status"] == "unavailable"
-    assert first.json()["legal_source_urls"] == []
-    assert first.json()["source"] == "rule_fallback"
+    assert first.json()["legal_evidence_status"] == "retrieved"
+    assert first.json()["legal_evidence_source"] == "curated_registry"
+    assert first.json()["legal_source_urls"] == [
+        "https://www.law.go.kr/법령/하천법",
+        "https://www.law.go.kr/법령/건축법",
+        "https://www.law.go.kr/법령/관광진흥법",
+    ]
+    assert {basis["code"] for basis in first.json()["legal_bases"]} == {
+        "river_management_zone",
+        "river_occupation",
+        "building_permission",
+        "tourism_business_registration",
+    }
+    assert first.json()["source"] == "openai"
+    assert first.json()["cached"] is False
+    assert second.json()["cached"] is True
+    assert "인허가 처분 또는 관리청 공식의견을 대체하지 않습니다" in (
+        first.json()["limitations"]
+    )
     assert law_client.calls == 1
-    assert river_generator.calls == 0
+    assert river_generator.calls == 1
+
+
+def test_river_policy_keeps_grounded_basic_explanation_when_ai_is_unavailable(
+    tmp_path: Path,
+) -> None:
+    river_generator = _FailingRiverGenerator()
+    settings = _settings(tmp_path).model_copy(
+        update={
+            "vworld_api_key": None,
+            "tourism_ai_legal_db_path": tmp_path / "law-evidence.duckdb",
+        }
+    )
+    client = TestClient(
+        create_app(
+            settings,
+            generator=_CountingGenerator(_model_document()),
+            law_mcp_client=_UncitedLawClient(),
+            river_policy_generator=river_generator,
+        )
+    )
+
+    response = client.post(
+        "/regulations/insight",
+        json={
+            "longitude": 128.953,
+            "latitude": 35.117,
+            "activity": "lodging",
+            "river_zone": "waterfront",
+            "roof_type": "unknown",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["source"] == "rule_fallback"
+    assert response.json()["legal_evidence_status"] == "retrieved"
+    assert response.json()["legal_evidence_source"] == "curated_registry"
+    assert "하천법" in response.json()["policy_insight"]
+    assert "인허가 처분 또는 관리청 공식의견을 대체하지 않습니다" in (
+        response.json()["limitations"]
+    )
+    assert river_generator.calls == 1
 
 
 def test_regulation_point_rejects_invalid_pnu(tmp_path: Path) -> None:

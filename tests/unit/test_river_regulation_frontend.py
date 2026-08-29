@@ -25,7 +25,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-parcel-law-v7"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-legal-basis-v8"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -69,10 +69,14 @@ def test_river_map_exposes_five_parks_layers_and_click_assessment() -> None:
     assert 'id="policy-insight-button"' in html
     assert 'id="policy-insight-panel"' in html
     assert 'fetch("/tourism/api/regulations/insight"' in script
+    assert "legal_evidence_source" in script
+    assert "basis.law_name" in script
+    assert "basis.articles" in script
     assert "parcel_resolution" in script
     assert 'query.set("height_m"' in script
     assert 'query.set("roof_type"' in script
     assert "법적 효력" in html
+    assert "인허가 처분 또는 관리청 공식의견을 대체하지 않습니다" in html
     assert "@media (max-width: 760px)" in stylesheet
 
 

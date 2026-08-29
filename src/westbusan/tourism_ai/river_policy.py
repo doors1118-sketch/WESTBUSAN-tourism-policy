@@ -6,7 +6,7 @@ import hashlib
 import json
 import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Literal, Protocol
@@ -15,6 +15,14 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
 
+from westbusan.river_regulation.legal_basis import (
+    LEGAL_BASIS_VERSION,
+    MANDATORY_POLICY_DISCLAIMER,
+    LegalBasis,
+    legal_bases_for,
+    legal_basis_identity,
+    legal_basis_text,
+)
 from westbusan.tourism_ai.legal_mcp import (
     KoreanLawMCPClient,
     LegalEvidenceStore,
@@ -72,6 +80,11 @@ class RiverPolicyInsightResponse(BaseModel):
     required_consultations: list[str]
     limitations: str
     legal_evidence_status: Literal["retrieved", "unavailable"]
+    legal_evidence_source: Literal[
+        "curated_registry", "curated_registry_and_mcp", "unavailable"
+    ]
+    legal_basis_version: str
+    legal_bases: list[LegalBasis]
     legal_source_urls: list[str]
     legal_evidence_sha256: str | None
     legal_mcp_package_version: str | None
@@ -169,11 +182,26 @@ class RiverPolicyInsightService:
         request: RiverPolicyInsightRequest,
         spatial_evidence: dict[str, object],
     ) -> RiverPolicyInsightResponse:
-        legal = self._legal_evidence(request=request, spatial=spatial_evidence)
+        bases = legal_bases_for(
+            activity=request.activity,
+            river_zone=request.river_zone,
+            spatial_evidence=spatial_evidence,
+        )
+        mcp_legal = self._legal_evidence(request=request, spatial=spatial_evidence)
+        curated_text = legal_basis_text(bases)
+        legal_text = curated_text
+        if mcp_legal is not None:
+            legal_text = f"{curated_text}\n\n법령 MCP 보조검색 결과\n{mcp_legal.text}"
+        legal_sha256 = (
+            hashlib.sha256(legal_text.encode("utf-8")).hexdigest()
+            if bases or mcp_legal is not None
+            else None
+        )
         identity = {
             "request": request.model_dump(mode="json"),
             "spatial": _spatial_identity(spatial_evidence),
-            "legal_evidence_sha256": legal.response_sha256 if legal else None,
+            "legal_basis": legal_basis_identity(bases),
+            "legal_evidence_sha256": legal_sha256,
             "model": self.model,
             "prompt_version": self.prompt_version,
         }
@@ -181,7 +209,10 @@ class RiverPolicyInsightService:
             identity=identity,
             generate=lambda: self._generate_response(
                 spatial=spatial_evidence,
-                legal=legal,
+                bases=bases,
+                legal_text=legal_text,
+                legal_sha256=legal_sha256,
+                mcp_legal=mcp_legal,
             ),
         )
 
@@ -221,29 +252,58 @@ class RiverPolicyInsightService:
         self,
         *,
         spatial: dict[str, object],
-        legal: StoredLegalEvidence | None,
+        bases: tuple[LegalBasis, ...],
+        legal_text: str,
+        legal_sha256: str | None,
+        mcp_legal: StoredLegalEvidence | None,
     ) -> RiverPolicyInsightResponse:
         source: Literal["openai", "rule_fallback"] = "rule_fallback"
-        if legal is not None:
+        if bases or mcp_legal is not None:
             try:
                 model_value = self.generator.generate_river_policy_insight(
                     spatial_evidence=_safe_spatial_evidence(spatial),
-                    legal_evidence=legal.text,
+                    legal_evidence=legal_text,
                 )
                 source = "openai"
             except (RuntimeError, TypeError, ValueError):
-                model_value = _fallback(spatial)
+                model_value = _fallback(spatial, bases=bases)
         else:
-            model_value = _fallback(spatial)
+            model_value = _fallback(spatial, bases=bases)
+        source_urls = list(
+            dict.fromkeys(
+                [basis.official_url for basis in bases]
+                + (
+                    list(mcp_legal.source_urls)
+                    if mcp_legal is not None
+                    else []
+                )
+            )
+        )
+        evidence_status: Literal["retrieved", "unavailable"] = (
+            "retrieved" if source_urls else "unavailable"
+        )
+        evidence_source: Literal[
+            "curated_registry", "curated_registry_and_mcp", "unavailable"
+        ] = (
+            "curated_registry_and_mcp"
+            if mcp_legal is not None
+            else "curated_registry"
+            if bases
+            else "unavailable"
+        )
         return RiverPolicyInsightResponse(
             deterministic_grade=str(spatial.get("grade") or "unreviewed"),
             deterministic_label=str(spatial.get("label") or "사전검토 미완료"),
-            **model_value.model_dump(),
-            legal_evidence_status="retrieved" if legal is not None else "unavailable",
-            legal_source_urls=list(legal.source_urls) if legal is not None else [],
-            legal_evidence_sha256=legal.response_sha256 if legal is not None else None,
+            **model_value.model_dump(exclude={"limitations"}),
+            limitations=_with_mandatory_disclaimer(model_value.limitations),
+            legal_evidence_status=evidence_status,
+            legal_evidence_source=evidence_source,
+            legal_basis_version=LEGAL_BASIS_VERSION,
+            legal_bases=list(bases),
+            legal_source_urls=source_urls,
+            legal_evidence_sha256=legal_sha256,
             legal_mcp_package_version=(
-                legal.package_version if legal is not None else None
+                mcp_legal.package_version if mcp_legal is not None else None
             ),
             generated_at=datetime.now(ZoneInfo("Asia/Seoul")),
             model=self.model,
@@ -329,29 +389,41 @@ def _safe_spatial_evidence(spatial: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _fallback(spatial: Mapping[str, object]) -> ModelRiverPolicyInsight:
+def _fallback(
+    spatial: Mapping[str, object], *, bases: Sequence[LegalBasis]
+) -> ModelRiverPolicyInsight:
     label = str(spatial.get("label") or "사전검토 미완료")
     reason = str(spatial.get("reason") or "공간규제 자료를 확인해야 합니다.")
     next_check = str(
         spatial.get("next_check")
         or "최신 고시도면과 관리청 공식 의견을 확인하십시오."
     )
+    basis_summary = "·".join(dict.fromkeys(basis.law_name for basis in bases))
+    evidence_note = (
+        f" 확인된 기본 근거법령은 {basis_summary}입니다."
+        if basis_summary
+        else " 적용 근거법령은 공간규제와 최신 고시를 추가 확인해야 합니다."
+    )
     return ModelRiverPolicyInsight(
         headline=label,
         policy_insight=(
-            f"결정규칙상 판단은 '{label}'입니다. {reason} 법령 MCP 근거가 "
-            "확보되지 않은 경우 이 설명을 법률판단으로 사용하면 안 됩니다."
+            f"결정규칙상 판단은 '{label}'입니다. {reason}{evidence_note} "
+            "법령명과 조문만으로 개별 사업의 허용 여부를 확정하지 않습니다."
         ),
         policy_options=[
             "현 위치안과 하천구역 밖 대체입지안을 병행 비교",
             "영구구조물·점용면적·차량진입을 줄인 최소개입 대안 작성",
         ],
         required_consultations=[next_check, "관할 관리청에 사업계획서 기반 사전협의"],
-        limitations=(
-            "공간중첩과 자동 법령조회는 1차 선별이며 인허가 처분, 사업성, "
-            "개별 고시의 최종 적용판단을 대체하지 않습니다."
-        ),
+        limitations=MANDATORY_POLICY_DISCLAIMER,
     )
+
+
+def _with_mandatory_disclaimer(value: str) -> str:
+    text = " ".join(value.split())
+    if "인허가 처분 또는 관리청 공식의견을 대체하지 않습니다" in text:
+        return text
+    return f"{text} {MANDATORY_POLICY_DISCLAIMER}".strip()
 
 
 __all__ = [

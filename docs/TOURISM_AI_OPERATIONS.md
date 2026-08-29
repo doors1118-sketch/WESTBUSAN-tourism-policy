@@ -53,14 +53,18 @@
 - MCP는 `legal_research`의 `action_basis`·`procedure_detail`만 백엔드 허용목록으로 호출한다. 브라우저가 도구명, 자유 API 키 또는 법령 MCP URL을 지정할 수 없다.
 - MCP 결과는 24시간 동안 별도 DuckDB에 저장한다. AI 캐시는 좌표·행위·PNU·공간 스냅샷·법령응답 해시·모델·프롬프트 버전이 모두 같은 경우에만 재사용한다.
 - 자동 해설은 결정규칙의 등급을 바꾸지 않는다. 법령 MCP는 공식 법률해석이나 관리청 의견이 아니며, 표시된 원문 링크·시행일·개별 고시·허용기준을 다시 확인한다.
+- 낙동강 정책해설은 `LEGAL_BASIS_VERSION`으로 버전 관리되는 내부 근거법령 레지스트리를 우선 사용한다. 공간중첩이 확인된 규제만 하천법·습지보전법·국가유산 관계법령·국토계획법·공원녹지법 등에 연결하며, Korea-law-mcp는 최신 연계조문과 절차를 찾는 보조수단이다.
+- MCP 응답에 공식 URL이 없더라도 내부 레지스트리의 법령명·조문·검증된 `law.go.kr` 링크로 기본 정책해설을 제공한다. 이 경우 `legal_evidence_source=curated_registry`이며 MCP 원문을 근거에 섞지 않는다.
+- 모든 정책해설에는 `인허가 처분 또는 관리청 공식의견을 대체하지 않습니다` 문구를 서버에서 강제로 포함한다. 모델 출력만으로 삭제하거나 완화할 수 없다.
 
 ### 법령 서비스 검증
 
 1. `curl --fail http://127.0.0.1:18082/health`로 loopback 상태만 확인한다.
 2. 인증 토큰을 출력하지 않고 `tools/list` 응답에 `legal_research`가 있는지만 검사한다.
 3. 대표 지점에서 `/tourism/api/regulations/point`가 PNU를 자동 연결하는지 확인한다.
-4. 같은 요청을 `/tourism/api/regulations/insight`로 두 번 실행해 두 번째 응답의 `cached=true`, 동일한 `deterministic_grade`, 공식 법령 URL 존재 여부를 확인한다.
-5. `legal_evidence_status=unavailable`일 때도 지도 결정규칙은 표시되어야 하며, UI가 이를 허가 가능 또는 규제 없음으로 바꾸면 배포를 중단한다.
+4. 같은 요청을 `/tourism/api/regulations/insight`로 두 번 실행해 두 번째 응답의 `cached=true`, 동일한 `deterministic_grade`, `legal_bases`, 공식 법령 URL 존재 여부를 확인한다.
+5. `legal_evidence_source=curated_registry`이면 기본 근거법령만 사용한 해설이고, `curated_registry_and_mcp`이면 공식 URL이 검증된 MCP 보조검색까지 결합한 해설이다.
+6. `legal_evidence_status=unavailable`일 때도 지도 결정규칙은 표시되어야 하며, UI가 이를 허가 가능 또는 규제 없음으로 바꾸면 배포를 중단한다.
 
 ## 서비스·Nginx 활성화
 
