@@ -21,7 +21,7 @@
   const policyInsightButton = document.getElementById("policy-insight-button");
   const policyInsightPanel = document.getElementById("policy-insight-panel");
   const layerFocusStatus = document.getElementById("layer-focus-status");
-  const resetLayerFocus = document.getElementById("reset-layer-focus");
+  const clearAllLayersButton = document.getElementById("clear-all-layers");
   const tileNodes = new Map();
   const parkBoundaryPathNodes = [];
   const pathNodes = [];
@@ -353,7 +353,7 @@
       button.setAttribute("aria-pressed", String(active));
       if (active) button.textContent = "강조 중";
     });
-    resetLayerFocus.disabled = false;
+    clearAllLayersButton.disabled = false;
     layerFocusStatus.classList.toggle("is-active", hasFocus);
     const count = hasFocus ? focusItemsForLayer(focusedLayer).length : 0;
     layerFocusStatus.textContent = focusMessageOverride || (hasFocus
@@ -384,18 +384,22 @@
     if (focusedLayer) fitFocusedFeatures(focusedLayer);
   }
 
-  function showAllLayers() {
+  function clearAllLayers() {
     focusedLayer = null;
-    focusMessageOverride = "전체 규제 레이어와 5개 생태공원 참고경계를 다시 켰습니다. 중첩 색상은 아래 선택지 공간중첩 명칭과 함께 판독하십시오.";
+    focusMessageOverride = "전체 레이어를 해제했습니다. 체크박스 또는 강조 버튼에서 필요한 레이어를 선택하십시오.";
     document.querySelectorAll("[data-park-boundary-layer], [data-layer], [data-regulation-layer]").forEach((input) => {
-      input.checked = true;
+      input.checked = false;
     });
-    pathNodes.forEach(({ node }) => node.classList.remove("is-hidden"));
-    externalPathNodes.forEach(({ node }) => node.classList.remove("is-hidden"));
-    parkBoundaryPathNodes.forEach(({ node }) => node.classList.remove("is-hidden"));
+    pathNodes.forEach(({ node }) => node.classList.add("is-hidden"));
+    externalPathNodes.forEach(({ node }) => node.classList.add("is-hidden"));
+    parkBoundaryPathNodes.forEach(({ node }) => node.classList.add("is-hidden"));
     setActiveParkBoundary(null);
+    document.querySelectorAll("[data-park]").forEach((button) => {
+      button.classList.remove("is-active");
+      button.setAttribute("aria-pressed", "false");
+    });
     applyLayerReadability();
-    renderOverlay();
+    setView(INITIAL.lon, INITIAL.lat, INITIAL.zoom);
   }
 
   function riverOverlapItems(point) {
@@ -933,7 +937,7 @@
   document.querySelectorAll("[data-focus-layer]").forEach((button) => button.addEventListener("click", () => {
     setFocusedLayer(button.dataset.focusLayer);
   }));
-  resetLayerFocus.addEventListener("click", showAllLayers);
+  clearAllLayersButton.addEventListener("click", clearAllLayers);
   updateFocusButtons();
   applyLayerReadability();
   activitySelect.addEventListener("change", () => { document.getElementById("selected-activity").textContent = activityLabels[activitySelect.value]; if (selectedPoint) updateAssessment(selectedPoint); });

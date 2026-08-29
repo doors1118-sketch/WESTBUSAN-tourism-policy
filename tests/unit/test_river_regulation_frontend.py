@@ -28,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-park-layer-v16"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260829-layer-clear-v17"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -145,7 +145,8 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
     dashboard_html = _read(ASSET_ROOT / "index.html")
 
     assert 'id="layer-focus-status"' in html
-    assert 'id="reset-layer-focus"' in html
+    assert 'id="clear-all-layers"' in html
+    assert "전체 레이어 해제" in html
     assert html.count('class="layer-focus-button"') == 8
     assert html.count('aria-pressed="false"') >= 8
     assert 'id="overlap-summary"' in html
@@ -154,15 +155,17 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
     assert 'id="overlap-summary-note"' in html
 
     assert "function setFocusedLayer" in script
-    assert "function showAllLayers" in script
+    assert "function clearAllLayers" in script
     assert "function applyLayerReadability" in script
     assert "function renderOverlapSummary" in script
     assert "function renderDecisionBasis" in script
     assert "input.checked = true" in script
     assert 'node.classList.remove("is-hidden")' in script
-    assert "resetLayerFocus.disabled = false" in script
+    assert "clearAllLayersButton.disabled = false" in script
     assert '[data-park-boundary-layer], [data-layer], [data-regulation-layer]' in script
-    assert 'parkBoundaryPathNodes.forEach(({ node }) => node.classList.remove("is-hidden"))' in script
+    assert "input.checked = false" in script
+    assert 'parkBoundaryPathNodes.forEach(({ node }) => node.classList.add("is-hidden"))' in script
+    assert "setView(INITIAL.lon, INITIAL.lat, INITIAL.zoom)" in script
     assert 'classList.toggle("is-focus-layer"' in script
     assert 'classList.toggle("is-context-layer"' in script
     assert 'setAttribute("aria-pressed"' in script
@@ -195,7 +198,7 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
 
     assert html.count(">강조</button>") == 4
 
-    version = "20260829-park-layer-v16"
+    version = "20260829-layer-clear-v17"
     assert f"map.css?v={version}" in html
     assert f"map.js?v={version}" in html
     assert f'river-map/index.html?v={version}' in dashboard_html
