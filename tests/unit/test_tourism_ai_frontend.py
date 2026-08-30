@@ -90,6 +90,16 @@ def test_mobile_dashboard_gives_investment_map_enough_embedded_height() -> None:
     assert ".investment-map-card iframe{height:940px}" in mobile_block
 
 
+def test_dashboard_resizes_same_origin_map_frames_to_their_document_height() -> None:
+    """Prevents nested iframe scrollbars from hiding map results after the redesign."""
+    script = _asset("app.js")
+
+    assert 'event.origin !== window.location.origin' in script
+    assert 'event.data.type !== "westbusan:map-height"' in script
+    assert "frame.contentWindow === event.source" in script
+    assert "Math.min(3600" in script
+
+
 def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
     """Catches the supply tab losing the demand evidence that explains the gap."""
     html = _asset("index.html")
@@ -253,7 +263,7 @@ def test_large_spatial_map_is_loaded_only_after_investment_tab_is_selected() -> 
     html = _asset("index.html")
     script = _asset("app.js")
 
-    assert 'data-map-src="map/index.html?v=20260827-poi-filters-v66"' in html
+    assert 'data-map-src="map/index.html?v=20260830-map-layout-v67"' in html
     assert '<iframe src="map/index.html"' not in html
     assert 'target === "investment"' in script
     assert "방문·체류·소비·교통수요가 어디에서 얼마나 발생하는가" in html
@@ -265,8 +275,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260830-district-rankless-v24"' in html
-    assert 'src="app.js?v=20260830-district-rankless-v24"' in html
+    assert 'href="app.css?v=20260830-map-layout-v25"' in html
+    assert 'src="app.js?v=20260830-map-layout-v25"' in html
 
 
 def test_comprehensive_tab_has_all_report_sections_and_print_action() -> None:
@@ -767,7 +777,7 @@ def test_vacant_house_tab_lazy_loads_exact_internal_map_without_embedding_source
     document = json.loads(_asset("data.json"))
 
     assert (
-        'data-vacant-map-src="vacant-map/index.html?v=20260827-poi-filters-v66"'
+        'data-vacant-map-src="vacant-map/index.html?v=20260830-map-layout-v67"'
         in html
     )
     assert '<iframe src="vacant-map/index.html"' not in html

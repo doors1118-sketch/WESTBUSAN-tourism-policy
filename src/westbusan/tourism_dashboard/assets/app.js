@@ -943,6 +943,19 @@ function renderInsight(insight) {
   });
 }
 
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) return;
+  if (!event.data || event.data.type !== "westbusan:map-height") return;
+  const frame = [...document.querySelectorAll(".investment-map-card iframe, .vacant-map-card iframe")]
+    .find((frame) => frame.contentWindow === event.source);
+  if (!frame) return;
+  const requestedHeight = Number(event.data.height);
+  if (!Number.isFinite(requestedHeight)) return;
+  const boundedHeight = Math.max(650, Math.min(3600, Math.ceil(requestedHeight)));
+  if (Math.abs(frame.getBoundingClientRect().height - boundedHeight) < 2) return;
+  frame.style.height = `${boundedHeight}px`;
+});
+
 fetch("data.json", { cache: "no-store" })
   .then((response) => response.json())
   .then(renderDashboard)

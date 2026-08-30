@@ -574,7 +574,8 @@ def test_vacant_map_bundle_is_live_deterministic_and_exact_at_street_zoom(
     assert "다음 조치" in html
     assert "B형 검토" in script
     assert "사전 제외조건" in html
-    assert "max-height: calc(100vh - 78px)" in css
+    assert "main { display: grid; grid-template-columns: 1fr;" in css
+    assert "max-height: calc(100vh - 78px)" not in css
 
 
 def test_vacant_map_publishes_candidate_building_register_linkage(
@@ -639,15 +640,23 @@ def test_missing_accessibility_keeps_existing_candidate_order(
     assert access == {"features": [], "type": "FeatureCollection"}
 
 
-def test_mobile_layout_places_vacant_map_before_long_candidate_sidebar() -> None:
-    """Prevents the map from being pushed thousands of pixels below candidates."""
+def test_vacant_map_uses_top_filters_full_width_map_and_body_results() -> None:
+    """Prevents long filters and candidates from hiding the primary map."""
+    html = Path(
+        "src/westbusan/vacant_house/templates/vacant_map.html"
+    ).read_text(encoding="utf-8")
     css = Path(
         "src/westbusan/vacant_house/assets/vacant_map.css"
     ).read_text(encoding="utf-8")
 
-    assert "@media(max-width:960px)" in css
-    assert ".map-workspace { order: 1;" in css
-    assert ".map-sidebar { order: 2;" in css
+    assert 'class="map-filter-bar"' in html
+    assert 'class="map-results"' in html
+    assert "<aside" not in html
+    assert html.index('id="district-filter"') < html.index('id="vacant-slippy-map"')
+    assert html.index('id="vacant-slippy-map"') < html.index('id="hub-candidate-list"')
+    assert "main { display: grid; grid-template-columns: 1fr;" in css
+    assert "max-height: calc(100vh - 78px)" not in css
+    assert ".map-filter-bar" in css
 
 
 def test_landlocked_standalone_candidate_is_excluded_before_ranking(

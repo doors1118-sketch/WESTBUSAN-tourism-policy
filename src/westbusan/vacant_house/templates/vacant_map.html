@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>서부산 빈집 개발후보 지도</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-  <link rel="stylesheet" href="vacant-map.css">
+  <link rel="stylesheet" href="vacant-map.css?v=20260830-map-layout-v67">
 </head>
 <body>
   <header class="map-header">
@@ -13,22 +13,34 @@
     <p>원천 기준일 <strong>{{SOURCE_DATE}}</strong></p>
   </header>
   <main>
-    <aside class="map-sidebar">
-      <h2>빈집 현황과 개발후보</h2>
-      <p>자치구별 빈집 전수현황과 별도 기준으로 선별한 개발후보를 분리해 표시합니다.</p>
-      <label>자치구<select id="district-filter"><option value="">서부산 전체</option></select></label>
+    <section class="map-filter-bar" aria-label="빈집 지도 필터">
+      <div class="filter-heading"><div><h2>빈집 현황과 개발후보</h2><p>자치구별 빈집 전수현황과 별도 기준으로 선별한 개발후보를 분리해 표시합니다.</p></div>
+        <label>자치구<select id="district-filter"><option value="">서부산 전체</option></select></label></div>
       <section class="access-layer-controls" aria-label="접근성 지도 레이어">
         <h3>지도 레이어</h3>
-        <label><input type="checkbox" data-layer="transport_inflow" checked>대중교통 유입량</label>
-        <label><input type="checkbox" data-layer="tourism_poi" checked>인근 관광지</label>
+        <div><label><input type="checkbox" data-layer="transport_inflow" checked>대중교통 유입량</label>
+          <label><input type="checkbox" data-layer="tourism_poi" checked>인근 관광지</label></div>
         <p>대중교통 유입량은 관광객 수가 아닙니다. 통행 목적과 중복 이용자를 구분하지 못합니다.</p>
       </section>
-      <section class="poi-type-filter" aria-label="관광정보 유형 필터">
-        <h3>관광정보 유형</h3>
-        <div><button class="poi-filter-button is-active" type="button" data-poi-filter="all" aria-pressed="true"><i class="poi-all"></i>전체</button><button class="poi-filter-button" type="button" data-poi-filter="festival" aria-pressed="false"><i class="poi-festival"></i>축제·행사</button><button class="poi-filter-button" type="button" data-poi-filter="food" aria-pressed="false"><i class="poi-food"></i>식당·음식</button><button class="poi-filter-button" type="button" data-poi-filter="tourism_culture" aria-pressed="false"><i class="poi-tourism-culture"></i>관광·문화시설</button><button class="poi-filter-button" type="button" data-poi-filter="leisure_course" aria-pressed="false"><i class="poi-leisure-course"></i>레포츠·여행코스</button><button class="poi-filter-button" type="button" data-poi-filter="lodging_shopping" aria-pressed="false"><i class="poi-lodging-shopping"></i>숙박·쇼핑</button><button class="poi-filter-button" type="button" data-poi-filter="other" aria-pressed="false"><i class="poi-other"></i>기타 관광정보</button></div>
-        <p id="vacant-poi-filter-status" aria-live="polite">전체 관광정보를 표시합니다.</p>
-      </section>
-      <section class="inventory-status" aria-live="polite">
+      <details class="advanced-filters"><summary>관광정보 유형·지도 범례 보기</summary><div class="advanced-filter-grid">
+        <section class="poi-type-filter" aria-label="관광정보 유형 필터">
+          <h3>관광정보 유형</h3>
+          <div><button class="poi-filter-button is-active" type="button" data-poi-filter="all" aria-pressed="true"><i class="poi-all"></i>전체</button><button class="poi-filter-button" type="button" data-poi-filter="festival" aria-pressed="false"><i class="poi-festival"></i>축제·행사</button><button class="poi-filter-button" type="button" data-poi-filter="food" aria-pressed="false"><i class="poi-food"></i>식당·음식</button><button class="poi-filter-button" type="button" data-poi-filter="tourism_culture" aria-pressed="false"><i class="poi-tourism-culture"></i>관광·문화시설</button><button class="poi-filter-button" type="button" data-poi-filter="leisure_course" aria-pressed="false"><i class="poi-leisure-course"></i>레포츠·여행코스</button><button class="poi-filter-button" type="button" data-poi-filter="lodging_shopping" aria-pressed="false"><i class="poi-lodging-shopping"></i>숙박·쇼핑</button><button class="poi-filter-button" type="button" data-poi-filter="other" aria-pressed="false"><i class="poi-other"></i>기타 관광정보</button></div>
+          <p id="vacant-poi-filter-status" aria-live="polite">전체 관광정보를 표시합니다.</p>
+        </section>
+        <div class="legend"><strong>지도 기호</strong><span><i class="hub"></i>A형 연속필지군</span><span><i class="standalone"></i>B형 자치구별 단일필지 예비후보</span><span><i class="parcel"></i>개별 지적필지</span><span><i class="house"></i>개별 빈집 위치</span><span><i class="transport"></i>동별 대중교통 유입</span></div>
+      </div></details>
+    </section>
+    <section class="map-workspace">
+      <div id="vacant-slippy-map" data-map-center="129.035,35.155" data-map-zoom="11"
+        data-min-zoom="7" data-max-zoom="19"
+        data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png">
+        <div class="zoom-guide" id="zoom-guide">후보 번호를 선택하면 연속필지군으로 확대됩니다.</div>
+      </div>
+    </section>
+    <section class="map-results" aria-label="빈집 지도 선택 결과">
+      <div class="result-heading"><div><span>MAP REVIEW RESULT</span><h2>빈집 전수현황과 개발후보</h2></div></div>
+      <div class="result-overview"><section class="inventory-status" aria-live="polite">
         <h3>빈집 전수현황</h3>
         <div><strong id="inventory-house-count">—</strong><span>빈집 위치</span><strong id="inventory-parcel-count">—</strong><span>고유 필지</span></div>
         <p id="district-candidate-status">서부산 4개 구의 전수현황과 개발후보를 함께 표시합니다.</p>
@@ -39,18 +51,10 @@
         <p><strong>사업조건</strong> 취약·미지정 도로접면, 자연녹지·공업·역사문화환경보존 등 추가 인허가 검토지역</p>
         <p><strong>자료 보완</strong> 건축물대장·건축연도·건축구조 미연계 또는 미확인</p>
         <small>정책상 1차 검토이며 법적 입지·인허가 가능성을 확정하지 않습니다.</small>
-      </section>
+      </section></div>
       <h2 class="candidate-heading">개발후보</h2>
-      <section class="candidate-group"><h3><span>A형</span> 연속필지 거점개발 후보 <small id="hub-candidate-count"></small></h3><p>3개 이상 빈집 필지의 경계 접촉이 확인된 필지군</p><ol id="hub-candidate-list" class="candidate-list"></ol></section>
-      <section class="candidate-group standalone-group"><h3><span>B형</span> 자치구별 단독개발·숙박전환 예비후보 <small id="standalone-candidate-count"></small></h3><p>비연속 단독주택형 빈집 중 검증 지적면적 300㎡ 이상, 자치구별 최대 5개</p><ol id="standalone-candidate-list" class="candidate-list"></ol></section>
-      <div class="legend"><strong>지도 기호</strong><span><i class="hub"></i>A형 연속필지군</span><span><i class="standalone"></i>B형 자치구별 단일필지 예비후보</span><span><i class="parcel"></i>개별 지적필지</span><span><i class="house"></i>개별 빈집 위치</span><span><i class="transport"></i>동별 대중교통 유입</span></div>
-    </aside>
-    <section class="map-workspace">
-      <div id="vacant-slippy-map" data-map-center="129.035,35.155" data-map-zoom="11"
-        data-min-zoom="7" data-max-zoom="19"
-        data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png">
-        <div class="zoom-guide" id="zoom-guide">후보 번호를 선택하면 연속필지군으로 확대됩니다.</div>
-      </div>
+      <div class="candidate-results-grid"><section class="candidate-group"><h3><span>A형</span> 연속필지 거점개발 후보 <small id="hub-candidate-count"></small></h3><p>3개 이상 빈집 필지의 경계 접촉이 확인된 필지군</p><ol id="hub-candidate-list" class="candidate-list"></ol></section>
+        <section class="candidate-group standalone-group"><h3><span>B형</span> 자치구별 단독개발·숙박전환 예비후보 <small id="standalone-candidate-count"></small></h3><p>비연속 단독주택형 빈집 중 검증 지적면적 300㎡ 이상, 자치구별 최대 5개</p><ol id="standalone-candidate-list" class="candidate-list"></ol></section></div>
       <section class="selected-detail" id="selected-detail" aria-live="polite">
         <div><span>SELECTED VACANT HOUSE</span><h2 id="detail-title">서부산 빈집 상세</h2><p id="detail-summary">지도 또는 후보 목록을 선택하면 후보 여부와 상세 빈집 주소를 확인할 수 있습니다.</p></div>
         <div class="review-state-row"><span id="detail-business-status">사업조건: 후보 미선택</span><span id="detail-data-status">자료 보완: 후보 미선택</span></div>
@@ -75,6 +79,6 @@
     </section>
   </main>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script src="vacant-map.js"></script>
+  <script src="vacant-map.js?v=20260830-map-layout-v67"></script>
 </body>
 </html>

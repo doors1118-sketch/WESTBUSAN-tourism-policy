@@ -10,7 +10,8 @@
   const tileLayer = document.getElementById("vworld-tile-layer");
   const svg = document.getElementById("spatial-map");
   const grids = [...document.querySelectorAll(".grid-feature")];
-  const facilities = [...document.querySelectorAll(".facility-feature")];
+  const facilityPointLayer = document.getElementById("facility-points");
+  let facilities = [];
   const clusters = [...document.querySelectorAll(".facility-cluster")];
   const policyLabels = [...document.querySelectorAll(".district-policy-label")];
   const tourismPois = [...document.querySelectorAll(".tourism-poi-marker")];
@@ -18,7 +19,6 @@
   const tourismPoiPopup = document.getElementById("tourism-poi-popup");
   const poiFilterButtons = [...document.querySelectorAll("[data-poi-filter]")];
   const poiFilterStatus = document.getElementById("spatial-poi-filter-status");
-  const filterable = [...grids, ...facilities, ...clusters, ...policyLabels, ...tourismPois];
   const westDistricts = new Set(["강서구", "사하구", "북구", "사상구"]);
   const eastDistricts = new Set(["해운대구", "수영구", "기장군"]);
   const filters = {
@@ -37,6 +37,14 @@
   let selectedGridNode = null;
   let dragOrigin = null;
   let gridGeometryPromise = null;
+  let facilityGeoJsonPromise = null;
+  let facilityFeatures = null;
+  let facilityRenderTimer = null;
+  let mapRenderFrame = null;
+
+  function filterableNodes() {
+    return [...grids, ...facilities, ...clusters, ...policyLabels, ...tourismPois];
+  }
 
   function worldPixel(lon, lat, zoom) {
     const size = TILE_SIZE * (2 ** zoom);
@@ -104,6 +112,132 @@
     return [point[0] - initialWorld[0] + 500, point[1] - initialWorld[1] + 350];
   }
 
+  function visibleGeographicBounds() {
+    const width = Math.max(320, slippyMap.clientWidth);
+    const height = Math.max(320, slippyMap.clientHeight);
+    const northWest = lonLatFromWorld(
+      mapState.centerX - width / 2,
+      mapState.centerY - height / 2,
+      mapState.zoom,
+    );
+    const southEast = lonLatFromWorld(
+      mapState.centerX + width / 2,
+      mapState.centerY + height / 2,
+      mapState.zoom,
+    );
+    return [northWest[0], southEast[1], southEast[0], northWest[1]];
+  }
+
+  function facilityFeatureVisible(feature, bounds) {
+    const properties = feature.properties || {};
+    const coordinates = feature.geometry?.coordinates || [];
+    if (feature.geometry?.type !== "Point" || coordinates.length < 2) return false;
+    if (filters.district.value && properties.district_name !== filters.district.value) return false;
+    if (filters.dong.value && properties.primary_dong_name !== filters.dong.value) return false;
+    if (filters.period.value && properties.period && properties.period !== filters.period.value) return false;
+    return coordinates[0] >= bounds[0] && coordinates[0] <= bounds[2]
+      && coordinates[1] >= bounds[1] && coordinates[1] <= bounds[3];
+  }
+
+  function textValue(value) {
+    return value === null || value === undefined ? "" : String(value);
+  }
+
+  function createFacilityNode(feature) {
+    const properties = feature.properties || {};
+    const [x, y] = mapCoordinate(...feature.geometry.coordinates.map(Number));
+    const node = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    node.setAttribute("class", "facility-feature");
+    node.setAttribute("cx", x.toFixed(3));
+    node.setAttribute("cy", y.toFixed(3));
+    node.setAttribute("r", "3");
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("role", "button");
+    node.setAttribute("aria-label", `${properties.public_name || "숙박시설"} 숙박시설`);
+    Object.assign(node.dataset, {
+      baseRadius: "3",
+      kind: "facility",
+      key: textValue(properties.facility_key),
+      grade: textValue(properties.composite_grade || "insufficient_evidence"),
+      district: textValue(properties.district_name),
+      dong: textValue(properties.primary_dong_name),
+      period: textValue(properties.period),
+      smallScale: textValue(properties.small_scale_rating),
+      aged: textValue(properties.aged_building_rating),
+      context: textValue(properties.district_context_rating),
+      publicName: textValue(properties.public_name),
+      publicAddress: textValue(properties.public_address),
+      roomCount: textValue(properties.room_count),
+      buildingAge: textValue(properties.use_approval_age_years),
+      landUseZone: textValue(properties.land_use_zone),
+      siteArea: textValue(properties.site_area),
+      totalArea: textValue(properties.total_area),
+      buildingCoverageRatio: textValue(properties.building_coverage_ratio),
+      floorAreaRatio: textValue(properties.floor_area_ratio),
+      mainUse: textValue(properties.main_use),
+      parkingTotal: textValue(properties.parking_total),
+      profileCoverage: textValue(properties.profile_coverage),
+    });
+    const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+    title.textContent = `${properties.public_name || "숙박시설"} · 객실 ${textValue(properties.room_count) || "자료 없음"} · 건물연수 ${textValue(properties.use_approval_age_years) || "자료 없음"}`;
+    node.append(title);
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      renderFacilitySummary(node);
+    });
+    node.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") renderFacilitySummary(node);
+    });
+    return node;
+  }
+
+  async function loadFacilityFeatures() {
+    if (!facilityGeoJsonPromise) {
+      facilityGeoJsonPromise = fetch(slippyMap.dataset.facilitySource, { cache: "force-cache" })
+        .then((response) => {
+          if (!response.ok) throw new Error("facility geometry unavailable");
+          return response.json();
+        })
+        .then((document) => {
+          facilityFeatures = document.features || [];
+          return facilityFeatures;
+        })
+        .catch((error) => {
+          facilityGeoJsonPromise = null;
+          throw error;
+        });
+    }
+    return facilityGeoJsonPromise;
+  }
+
+  async function renderVisibleFacilities() {
+    if (activeLayer !== "facility_locations" || mapState.zoom < 15) {
+      facilityPointLayer.replaceChildren();
+      facilities = [];
+      return;
+    }
+    try {
+      const features = await loadFacilityFeatures();
+      if (activeLayer !== "facility_locations" || mapState.zoom < 15) return;
+      const bounds = visibleGeographicBounds();
+      const fragment = document.createDocumentFragment();
+      const nextFacilities = features.filter((feature) => facilityFeatureVisible(feature, bounds))
+        .map((feature) => createFacilityNode(feature));
+      nextFacilities.forEach((node) => fragment.append(node));
+      facilityPointLayer.replaceChildren(fragment);
+      facilities = nextFacilities;
+      updateOverlayScale();
+    } catch (_) {
+      facilityPointLayer.replaceChildren();
+      facilities = [];
+    }
+  }
+
+  function scheduleFacilityRender() {
+    window.clearTimeout(facilityRenderTimer);
+    facilityRenderTimer = window.setTimeout(renderVisibleFacilities, 120);
+  }
+
   function updateOverlayScale() {
     const scale = 2 ** (mapState.zoom - BASE_ZOOM);
     const inverse = 1 / scale;
@@ -126,6 +260,15 @@
     svg.setAttribute("preserveAspectRatio", "none");
     slippyMap.dataset.currentZoom = String(mapState.zoom);
     updateOverlayScale();
+    scheduleFacilityRender();
+  }
+
+  function requestMapRender() {
+    if (mapRenderFrame !== null) return;
+    mapRenderFrame = window.requestAnimationFrame(() => {
+      mapRenderFrame = null;
+      renderMap();
+    });
   }
 
   function setCenter(lon, lat, zoom = mapState.zoom) {
@@ -627,11 +770,17 @@
 
   function updateVisibleCounts() {
     document.getElementById("visible-grid-count").textContent = grids.filter(visible).length;
-    document.getElementById("visible-facility-count").textContent = facilities.filter(visible).length;
+    const clusterCount = clusters.filter(visible).reduce(
+      (total, node) => total + Number(node.dataset.count || 0), 0,
+    );
+    const fallbackCount = Number(slippyMap.dataset.facilityCount || 0);
+    document.getElementById("visible-facility-count").textContent = String(
+      clusterCount || (!filters.district.value && !filters.dong.value && !filters.period.value ? fallbackCount : 0),
+    );
   }
 
   function apply() {
-    filterable.forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
+    filterableNodes().forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
     updateVisibleCounts();
     updatePoiFilterStatus();
     setLayerEncoding();
@@ -735,7 +884,7 @@
     filters.district.value = item.district;
     refreshDongOptions();
     filters.dong.value = item.dong;
-    filterable.forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
+    filterableNodes().forEach((node) => node.classList.toggle("is-filtered", !visible(node)));
     updateVisibleCounts();
     grids.forEach((node) => node.classList.toggle("is-selected", node === item.node));
     setLayerEncoding();
@@ -804,10 +953,6 @@
     });
   });
   clusters.forEach((node) => node.addEventListener("click", () => selectRegion(node.dataset.district, node.dataset.dong)));
-  facilities.forEach((node) => node.addEventListener("click", (event) => {
-    event.stopPropagation();
-    renderFacilitySummary(node);
-  }));
   tourismPois.forEach((node) => node.addEventListener("click", (event) => {
     event.stopPropagation();
     showTourismPoiPopup(node, event);
@@ -912,11 +1057,24 @@
     if (!dragOrigin) return;
     mapState.centerX = dragOrigin.centerX - (event.clientX - dragOrigin.x);
     mapState.centerY = dragOrigin.centerY - (event.clientY - dragOrigin.y);
-    renderMap();
+    requestMapRender();
   });
   slippyMap.addEventListener("pointerup", () => { dragOrigin = null; });
   slippyMap.addEventListener("pointercancel", () => { dragOrigin = null; });
-  window.addEventListener("resize", renderMap);
+  window.addEventListener("resize", requestMapRender);
+
+  function reportFrameHeight() {
+    if (window.parent === window) return;
+    window.parent.postMessage({
+      type: "westbusan:map-height",
+      map: "investment",
+      height: document.documentElement.scrollHeight,
+    }, window.location.origin);
+  }
+  if ("ResizeObserver" in window) {
+    new ResizeObserver(reportFrameHeight).observe(document.body);
+  }
+  window.addEventListener("load", reportFrameHeight);
 
   apply();
 })();

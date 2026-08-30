@@ -16,10 +16,16 @@
     <span>정책 <strong>{{POLICY_VERSION}}</strong></span>
   </div>
 </header>
-<main class="two-panel">
-  <aside id="filters-panel" aria-label="지도 필터">
-    <h2>지도 필터</h2>
-    <p class="filter-help">색상으로 지역 현황을 먼저 확인하고, 지역을 클릭하면 숙박시설·노후시설·객실·공급부족 근거가 아래에 표시됩니다. 개별 위치는 숙박시설 위치 레이어에서만 보여줍니다.</p>
+<main class="map-review-layout">
+  <section id="filters-panel" class="map-filter-bar" aria-label="지도 필터">
+    <div class="filter-bar-heading"><div><h2>지도 필터</h2>
+      <p class="filter-help">분석 레이어와 지역을 선택한 뒤 지도에서 위치를 확인합니다. 개별 위치는 숙박시설 위치 레이어에서 확대할 때 표시되고, 선택 결과와 AI 해석은 지도 아래에 표시됩니다.</p></div>
+      <div class="filter-selects">
+        <label>자치구<select id="district-filter"><option value="">전체</option></select></label>
+        <label>읍면동<select id="dong-filter"><option value="">전체</option></select></label>
+        <label>기간<select id="period-filter"><option value="">전체</option></select></label>
+      </div>
+    </div>
     <h3>분석 레이어</h3>
     <div id="layer-controls" class="layer-controls" role="group" aria-label="분석 레이어">
       <button class="layer-button is-active" data-layer="policy_priority" type="button">서부산 숙박시설 정책 우선방향</button>
@@ -31,34 +37,25 @@
       <button class="layer-button" data-layer="tourism_poi" type="button">인근 관광지</button>
     </div>
     <label class="poi-overlay-control"><input id="tourism-poi-overlay" type="checkbox" checked>모든 분석화면에 관광지 위치 표시</label>
-    <div class="poi-type-legend" aria-label="관광정보 유형 필터"><strong>관광정보 유형</strong><button class="poi-filter-button is-active" type="button" data-poi-filter="all" aria-pressed="true"><i class="poi-group-all"></i>전체</button><button class="poi-filter-button" type="button" data-poi-filter="festival" aria-pressed="false"><i class="poi-group-festival"></i>축제·행사</button><button class="poi-filter-button" type="button" data-poi-filter="food" aria-pressed="false"><i class="poi-group-food"></i>식당·음식</button><button class="poi-filter-button" type="button" data-poi-filter="tourism_culture" aria-pressed="false"><i class="poi-group-tourism_culture"></i>관광·문화시설</button><button class="poi-filter-button" type="button" data-poi-filter="leisure_course" aria-pressed="false"><i class="poi-group-leisure_course"></i>레포츠·여행코스</button><button class="poi-filter-button" type="button" data-poi-filter="lodging_shopping" aria-pressed="false"><i class="poi-group-lodging_shopping"></i>숙박·쇼핑</button><button class="poi-filter-button" type="button" data-poi-filter="other" aria-pressed="false"><i class="poi-group-other"></i>기타 관광정보</button><p id="spatial-poi-filter-status" aria-live="polite">전체 관광정보를 표시합니다.</p></div>
     <p id="layer-explainer" class="layer-explainer">서부산의 읍면동·500m 단위 수요·공급·노후 신호로 후보지역을 좁힙니다.</p>
-    <p class="access-disclaimer">대중교통 유입량은 관광객 수가 아닙니다. 다른 자치구에서 해당 동으로 이동한 대중교통 통행량으로, 중복 이용과 통행 목적을 구분하지 못합니다.</p>
-    <p class="layer-explainer">사업주체 자료가 없어 두 트랙을 중복 검토합니다: Track 1 민간투자 촉진형 · Track 2 기존시설 개선형. 기존시설이 없는 후보는 Track 1만 표시합니다.</p>
-    <section class="candidate-panel">
-      <h3 id="candidate-panel-title">서부산 구별 최우선 읍면동·500m 후보지역</h3>
-      <p id="candidate-panel-help">후보지역 선별 신호로 강서·사하·북·사상구별 1곳과 서부산 전체 차순위 1곳을 제시합니다.</p>
-      <ol id="candidate-rank-list" class="candidate-rank-list"></ol>
-    </section>
-    <label>자치구<select id="district-filter"><option value="">전체</option></select></label>
-    <label>읍면동<select id="dong-filter"><option value="">전체</option></select></label>
-    <label>기간<select id="period-filter"><option value="">전체</option></select></label>
-    <div class="kpis"><div><strong id="visible-grid-count">{{GRID_COUNT}}</strong><span>표시 분석지역</span></div>
-      <div><strong id="visible-facility-count">{{FACILITY_COUNT}}</strong><span>주소 확인 시설</span></div></div>
-    <h3 class="evidence-grade-title">지도 색상 의미</h3>
-    <ul id="dynamic-legend" class="legend">
-      <li><i class="priority-1"></i><span>강서구 · 신규 관광숙박 공급</span></li>
-      <li><i class="priority-2"></i><span>사하구 · 리모델링·관광숙박 전환 검토</span></li>
-      <li><i class="transport-quality"></i><span>북구 · 교통연계·품질개선</span></li>
-      <li><i class="tourism-product"></i><span>사상구 · 리모델링·관광상품화</span></li>
-    </ul>
-  </aside>
+    <details class="advanced-filters">
+      <summary>상세 필터·범례 보기</summary>
+      <div class="advanced-filter-grid">
+        <div class="poi-type-legend" aria-label="관광정보 유형 필터"><strong>관광정보 유형</strong><button class="poi-filter-button is-active" type="button" data-poi-filter="all" aria-pressed="true"><i class="poi-group-all"></i>전체</button><button class="poi-filter-button" type="button" data-poi-filter="festival" aria-pressed="false"><i class="poi-group-festival"></i>축제·행사</button><button class="poi-filter-button" type="button" data-poi-filter="food" aria-pressed="false"><i class="poi-group-food"></i>식당·음식</button><button class="poi-filter-button" type="button" data-poi-filter="tourism_culture" aria-pressed="false"><i class="poi-group-tourism_culture"></i>관광·문화시설</button><button class="poi-filter-button" type="button" data-poi-filter="leisure_course" aria-pressed="false"><i class="poi-group-leisure_course"></i>레포츠·여행코스</button><button class="poi-filter-button" type="button" data-poi-filter="lodging_shopping" aria-pressed="false"><i class="poi-group-lodging_shopping"></i>숙박·쇼핑</button><button class="poi-filter-button" type="button" data-poi-filter="other" aria-pressed="false"><i class="poi-group-other"></i>기타 관광정보</button><p id="spatial-poi-filter-status" aria-live="polite">전체 관광정보를 표시합니다.</p></div>
+        <div><p class="access-disclaimer">대중교통 유입량은 관광객 수가 아닙니다. 다른 자치구에서 해당 동으로 이동한 대중교통 통행량으로, 중복 이용과 통행 목적을 구분하지 못합니다.</p>
+          <p class="track-disclaimer">사업주체 자료가 없어 두 트랙을 중복 검토합니다: Track 1 민간투자 촉진형 · Track 2 기존시설 개선형. 기존시설이 없는 후보는 Track 1만 표시합니다.</p></div>
+        <div><h3 class="evidence-grade-title">지도 색상 의미</h3><ul id="dynamic-legend" class="legend"><li><i class="priority-1"></i><span>강서구 · 신규 관광숙박 공급</span></li><li><i class="priority-2"></i><span>사하구 · 리모델링·관광숙박 전환 검토</span></li><li><i class="transport-quality"></i><span>북구 · 교통연계·품질개선</span></li><li><i class="tourism-product"></i><span>사상구 · 리모델링·관광상품화</span></li></ul></div>
+      </div>
+    </details>
+  </section>
   <section id="map-panel" aria-label="관광 숙박 투자기회 지도">
     <div class="map-toolbar"><button id="zoom-in" aria-label="지도 확대">+</button>
       <button id="zoom-out" aria-label="지도 축소">−</button>
       <button id="zoom-reset" aria-label="지도 원래 크기">초기화</button></div>
     <div id="slippy-map" data-map-center="129.075,35.18" data-map-zoom="10"
       data-grid-source="grid_500m.geojson"
+      data-facility-source="facility_priority.geojson"
+      data-facility-count="{{FACILITY_COUNT}}"
       data-min-zoom="7" data-max-zoom="19"
       data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png">
       <div id="vworld-tile-layer" aria-hidden="true"></div>
@@ -71,6 +68,14 @@
       </div>
     </div>
     <p class="map-note">정책지원 검토용 우선순위이며 안전·위생·법적 적합성 평가가 아닙니다. · 경계 출처 {{BOUNDARY_SOURCE}}</p>
+  </section>
+  <section class="map-results" aria-label="지도 선택 결과">
+    <div class="result-heading"><div><p class="eyebrow">MAP REVIEW RESULT</p><h2>선택 결과와 정책 검토</h2></div><div class="kpis"><div><strong id="visible-grid-count">{{GRID_COUNT}}</strong><span>표시 분석지역</span></div><div><strong id="visible-facility-count">{{FACILITY_COUNT}}</strong><span>주소 확인 시설</span></div></div></div>
+    <section class="candidate-panel">
+      <h3 id="candidate-panel-title">서부산 구별 최우선 읍면동·500m 후보지역</h3>
+      <p id="candidate-panel-help">후보지역 선별 신호로 강서·사하·북·사상구별 1곳과 서부산 전체 차순위 1곳을 제시합니다.</p>
+      <ol id="candidate-rank-list" class="candidate-rank-list"></ol>
+    </section>
     <section id="region-summary" class="region-summary" aria-live="polite">
       <div class="region-summary-head">
         <div><p class="eyebrow">SELECTED AREA</p><h2 id="region-summary-title">부산 전체 · 선택 지역 상세</h2></div>

@@ -127,7 +127,12 @@ def test_map_uses_vworld_basemap_and_policy_opportunity_layers() -> None:
 
     assert 'id="filters-panel"' in rendered
     assert 'id="map-panel"' in rendered
-    assert 'class="two-panel"' in rendered
+    assert 'class="map-review-layout"' in rendered
+    assert 'class="map-filter-bar"' in rendered
+    assert 'class="map-results"' in rendered
+    assert 'class="two-panel"' not in rendered
+    assert rendered.index('id="filters-panel"') < rendered.index('id="slippy-map"')
+    assert rendered.index('id="slippy-map"') < rendered.index('id="region-summary"')
     assert 'id="evidence-panel"' not in rendered
     assert 'id="selected-evidence"' not in rendered
     assert 'id="slippy-map"' in rendered
@@ -226,7 +231,7 @@ def test_map_exposes_transport_and_tourism_context_layers() -> None:
     assert "<circle" in rendered
 
 
-def test_map_omits_unused_bulk_payload_and_loads_grid_geometry_only_for_lot_lookup() -> None:
+def test_map_omits_unused_bulk_payload_and_lazy_renders_visible_facilities() -> None:
     """Catches 40+ MB evidence/facility duplication returning to the map HTML."""
     marker = "must-not-be-embedded-in-runtime-map"
     data = replace(
@@ -246,11 +251,15 @@ def test_map_omits_unused_bulk_payload_and_loads_grid_geometry_only_for_lot_look
     assert set(payload) == {"access_context", "candidate_rankings"}
     assert marker not in rendered
     assert 'data-grid-source="grid_500m.geojson"' in rendered
+    assert 'data-facility-source="facility_priority.geojson"' in rendered
     assert "async function findGridForPoint" in rendered
     assert "await loadGridGeometry()" in rendered
     assert "await findGridForPoint(" in rendered
-    # Public facility and POI markers remain in the SVG, so no visible layer is lost.
-    assert 'class="facility-feature"' in rendered
+    assert 'class="facility-feature"' not in rendered
+    assert 'id="facility-points"' in rendered
+    assert "async function renderVisibleFacilities" in rendered
+    assert "visibleGeographicBounds()" in rendered
+    assert "facility_priority.geojson" not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_investment_rankings_publish_access_weighted_score_components() -> None:
@@ -389,10 +398,11 @@ def test_map_has_filters_interactions_keyboard_labels_and_policy_decisions() -> 
 def test_dong_and_period_filters_have_matching_facility_attributes() -> None:
     """Catches facilities disappearing when their pinned dong or period is selected."""
     rendered = render_map(_map_data())
-    circle = rendered.split("<circle", 1)[1].split("/>", 1)[0]
 
-    assert 'data-dong="하단동"' in circle
-    assert 'data-period="2026-08"' in circle
+    assert 'data-dong="하단동"' in rendered
+    assert 'data-period="2026-08"' in rendered
+    assert "properties.primary_dong_name !== filters.dong.value" in rendered
+    assert "properties.period !== filters.period.value" in rendered
     assert 'id="period-filter"' in rendered
 
 
@@ -414,7 +424,7 @@ def test_supply_gap_is_applied_without_selecting_a_filter() -> None:
     assert "주소확인 시설 3.0개" in rendered
     assert "20년 이상 시설 2.0개 / 연수 확인 3.0개" in rendered
     assert "객실 10.0" in rendered
-    assert 'r="3"' in rendered
+    assert 'node.setAttribute("r", "3")' in rendered
     assert "숙박투자 v1" in rendered
 
 
@@ -443,7 +453,7 @@ def test_default_map_uses_policy_areas_without_marker_clutter() -> None:
     """Catches bubbles or facilities obscuring the policy and metric surfaces."""
     rendered = render_map(_map_data())
 
-    assert "색상으로 지역 현황을 먼저 확인" in rendered
+    assert "분석 레이어와 지역을 선택한 뒤 지도에서 위치를 확인" in rendered
     assert 'data-layer="policy_priority"' in rendered
     assert 'class="facility-cluster"' in rendered
     assert "숙박시설 위치 레이어" in rendered
@@ -667,14 +677,14 @@ def test_facility_location_click_exposes_public_address_rooms_and_age() -> None:
     """Catches exact public facility details remaining inaccessible after zoom."""
     rendered = render_map(_map_data())
 
-    assert 'data-public-name="공개 숙소"' in rendered
-    assert 'data-public-address="부산 공개로 1"' in rendered
-    assert 'data-room-count="10.0"' in rendered
-    assert 'data-building-age="31.0"' in rendered
-    assert 'data-land-use-zone="일반상업지역"' in rendered
-    assert 'data-site-area="500.0"' in rendered
-    assert 'data-floor-area-ratio="240.0"' in rendered
-    assert 'data-parking-total="12"' in rendered
+    assert "properties.public_name" in rendered
+    assert "properties.public_address" in rendered
+    assert "properties.room_count" in rendered
+    assert "properties.use_approval_age_years" in rendered
+    assert "properties.land_use_zone" in rendered
+    assert "properties.site_area" in rendered
+    assert "properties.floor_area_ratio" in rendered
+    assert "properties.parking_total" in rendered
     assert "function renderFacilitySummary" in rendered
     assert "건축물대장 투자검토 정보" in rendered
     assert 'id="region-metric-1-label"' in rendered
@@ -710,6 +720,7 @@ def test_overview_clusters_facilities_by_dong_before_showing_exact_points() -> N
 
     assert rendered.count('class="facility-cluster"') == 1
     assert ">2</text>" in rendered
+    assert rendered.count('class="facility-feature"') == 0
 
 
 def test_embedded_runtime_json_is_minimal_and_escapes_markup() -> None:
@@ -743,11 +754,12 @@ def test_default_priorities_do_not_mutate_manifest_bound_metadata() -> None:
 
 
 def test_mobile_layout_places_investment_map_before_long_filter_panel() -> None:
-    """Prevents the map from being pushed below the full filter panel on phones."""
+    """Keeps the redesigned filter, map and result flow usable on phones."""
     css = Path("src/westbusan/spatial/assets/map.css").read_text(
         encoding="utf-8"
     )
 
     assert "@media (max-width: 900px)" in css
-    assert "#map-panel { order: 1;" in css
-    assert "#filters-panel { order: 2;" in css
+    assert ".map-review-layout { display: grid; grid-template-columns: minmax(0, 1fr);" in css
+    assert ".filter-bar-heading, .result-heading { align-items: stretch; flex-direction: column;" in css
+    assert ".candidate-rank-list { grid-template-columns: repeat(2, minmax(0, 1fr));" in css

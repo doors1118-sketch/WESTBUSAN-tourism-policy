@@ -883,4 +883,16 @@
     hubCandidateList.textContent = "게시 지도자료를 불러오지 못했습니다.";
     standaloneCandidateList.textContent = "게시 지도자료를 불러오지 못했습니다.";
   });
+  function reportFrameHeight() {
+    if (window.parent === window) return;
+    window.parent.postMessage({
+      type: "westbusan:map-height",
+      map: "vacant",
+      height: document.documentElement.scrollHeight,
+    }, window.location.origin);
+  }
+  if ("ResizeObserver" in window) {
+    new ResizeObserver(reportFrameHeight).observe(document.body);
+  }
+  window.addEventListener("load", reportFrameHeight);
 })();

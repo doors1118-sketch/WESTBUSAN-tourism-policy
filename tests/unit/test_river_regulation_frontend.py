@@ -277,9 +277,9 @@ def test_river_tab_remains_independent_from_investment_and_vacant_maps() -> None
     html = _read(ASSET_ROOT / "index.html")
 
     assert 'data-tab-panel="investment"' in html
-    assert 'data-map-src="map/index.html?v=20260827-poi-filters-v66"' in html
+    assert 'data-map-src="map/index.html?v=20260830-map-layout-v67"' in html
     assert 'data-tab-panel="vacant"' in html
-    assert 'data-vacant-map-src="vacant-map/index.html?v=20260827-poi-filters-v66"' in html
+    assert 'data-vacant-map-src="vacant-map/index.html?v=20260830-map-layout-v67"' in html
     assert 'data-tab-panel="river"' in html
     assert "낙동강 친수공원 관광개발 규제 검토" in html
     assert (

@@ -486,7 +486,6 @@ def _render_svg(
     cluster_members: dict[
         tuple[str, str, str], list[tuple[float, float, Mapping[str, Any]]]
     ] = {}
-    circles: list[str] = []
     for feature in facility_features:
         properties = feature.get("properties", {})
         coordinates = feature.get("geometry", {}).get("coordinates", [0, 0])
@@ -497,60 +496,6 @@ def _render_svg(
             str(properties.get("period", "")),
         )
         cluster_members.setdefault(cluster_key, []).append((x, y, properties))
-        grade = str(properties.get("composite_grade", "insufficient_evidence"))
-        circles.append(
-            '<circle class="facility-feature" cx="{x:.3f}" '
-            'cy="{y:.3f}" r="3" data-base-radius="3" tabindex="0" role="button" '
-            'aria-label="{label}" data-kind="facility" data-key="{key}" '
-            'data-grade="{grade}" data-district="{district}" data-dong="{dong}" '
-            'data-period="{period}" data-small-scale="{small}" data-aged="{aged}" '
-            'data-context="{context}" data-public-name="{public_name}" '
-            'data-public-address="{public_address}" data-room-count="{room_count}" '
-            'data-building-age="{building_age}" data-land-use-zone="{land_use_zone}" '
-            'data-site-area="{site_area}" data-total-area="{total_area}" '
-            'data-building-coverage-ratio="{building_coverage_ratio}" '
-            'data-floor-area-ratio="{floor_area_ratio}" data-main-use="{main_use}" '
-            'data-parking-total="{parking_total}" '
-            'data-profile-coverage="{profile_coverage}"><title>{title}</title></circle>'.format(
-                grade=_attribute(grade),
-                x=x,
-                y=y,
-                label=_attribute(
-                    f"{properties.get('public_name', '')} 숙박시설"
-                ),
-                key=_attribute(properties.get("facility_key")),
-                district=_attribute(properties.get("district_name")),
-                dong=_attribute(properties.get("primary_dong_name")),
-                period=_attribute(properties.get("period")),
-                small=_attribute(properties.get("small_scale_rating")),
-                aged=_attribute(properties.get("aged_building_rating")),
-                context=_attribute(properties.get("district_context_rating")),
-                public_name=_attribute(properties.get("public_name")),
-                public_address=_attribute(properties.get("public_address")),
-                room_count=_attribute(properties.get("room_count")),
-                building_age=_attribute(properties.get("use_approval_age_years")),
-                land_use_zone=_attribute(properties.get("land_use_zone")),
-                site_area=_attribute(properties.get("site_area")),
-                total_area=_attribute(properties.get("total_area")),
-                building_coverage_ratio=_attribute(
-                    properties.get("building_coverage_ratio")
-                ),
-                floor_area_ratio=_attribute(properties.get("floor_area_ratio")),
-                main_use=_attribute(properties.get("main_use")),
-                parking_total=_attribute(properties.get("parking_total")),
-                profile_coverage=_attribute(properties.get("profile_coverage")),
-                title=html.escape(
-                    " · ".join(
-                        (
-                            str(properties.get("public_name", "숙박시설")),
-                            "객실 " + _metric_label(properties.get("room_count")),
-                            "건물연수 "
-                            + _metric_label(properties.get("use_approval_age_years")),
-                        )
-                    )
-                ),
-            )
-        )
     clusters: list[str] = []
     for (district, dong, period), members in sorted(cluster_members.items()):
         count = len(members)
@@ -567,7 +512,8 @@ def _render_svg(
             '<g class="facility-cluster" transform="translate({x:.3f} {y:.3f})" '
             'data-x="{x:.3f}" data-y="{y:.3f}" '
             'tabindex="0" role="button" data-kind="cluster" '
-            'data-district="{district}" data-dong="{dong}" data-period="{period}">'
+            'data-district="{district}" data-dong="{dong}" data-period="{period}" '
+            'data-count="{count}">'
             '<circle r="{radius:.2f}"><title>{title}</title></circle>'
             '<text y="3.5">{count}</text></g>'.format(
                 x=x,
@@ -639,7 +585,7 @@ def _render_svg(
         + "".join(poi_markers)
         + "</g>"
         + "".join(clusters)
-        + "".join(circles)
+        + '<g id="facility-points"></g>'
         + "</g></svg>"
     )
 
