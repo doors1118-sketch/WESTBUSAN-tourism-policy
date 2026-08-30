@@ -15,6 +15,10 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat
 
+from westbusan.river_regulation.action_screening import (
+    ActionScreening,
+    build_action_screenings,
+)
 from westbusan.river_regulation.legal_basis import (
     LEGAL_BASIS_VERSION,
     MANDATORY_POLICY_DISCLAIMER,
@@ -23,6 +27,7 @@ from westbusan.river_regulation.legal_basis import (
     legal_basis_identity,
     legal_basis_text,
 )
+from westbusan.river_regulation.rules import ACTIVITY_LABELS
 from westbusan.tourism_ai.legal_mcp import (
     KoreanLawMCPClient,
     LegalEvidenceStore,
@@ -79,6 +84,7 @@ class RiverPolicyInsightResponse(BaseModel):
     policy_options: list[str]
     required_consultations: list[str]
     limitations: str
+    action_screenings: list[ActionScreening]
     legal_evidence_status: Literal["retrieved", "unavailable"]
     legal_evidence_source: Literal[
         "curated_registry", "curated_registry_and_mcp", "unavailable"
@@ -182,11 +188,11 @@ class RiverPolicyInsightService:
         request: RiverPolicyInsightRequest,
         spatial_evidence: dict[str, object],
     ) -> RiverPolicyInsightResponse:
-        bases = legal_bases_for(
-            activity=request.activity,
-            river_zone=request.river_zone,
-            spatial_evidence=spatial_evidence,
+        action_screenings = _resolve_action_screenings(
+            request=request,
+            spatial=spatial_evidence,
         )
+        bases = _legal_bases_for_all_actions(request=request, spatial=spatial_evidence)
         mcp_legal = self._legal_evidence(request=request, spatial=spatial_evidence)
         curated_text = legal_basis_text(bases)
         legal_text = curated_text
@@ -214,6 +220,7 @@ class RiverPolicyInsightService:
                 legal_text=legal_text,
                 legal_sha256=legal_sha256,
                 mcp_legal=mcp_legal,
+                action_screenings=action_screenings,
             ),
         )
 
@@ -258,6 +265,7 @@ class RiverPolicyInsightService:
         legal_text: str,
         legal_sha256: str | None,
         mcp_legal: StoredLegalEvidence | None,
+        action_screenings: tuple[ActionScreening, ...],
     ) -> RiverPolicyInsightResponse:
         source: Literal["openai", "rule_fallback"] = "rule_fallback"
         if bases or mcp_legal is not None:
@@ -297,10 +305,19 @@ class RiverPolicyInsightService:
             else "unavailable"
         )
         return RiverPolicyInsightResponse(
-            deterministic_grade=str(spatial.get("grade") or "unreviewed"),
-            deterministic_label=str(spatial.get("label") or "사전검토 미완료"),
+            deterministic_grade=str(
+                spatial.get("combined_grade")
+                or next(item.grade for item in action_screenings if item.selected)
+            ),
+            deterministic_label=str(
+                spatial.get("combined_label")
+                or next(
+                    item.status_label for item in action_screenings if item.selected
+                )
+            ),
             **model_value.model_dump(exclude={"limitations"}),
             limitations=_with_mandatory_disclaimer(model_value.limitations),
+            action_screenings=list(action_screenings),
             legal_evidence_status=evidence_status,
             legal_evidence_source=evidence_source,
             legal_basis_version=LEGAL_BASIS_VERSION,
@@ -321,17 +338,6 @@ class RiverPolicyInsightService:
 def _law_query(
     *, request: RiverPolicyInsightRequest, spatial: dict[str, object]
 ) -> str:
-    activity_labels = {
-        "walking": "산책·탐방시설",
-        "ecology": "생태관찰·복원시설",
-        "festival": "축제·행사",
-        "sports": "체육·레저시설",
-        "camping": "야영·캠핑시설",
-        "food": "판매·음식시설",
-        "culture": "공연·문화시설",
-        "lodging": "관광숙박시설",
-        "parking": "주차장·진입도로",
-    }
     overlap_labels: list[str] = []
     for item in spatial.get("matches", []):
         if isinstance(item, dict) and item.get("label"):
@@ -341,14 +347,19 @@ def _law_query(
         for item in parcel.get("designations", []):
             if isinstance(item, dict) and item.get("name"):
                 overlap_labels.append(str(item["name"]))
+    heritage = spatial.get("heritage_criteria")
+    if isinstance(heritage, dict) and heritage.get("label"):
+        overlap_labels.append(str(heritage["label"]))
     overlaps = ", ".join(dict.fromkeys(overlap_labels)) or "공간규제 상세명 미확인"
+    all_activities = ", ".join(ACTIVITY_LABELS.values())
     return (
         "부산 낙동강 친수공원 관광개발 사전검토입니다. "
-        f"{activity_labels[request.activity]} 설치·운영의 현행 법률·시행령상 "
-        "허가·점용 근거, 원칙적 제한, 예외 검토요건과 관리청 협의절차를 "
+        f"우선 검토행위는 {ACTIVITY_LABELS[request.activity]}이며, 후보행위는 "
+        f"{all_activities}입니다. 각 행위의 현행 법률·시행령상 허가·점용 "
+        "근거, 명시적 제한, 법정 예외 검토요건과 관리청 협의절차를 "
         f"공식 원문 근거로 조사하십시오. 공간중첩 참고값: {overlaps}. "
-        "공간중첩 참고값만으로 허용 여부를 확정하지 말고 적용 조문과 최신성 "
-        "확인 필요사항을 구분하십시오."
+        "행위별 적용 조문과 실무상 확인사항을 구분하고 공식 원문 URL을 함께 "
+        "제시하십시오. 공간중첩만으로 허용·금지를 확정하지 마십시오."
     )
 
 
@@ -362,6 +373,9 @@ def _spatial_identity(spatial: Mapping[str, object]) -> dict[str, object]:
         "complete": spatial.get("complete"),
         "matches": spatial.get("matches"),
         "missing_categories": spatial.get("missing_categories"),
+        "action_screenings": spatial.get("action_screenings"),
+        "combined_grade": spatial.get("combined_grade"),
+        "combined_label": spatial.get("combined_label"),
         "parcel_snapshot_id": (
             parcel.get("snapshot_id") if isinstance(parcel, dict) else None
         ),
@@ -394,14 +408,67 @@ def _safe_spatial_evidence(
             "heritage_criteria",
             "parcel_resolution",
             "parcel_planning",
+            "action_screenings",
+            "combined_grade",
+            "combined_label",
+            "combined_reason",
+            "combined_next_check",
+            "screening_scope",
         }
     }
     evidence["selected_activity"] = request.activity
+    evidence["selected_activity_label"] = ACTIVITY_LABELS[request.activity]
     evidence["selected_coordinate"] = {
         "longitude": request.longitude,
         "latitude": request.latitude,
     }
     return evidence
+
+
+def _resolve_action_screenings(
+    *,
+    request: RiverPolicyInsightRequest,
+    spatial: Mapping[str, object],
+) -> tuple[ActionScreening, ...]:
+    value = spatial.get("action_screenings")
+    if isinstance(value, list):
+        try:
+            parsed = tuple(ActionScreening.model_validate(item) for item in value)
+        except ValueError:
+            parsed = ()
+        if (
+            {item.activity for item in parsed} == set(ACTIVITY_LABELS)
+            and sum(item.selected for item in parsed) == 1
+            and any(
+                item.selected and item.activity == request.activity for item in parsed
+            )
+        ):
+            return parsed
+    return build_action_screenings(
+        river_zone=request.river_zone,
+        selected_activity=request.activity,
+        spatial_evidence=spatial,
+    )
+
+
+def _legal_bases_for_all_actions(
+    *,
+    request: RiverPolicyInsightRequest,
+    spatial: Mapping[str, object],
+) -> tuple[LegalBasis, ...]:
+    result: list[LegalBasis] = []
+    seen: set[str] = set()
+    for activity in ACTIVITY_LABELS:
+        for basis in legal_bases_for(
+            activity=activity,
+            river_zone=request.river_zone,
+            spatial_evidence=spatial,
+        ):
+            if basis.code in seen:
+                continue
+            result.append(basis)
+            seen.add(basis.code)
+    return tuple(result)
 
 
 def _fallback(
@@ -410,12 +477,9 @@ def _fallback(
     bases: Sequence[LegalBasis],
     request: RiverPolicyInsightRequest,
 ) -> ModelRiverPolicyInsight:
-    label = str(spatial.get("label") or "사전검토 미완료")
-    reason = str(spatial.get("reason") or "공간규제 자료를 확인해야 합니다.")
-    next_check = str(
-        spatial.get("next_check")
-        or "최신 고시도면과 관리청 공식 의견을 확인하십시오."
-    )
+    screenings = _resolve_action_screenings(request=request, spatial=spatial)
+    selected = next(item for item in screenings if item.selected)
+    label = selected.status_label
     overlap_labels = _fallback_overlap_labels(spatial)
     overlap_summary = (
         " · ".join(overlap_labels[:5])
@@ -423,16 +487,12 @@ def _fallback(
         else "외부 규제도형 중첩 없음 또는 상세명 미확인"
     )
     basis_summary = " · ".join(
-        dict.fromkeys(f"{basis.law_name} {basis.articles}" for basis in bases)
+        list(dict.fromkeys(f"{basis.law_name} {basis.articles}" for basis in bases))[
+            :4
+        ]
     )
     legal_effects = list(dict.fromkeys(basis.review_effect for basis in bases))
-    evidence_note = (
-        f"확인된 기본 근거는 {basis_summary}이며, 실무 검토효과는 "
-        f"{' · '.join(legal_effects[:4])}입니다."
-        if basis_summary
-        else "적용 근거법령은 공간규제와 최신 고시를 추가 확인해야 합니다."
-    )
-    grade = str(spatial.get("grade") or "unreviewed")
+    grade = selected.grade
     if grade == "principally_restricted":
         if request.activity == "lodging":
             options = [
@@ -457,16 +517,47 @@ def _fallback(
             "PNU와 최신 고시도면을 먼저 확정한 뒤 원안의 적용법령 재검토",
             "하천·공원·국가유산·도시계획을 분리한 대체입지 비교표 작성",
         ]
-    consultations = [next_check]
+    consultations = list(selected.next_checks)
     consultations.extend(legal_effects)
     consultations.append("관할 관리청 · 사업계획서와 배치도 · 원안·조정안·대체입지의 협의 가능 범위")
+    reviewable = [
+        item.activity_label
+        for item in screenings
+        if item.grade == "conditional" and item.complete
+    ]
+    restricted = [
+        item.activity_label
+        for item in screenings
+        if item.grade == "principally_restricted"
+    ]
+    pending = [
+        item.activity_label
+        for item in screenings
+        if item.grade != "principally_restricted" and not item.complete
+    ]
+    comparison_parts: list[str] = []
+    if reviewable:
+        comparison_parts.append(
+            f"이 필지에서 {', '.join(reviewable)}은 허가·협의를 전제로 검토할 수 있습니다."
+        )
+    if restricted:
+        comparison_parts.append(
+            f"현재 계획대로 추진이 어려운 행위는 {', '.join(restricted)}입니다."
+        )
+    if pending:
+        comparison_parts.append(
+            f"자료를 더 확인해야 하는 행위는 {', '.join(pending)}입니다."
+        )
+    legal_sentence = (
+        f"주요 근거는 {basis_summary}이며, 각 조문의 실제 적용 여부를 공식 원문과 관리청에서 확인해야 합니다."
+        if basis_summary
+        else "적용 법령과 최신 고시를 추가 확인해야 합니다."
+    )
     return ModelRiverPolicyInsight(
-        headline=label,
+        headline=f"{selected.activity_label}: {label}",
         policy_insight=(
-            f"선택 행위의 결정규칙상 1차 판정은 '{label}'입니다. 확인된 공간중첩은 "
-            f"{overlap_summary}입니다. {reason} {evidence_note} 법령명과 조문만으로 "
-            "개별 사업의 허용 여부를 확정하지 않으며, 원안·조정안·대체입지를 "
-            "동일 기준으로 비교하는 정책 검토자료로 사용해야 합니다."
+            f"{selected.summary} {' '.join(comparison_parts)} 확인된 규제는 "
+            f"{overlap_summary}입니다. {legal_sentence}"
         ),
         policy_options=options,
         required_consultations=list(dict.fromkeys(consultations))[:6],

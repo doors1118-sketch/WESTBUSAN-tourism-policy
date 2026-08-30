@@ -243,6 +243,9 @@ def test_river_policy_payload_cannot_replace_deterministic_grade() -> None:
     assert "절대 변경" in instructions
     assert "숙박시설" in instructions
     assert "가설·이동식 숙박" in instructions
+    assert "쉬운 한국어" in instructions
+    assert "action_screenings" in instructions
+    assert "현재 계획대로는 추진이 어려움" in instructions
 
 
 class _StubGenerator:

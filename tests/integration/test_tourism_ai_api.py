@@ -76,6 +76,9 @@ class _CountingLawClient:
 
     def research(self, *, query: str, task: str) -> MCPResearchResult:
         assert "낙동강" in query
+        assert "산책·탐방" in query
+        assert "숙박시설" in query
+        assert "공식 원문 URL" in query
         assert task == "action_basis"
         self.calls += 1
         return MCPResearchResult(
@@ -88,7 +91,7 @@ class _CountingLawClient:
             ),
             response_sha256="e" * 64,
             source_urls=("https://www.law.go.kr/법령/하천법",),
-            retrieved_at=datetime(2026, 8, 29, tzinfo=UTC),
+            retrieved_at=datetime.now(UTC),
         )
 
 
@@ -680,6 +683,14 @@ def test_regulation_point_resolves_pnu_from_published_parcel_geometry(
         "complete": True,
     }
     assert response.json()["parcel_planning"]["status"] == "matched"
+    assert len(response.json()["action_screenings"]) == 9
+    selected = next(
+        item for item in response.json()["action_screenings"] if item["selected"]
+    )
+    assert selected["activity"] == "lodging"
+    assert selected["grade"] == "principally_restricted"
+    assert response.json()["combined_grade"] == selected["grade"]
+    assert response.json()["combined_label"] == selected["status_label"]
 
 
 def test_river_policy_insight_uses_cached_legal_evidence_and_ai_result(
@@ -722,7 +733,13 @@ def test_river_policy_insight_uses_cached_legal_evidence_and_ai_result(
         "https://www.law.go.kr/법령/관광진흥법",
     ]
     assert first.json()["source"] == "openai"
-    assert first.json()["prompt_version"].endswith("-river-v5")
+    assert first.json()["prompt_version"].endswith("-river-v6")
+    assert len(first.json()["action_screenings"]) == 9
+    selected = next(
+        item for item in first.json()["action_screenings"] if item["selected"]
+    )
+    assert selected["activity"] == "lodging"
+    assert selected["grade"] == first.json()["deterministic_grade"]
     assert first.json()["cached"] is False
     assert second.json()["cached"] is True
     assert law_client.calls == 1
@@ -818,8 +835,15 @@ def test_river_policy_keeps_grounded_basic_explanation_when_ai_is_unavailable(
     assert response.json()["legal_evidence_status"] == "retrieved"
     assert response.json()["legal_evidence_source"] == "curated_registry"
     assert "하천법" in response.json()["policy_insight"]
-    assert "1차 판정" in response.json()["policy_insight"]
-    assert "공간중첩" in response.json()["policy_insight"]
+    assert "숙박시설" in response.json()["policy_insight"]
+    assert "현재 계획대로" in response.json()["policy_insight"]
+    assert "자료를 더 확인" in response.json()["policy_insight"]
+    assert len(response.json()["action_screenings"]) == 9
+    by_activity = {
+        item["activity"]: item for item in response.json()["action_screenings"]
+    }
+    assert by_activity["lodging"]["grade"] == "principally_restricted"
+    assert by_activity["walking"]["grade"] == "conditional"
     assert any("대체입지" in item for item in response.json()["policy_options"])
     assert not any("가설" in item for item in response.json()["policy_options"])
     assert any("숙박 원안" in item for item in response.json()["policy_options"])

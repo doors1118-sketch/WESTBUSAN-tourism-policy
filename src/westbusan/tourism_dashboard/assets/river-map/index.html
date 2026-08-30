@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>낙동강 친수공원 관광개발 규제 검토</title>
-  <link rel="stylesheet" href="map.css?v=20260830-layer-toggle-v19">
+  <link rel="stylesheet" href="map.css?v=20260830-plain-insight-v20">
 </head>
 <body>
   <header class="page-head">
@@ -156,8 +156,16 @@
             <div id="policy-parcel-facts" class="policy-parcel-facts"><p>위치 조회 후 PNU·지목·면적·도로접면·이용상황과 도시계획 지정을 표시합니다.</p></div>
           </section>
           <p id="policy-insight-copy">AI 정책인사이트 버튼을 누르면 공간판정 등급은 유지하고, 법령 근거·대안·협의사항을 추가 설명합니다.</p>
-          <div class="policy-insight-grid"><div><h4>정책 판단 지원</h4><ul id="policy-options"></ul></div><div><h4>선행 확인·협의</h4><ul id="required-consultations"></ul></div></div>
-          <div id="legal-source-links" class="legal-source-links"></div>
+          <section class="policy-action-matrix" aria-labelledby="policy-action-matrix-title">
+            <div class="policy-action-matrix-head"><h4 id="policy-action-matrix-title">이 필지에서 검토할 수 있는 일</h4><span>서버 결정규칙 · AI 재분류 금지</span></div>
+            <div class="policy-action-groups">
+              <div class="is-reviewable"><h4>허가·협의를 전제로 검토 가능한 행위</h4><div id="reviewable-actions" class="action-screening-list"></div></div>
+              <div class="is-restricted"><h4>현재 계획대로 추진이 어려운 행위</h4><div id="restricted-actions" class="action-screening-list"></div></div>
+              <div class="is-pending"><h4>자료를 더 확인해야 하는 행위</h4><div id="pending-actions" class="action-screening-list"></div></div>
+            </div>
+          </section>
+          <div class="policy-insight-grid"><div><h4>검토 가능하게 하려면</h4><ul id="policy-options"></ul></div><div><h4>다음 확인·협의</h4><ul id="required-consultations"></ul></div></div>
+          <section class="legal-basis-section" aria-labelledby="legal-basis-title"><h4 id="legal-basis-title">왜 이런 결과인가요? · 근거법령</h4><div id="legal-source-links" class="legal-source-links"></div></section>
           <p id="policy-insight-meta" class="policy-insight-meta"></p>
           <p id="policy-insight-limit" class="policy-insight-limit"></p>
         </section>
@@ -166,6 +174,6 @@
     </section>
   </main>
 
-  <script src="map.js?v=20260830-layer-toggle-v19"></script>
+  <script src="map.js?v=20260830-plain-insight-v20"></script>
 </body>
 </html>

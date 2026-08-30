@@ -524,7 +524,7 @@
     replaceSupportList("assessment-basis-list", basis);
 
     const checks = [];
-    if (review && review.next_check) checks.push(review.next_check);
+    if (review && (review.combined_next_check || review.next_check)) checks.push(review.combined_next_check || review.next_check);
     if (!selectedPnu) checks.push("주소·지번 검색 또는 지도 클릭 PNU 자동연결로 필지를 확정한 뒤 토지이용계획확인서를 대조");
     const statuses = review && Array.isArray(review.layer_statuses) ? review.layer_statuses : [];
     const unavailable = statuses
@@ -782,11 +782,12 @@
       renderRegulationCards(review);
       renderParcelPlanning(review.parcel_planning);
       renderExternalRegulations(review.feature_collection);
+      const combinedGrade = review.combined_grade || review.grade;
       const grade = document.getElementById("assessment-grade");
-      grade.className = `grade ${review.grade}`;
-      grade.textContent = review.label || gradeLabels[review.grade] || "추가 확인 필요";
-      document.getElementById("assessment-reason").textContent = review.reason;
-      document.getElementById("assessment-next").textContent = review.next_check;
+      grade.className = `grade ${combinedGrade}`;
+      grade.textContent = review.combined_label || review.label || gradeLabels[combinedGrade] || "추가 확인 필요";
+      document.getElementById("assessment-reason").textContent = review.combined_reason || review.reason;
+      document.getElementById("assessment-next").textContent = review.combined_next_check || review.next_check;
       policyInsightButton.disabled = false;
     } catch (error) {
       if (error.name === "AbortError" || sequence !== regulationSequence) return;
@@ -801,6 +802,53 @@
       const item = document.createElement("li");
       item.textContent = value;
       element.append(item);
+    });
+  }
+
+  function renderActionScreenings(screenings, legalBases) {
+    const roots = {
+      reviewable: document.getElementById("reviewable-actions"),
+      restricted: document.getElementById("restricted-actions"),
+      pending: document.getElementById("pending-actions"),
+    };
+    Object.values(roots).forEach((root) => root.replaceChildren());
+    const basisByCode = new Map(
+      (Array.isArray(legalBases) ? legalBases : []).map((basis) => [basis.code, basis]),
+    );
+    (Array.isArray(screenings) ? screenings : []).forEach((screening) => {
+      const group = screening.grade === "principally_restricted"
+        ? "restricted"
+        : screening.grade === "conditional" && screening.complete
+          ? "reviewable"
+          : "pending";
+      const card = document.createElement("article");
+      card.className = `action-screening-card${screening.selected ? " is-selected" : ""}`;
+      const head = document.createElement("div"); head.className = "action-screening-card-head";
+      const title = document.createElement("strong"); title.textContent = screening.activity_label;
+      const status = document.createElement("span"); status.textContent = screening.selected ? "선택 행위" : screening.status_label;
+      head.append(title, status);
+      const summary = document.createElement("p"); summary.textContent = screening.summary;
+      card.append(head, summary);
+      const laws = uniqueText((screening.legal_basis_codes || []).map((code) => {
+        const basis = basisByCode.get(code);
+        return basis ? `${basis.law_name} ${basis.articles}` : "";
+      }));
+      if (laws.length) {
+        const legal = document.createElement("small");
+        legal.textContent = `행위 근거: ${laws.join(" · ")}`;
+        card.append(legal);
+      }
+      roots[group].append(card);
+    });
+    Object.entries(roots).forEach(([group, root]) => {
+      if (root.childElementCount) return;
+      const empty = document.createElement("p"); empty.className = "action-screening-empty";
+      empty.textContent = group === "restricted"
+        ? "현재 확인된 범위에서 이 분류에 해당하는 행위가 없습니다."
+        : group === "reviewable"
+          ? "필지와 규제자료를 더 확인해야 검토 가능한 행위를 표시할 수 있습니다."
+          : "추가 확인이 필요한 행위가 없습니다.";
+      root.append(empty);
     });
   }
 
@@ -884,6 +932,7 @@
     renderPolicyParcelFacts(latestRegulationReview);
     fillList(document.getElementById("policy-options"), []);
     fillList(document.getElementById("required-consultations"), []);
+    renderActionScreenings([], []);
     document.getElementById("legal-source-links").replaceChildren();
     document.getElementById("policy-insight-limit").textContent = "";
     document.getElementById("policy-insight-meta").textContent = "생성 상태와 근거자료 버전을 확인하고 있습니다.";
@@ -910,7 +959,8 @@
       document.getElementById("policy-insight-title").textContent = insight.headline;
       document.getElementById("policy-insight-copy").textContent = insight.policy_insight;
       const legalCount = Array.isArray(insight.legal_bases) ? insight.legal_bases.length : 0;
-      document.getElementById("policy-evidence-summary").textContent = `현재 단계: ${insight.deterministic_label} · 근거법령 ${legalCount}건 연결. AI는 공간판정 등급을 변경하지 않고 원안·조정안·대체입지의 검토경로만 설명합니다.`;
+      const actionCount = Array.isArray(insight.action_screenings) ? insight.action_screenings.length : 0;
+      document.getElementById("policy-evidence-summary").textContent = `선택 행위: ${insight.deterministic_label} · 후보행위 ${actionCount}건 비교 · 근거법령 ${legalCount}건 연결. AI는 서버 판정을 바꾸지 않고 이유와 다음 조치만 쉽게 설명합니다.`;
       const evidenceLabel = insight.legal_evidence_source === "curated_registry_and_mcp"
         ? "공식 근거법령 + MCP 보조검색"
         : insight.legal_evidence_source === "curated_registry"
@@ -922,23 +972,27 @@
       document.getElementById("policy-insight-status").textContent = `${explanationLabel} · ${evidenceLabel}`;
       renderPolicyEvidenceCounts(latestRegulationReview);
       renderPolicyParcelFacts(latestRegulationReview);
+      renderActionScreenings(insight.action_screenings, insight.legal_bases);
       fillList(document.getElementById("policy-options"), insight.policy_options);
       fillList(document.getElementById("required-consultations"), insight.required_consultations);
       const sourceRoot = document.getElementById("legal-source-links");
       sourceRoot.replaceChildren();
       (insight.legal_bases || []).forEach((basis) => {
+        const card = document.createElement("article"); card.className = "legal-basis-card";
         const link = document.createElement("a");
         link.href = basis.official_url; link.target = "_blank"; link.rel = "noopener";
         link.textContent = `${basis.law_name} ${basis.articles} ↗`;
-        link.title = `${basis.rationale} ${basis.review_effect}`;
-        sourceRoot.append(link);
+        const rationale = document.createElement("p"); rationale.textContent = basis.rationale;
+        const effect = document.createElement("small"); effect.textContent = `실무적으로: ${basis.review_effect}`;
+        card.append(link, rationale, effect); sourceRoot.append(card);
       });
       if (!sourceRoot.children.length) {
         (insight.legal_source_urls || []).forEach((url, index) => {
           const link = document.createElement("a");
           link.href = url; link.target = "_blank"; link.rel = "noopener";
           link.textContent = `공식 법령근거 ${index + 1} ↗`;
-          sourceRoot.append(link);
+          const card = document.createElement("article"); card.className = "legal-basis-card";
+          card.append(link); sourceRoot.append(card);
         });
       }
       document.getElementById("policy-insight-limit").textContent = insight.limitations;
@@ -948,6 +1002,7 @@
       document.getElementById("policy-insight-meta").textContent = `${insight.cached ? "캐시 재사용" : "신규 생성"} · ${generatedAt} · 법령 ${insight.legal_basis_version || "버전 미확인"} · 모델 ${insight.model || "미확인"}`;
     } catch (error) {
       if (error.name === "AbortError") return;
+      renderActionScreenings(latestRegulationReview && latestRegulationReview.action_screenings, []);
       document.getElementById("policy-insight-status").textContent = "생성 실패";
       document.getElementById("policy-insight-copy").textContent = "정책해설 서비스에 연결하지 못했습니다. 위 공간판정과 선행 확인사항만 사용하십시오.";
       document.getElementById("policy-evidence-summary").textContent = "AI 해설은 실패했지만 서버 결정규칙의 공간중첩·1차 판정근거는 그대로 유지됩니다.";

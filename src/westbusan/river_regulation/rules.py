@@ -21,7 +21,7 @@ class ActivityAssessment:
     legal_effect: bool = False
 
 
-_ACTIVITIES = {
+ACTIVITY_LABELS = {
     "walking": "산책·탐방",
     "ecology": "생태관찰·복원",
     "festival": "축제·행사",
@@ -52,7 +52,7 @@ def assess_activity(zone: str, activity: str) -> ActivityAssessment:
     """Screen an activity against the selected RIMGIS management-zone class."""
     if zone not in _ZONES:
         raise ValueError(f"Unknown zone: {zone}")
-    if activity not in _ACTIVITIES:
+    if activity not in ACTIVITY_LABELS:
         raise ValueError(f"Unknown activity: {activity}")
 
     if zone == "outside_river_area":
@@ -122,3 +122,6 @@ def _result(grade: str, reason: str, next_check: str) -> ActivityAssessment:
         reason=reason,
         next_check=next_check,
     )
+
+
+__all__ = ["ACTIVITY_LABELS", "ActivityAssessment", "assess_activity"]

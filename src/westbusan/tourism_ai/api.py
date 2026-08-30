@@ -12,6 +12,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
+from westbusan.river_regulation.action_screening import build_action_screenings
 from westbusan.river_regulation.geometry import (
     NakdongParcelGeometryCatalogue,
     load_nakdong_parcel_geometry_catalogue,
@@ -188,7 +189,7 @@ def create_app(
     river_policy_service = RiverPolicyInsightService(
         generator=river_policy_generator,
         model=settings.tourism_ai_model,
-        prompt_version=f"{settings.tourism_ai_prompt_version}-river-v5",
+        prompt_version=f"{settings.tourism_ai_prompt_version}-river-v6",
         cache=RiverPolicyInsightCache(settings.tourism_ai_cache_dir),
         law_client=law_mcp_client,
         evidence_store=legal_evidence_store,
@@ -395,6 +396,31 @@ def create_app(
         content["heritage_criteria"] = heritage_public
         content["parcel_resolution"] = parcel_resolution.as_public_dict()
         content["parcel_planning"] = parcel_planning.as_public_dict()
+        action_screenings = build_action_screenings(
+            river_zone=river_zone,
+            selected_activity=activity,
+            spatial_evidence=content,
+        )
+        selected_screening = next(
+            item for item in action_screenings if item.selected
+        )
+        content["action_screenings"] = [
+            item.model_dump(mode="json") for item in action_screenings
+        ]
+        content["combined_grade"] = selected_screening.grade
+        content["combined_label"] = selected_screening.status_label
+        content["combined_reason"] = selected_screening.summary
+        content["combined_next_check"] = " ".join(
+            selected_screening.next_checks[:3]
+        )
+        content["screening_scope"] = [
+            "하천공간관리",
+            "습지보호",
+            "국가유산",
+            "도시공원",
+            "용도지역",
+            "PNU 필지 도시계획",
+        ]
         feature_collection = content.get("feature_collection")
         heritage_collection = heritage_public.get("feature_collection")
         if isinstance(feature_collection, dict) and isinstance(

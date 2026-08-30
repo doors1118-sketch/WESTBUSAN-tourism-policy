@@ -17,24 +17,12 @@ from typing import Any, Literal
 import httpx
 from shapely.geometry import box, mapping, shape
 
-from westbusan.river_regulation.rules import assess_activity
+from westbusan.river_regulation.rules import ACTIVITY_LABELS, assess_activity
 
 _ENDPOINT = "https://api.vworld.kr/req/data"
 _BUSAN_BOUNDS = (128.75, 34.95, 129.35, 35.45)
 _PUBLISH_BOUNDS = box(128.85, 35.05, 129.08, 35.30)
-_ACTIVITIES = frozenset(
-    {
-        "walking",
-        "ecology",
-        "festival",
-        "sports",
-        "camping",
-        "food",
-        "culture",
-        "lodging",
-        "parking",
-    }
-)
+_ACTIVITIES = frozenset(ACTIVITY_LABELS)
 _RIVER_ZONES = frozenset(
     {
         "waterfront",
@@ -355,7 +343,7 @@ def _normalize_feature(
     )
     if spec.required_text and spec.required_text not in label:
         return None
-    grade, reason = _match_rule(spec.category, label, activity)
+    grade, reason = assess_layer_match(spec.category, label, activity)
     geometry = _safe_geometry(feature.get("geometry"))
     return RegulationMatch(
         category=spec.category,
@@ -385,11 +373,16 @@ def _safe_geometry(value: object) -> dict[str, object] | None:
     return mapping(simplified)  # type: ignore[return-value]
 
 
-def _match_rule(
-    category: LayerCategory,
+def assess_layer_match(
+    category: str,
     label: str,
     activity: str,
 ) -> tuple[str, str]:
+    """Reapply one observed layer match to a candidate activity."""
+    if category not in {"wetland", "heritage", "urban_park", "land_use"}:
+        raise ValueError("invalid_regulation_category")
+    if activity not in _ACTIVITIES:
+        raise ValueError("invalid_regulation_activity")
     if category == "wetland":
         if activity in {"lodging", "parking"}:
             return (
@@ -576,5 +569,6 @@ __all__ = [
     "PointRegulationReview",
     "RegulationMatch",
     "VWorldRegulationClient",
+    "assess_layer_match",
     "unavailable_review",
 ]
