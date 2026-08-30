@@ -244,7 +244,6 @@ function renderWestDistrictSummary(data, selectedDistrict, onSelect) {
     const card = node("button", `card district-summary-card${district.id === selectedDistrict.id ? " active" : ""}`);
     card.type = "button";
     card.append(
-      node("span", "district-summary-rank", `우선순위 ${district.rank}`),
       node("h3", "", district.name),
       node("strong", "", `${districtChartValue(data, district, districtChartDefinitions[0])} · ${districtChartValue(data, district, districtChartDefinitions[1])}`),
       node("p", "", `일평균 ${districtChartValue(data, district, districtChartDefinitions[2])} · 객실100실당 ${value(district.demandPer100Rooms)}`),

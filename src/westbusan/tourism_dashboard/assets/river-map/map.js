@@ -161,30 +161,6 @@
       .concat(externalPathNodes.filter((item) => item.feature.properties.category === layer));
   }
 
-  function fitFocusedFeatures(layer) {
-    const items = focusItemsForLayer(layer);
-    const bounds = featureBounds(items);
-    if (!bounds || map.clientWidth <= 0 || map.clientHeight <= 0) return false;
-    const usableWidth = Math.max(120, map.clientWidth - 100);
-    const usableHeight = Math.max(120, map.clientHeight - 100);
-    let targetZoom = MIN_ZOOM;
-    for (let zoom = MAX_ZOOM; zoom >= MIN_ZOOM; zoom -= 1) {
-      const topLeft = worldPixel(bounds.minLon, bounds.maxLat, zoom);
-      const bottomRight = worldPixel(bounds.maxLon, bounds.minLat, zoom);
-      if (Math.abs(bottomRight[0] - topLeft[0]) <= usableWidth && Math.abs(bottomRight[1] - topLeft[1]) <= usableHeight) {
-        targetZoom = zoom;
-        break;
-      }
-    }
-    const northWest = worldPixel(bounds.minLon, bounds.maxLat, targetZoom);
-    const southEast = worldPixel(bounds.maxLon, bounds.minLat, targetZoom);
-    state.zoom = targetZoom;
-    state.centerX = (northWest[0] + southEast[0]) / 2;
-    state.centerY = (northWest[1] + southEast[1]) / 2;
-    render();
-    return true;
-  }
-
   function renderTiles() {
     const width = map.clientWidth;
     const height = map.clientHeight;
@@ -367,7 +343,7 @@
     layerFocusStatus.classList.toggle("is-active", hasFocus);
     const count = hasFocus ? focusItemsForLayer(focusedLayer).length : 0;
     layerFocusStatus.textContent = focusMessageOverride || (hasFocus
-      ? `${layerDisplayLabels[focusedLayer]} ${count}개 도형으로 자동 이동했습니다. 다른 규제 레이어는 숨기고 공원 참고경계는 유지합니다.`
+      ? `${layerDisplayLabels[focusedLayer]} ${count}개 도형을 현재 지도 중심과 배율을 유지한 채 강조합니다. 다른 규제 레이어는 숨기고 공원 참고경계는 유지합니다.`
       : "전체 레이어를 함께 표시합니다.");
     updateFocusButtons();
   }
@@ -391,7 +367,6 @@
         .forEach((item) => item.node.classList.remove("is-hidden"));
     }
     applyLayerReadability();
-    if (focusedLayer) fitFocusedFeatures(focusedLayer);
   }
 
   function clearAllLayers() {

@@ -265,8 +265,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260830-overview-demand-v23"' in html
-    assert 'src="app.js?v=20260830-overview-demand-v23"' in html
+    assert 'href="app.css?v=20260830-district-rankless-v24"' in html
+    assert 'src="app.js?v=20260830-district-rankless-v24"' in html
 
 
 def test_comprehensive_tab_has_all_report_sections_and_print_action() -> None:
@@ -543,6 +543,8 @@ def test_tourism_tab_is_west_district_detail_with_haeundae_benchmark() -> None:
 
     assert "function renderDistrictDetail" in script
     assert "function renderWestDistrictSummary" in script
+    assert "district-summary-rank" not in script
+    assert "우선순위 ${district.rank}" not in script
     assert "function renderWestDistrictChart" in script
     assert "district-chart-bar" in script
     assert "district-comparison-row" in script
@@ -567,7 +569,7 @@ def test_tourism_tab_is_west_district_detail_with_haeundae_benchmark() -> None:
             assert field in district
 
 
-def test_district_chart_marks_city_shares_and_explains_priority_basis() -> None:
+def test_district_chart_marks_city_shares_without_publishing_a_priority_rank() -> None:
     html = _asset("index.html")
     script = _asset("app.js")
     document = json.loads(_asset("data.json"))
@@ -582,9 +584,11 @@ def test_district_chart_marks_city_shares_and_explains_priority_basis() -> None:
     assert [district["name"] for district in sorted(document["westDistricts"], key=lambda item: item["demandPer100Rooms"], reverse=True)] == ["강서구", "사하구", "북구", "사상구"]
 
     assert "data-district-priority-note" in html
+    assert "우선순위 산정 기준" not in html
+    assert "자치구 비교 지표" in html
     assert "괄호는 부산 전체 비중" in html
     assert "객실 100실당 일평균 방문수요" in html
-    assert "최종 투자 확정 순위가 아닙니다" in html
+    assert "최종 투자순위를 의미하지 않습니다" in html
     assert "function districtCityShare" in script
     assert script.count("cityShare: true") == 3
     assert "function loadDistrictInsight" in script
