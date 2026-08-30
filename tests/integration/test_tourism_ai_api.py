@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -144,6 +145,23 @@ class _UncitedLawClient(_CountingLawClient):
             package_version=result.package_version,
             text="공식 원문 URL이 포함되지 않은 검색 응답",
             response_sha256="f" * 64,
+            source_urls=(),
+            retrieved_at=result.retrieved_at,
+        )
+
+
+class _NamedButUnlinkedLawClient(_CountingLawClient):
+    def research(self, *, query: str, task: str) -> MCPResearchResult:
+        result = super().research(query=query, task=task)
+        return MCPResearchResult(
+            tool_name=result.tool_name,
+            arguments=result.arguments,
+            package_version=result.package_version,
+            text=(
+                "하천법 제33조, 건축법 제11조 및 관광진흥법상 등록 절차를 "
+                "공식 원문에서 재확인해야 합니다."
+            ),
+            response_sha256="a" * 64,
             source_urls=(),
             retrieved_at=result.retrieved_at,
         )
@@ -422,6 +440,93 @@ def test_vworld_tile_is_server_proxied_without_disclosing_key(
     assert response.content.startswith(b"\x89PNG")
     assert secret not in response.text
     assert secret not in caplog.text
+
+
+def test_vworld_tile_retries_transient_upstream_failure(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(502)
+        return httpx.Response(
+            200,
+            content=b"\x89PNG\r\n\x1a\nrecovered-map",
+            headers={"content-type": "image/png"},
+        )
+
+    client = TestClient(
+        create_app(
+            _settings(tmp_path),
+            generator=_CountingGenerator(_model_document()),
+            vworld_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        )
+    )
+
+    response = client.get("/vworld/tiles/14/13969/6449.png")
+
+    assert response.status_code == 200
+    assert response.content == b"\x89PNG\r\n\x1a\nrecovered-map"
+    assert attempts == 2
+
+
+def test_vworld_tile_returns_transparent_png_after_repeated_timeouts(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadTimeout("temporary timeout", request=request)
+
+    client = TestClient(
+        create_app(
+            _settings(tmp_path),
+            generator=_CountingGenerator(_model_document()),
+            vworld_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        )
+    )
+
+    response = client.get("/vworld/tiles/14/13969/6449.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert response.content[16:24] == b"\x00\x00\x00\x01\x00\x00\x00\x01"
+    assert response.content[25] == 6
+    chunk_length = int.from_bytes(response.content[33:37], byteorder="big")
+    assert response.content[37:41] == b"IDAT"
+    scanline = zlib.decompress(response.content[41 : 41 + chunk_length])
+    assert scanline == b"\x00\x00\x00\x00\x00"
+    assert attempts == 2
+
+
+def test_vworld_tile_returns_transparent_png_after_repeated_server_errors(
+    tmp_path: Path,
+) -> None:
+    statuses = iter((500, 502))
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(next(statuses))
+
+    client = TestClient(
+        create_app(
+            _settings(tmp_path),
+            generator=_CountingGenerator(_model_document()),
+            vworld_client=httpx.Client(transport=httpx.MockTransport(respond)),
+        )
+    )
+
+    response = client.get("/vworld/tiles/14/13969/6449.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/png")
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+    assert response.content[16:24] == b"\x00\x00\x00\x01\x00\x00\x00\x01"
 
 
 def test_vworld_tile_rejects_invalid_coordinates_before_upstream(
@@ -798,6 +903,47 @@ def test_river_policy_uses_curated_legal_basis_when_mcp_response_is_uncited(
     )
     assert law_client.calls == 1
     assert river_generator.calls == 1
+
+
+def test_river_policy_attaches_verified_official_urls_to_named_mcp_laws(
+    tmp_path: Path,
+) -> None:
+    law_client = _NamedButUnlinkedLawClient()
+    settings = _settings(tmp_path).model_copy(
+        update={
+            "vworld_api_key": None,
+            "tourism_ai_legal_db_path": tmp_path / "law-evidence.duckdb",
+        }
+    )
+    client = TestClient(
+        create_app(
+            settings,
+            generator=_CountingGenerator(_model_document()),
+            law_mcp_client=law_client,
+            river_policy_generator=_CountingRiverGenerator(),
+        )
+    )
+    payload = {
+        "longitude": 128.953,
+        "latitude": 35.117,
+        "activity": "lodging",
+        "river_zone": "waterfront",
+        "roof_type": "unknown",
+    }
+
+    first = client.post("/regulations/insight", json=payload)
+    second = client.post("/regulations/insight", json=payload)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["legal_evidence_source"] == "curated_registry_and_mcp"
+    assert first.json()["legal_mcp_package_version"] == "4.12.0"
+    assert first.json()["legal_source_urls"] == [
+        "https://www.law.go.kr/법령/하천법",
+        "https://www.law.go.kr/법령/건축법",
+        "https://www.law.go.kr/법령/관광진흥법",
+    ]
+    assert second.json()["cached"] is True
+    assert law_client.calls == 1
 
 
 def test_river_policy_keeps_grounded_basic_explanation_when_ai_is_unavailable(

@@ -977,24 +977,26 @@
       fillList(document.getElementById("required-consultations"), insight.required_consultations);
       const sourceRoot = document.getElementById("legal-source-links");
       sourceRoot.replaceChildren();
+      const renderedLegalUrls = new Set();
       (insight.legal_bases || []).forEach((basis) => {
         const card = document.createElement("article"); card.className = "legal-basis-card";
         const link = document.createElement("a");
         link.href = basis.official_url; link.target = "_blank"; link.rel = "noopener";
+        renderedLegalUrls.add(basis.official_url);
         link.textContent = `${basis.law_name} ${basis.articles} ↗`;
         const rationale = document.createElement("p"); rationale.textContent = basis.rationale;
         const effect = document.createElement("small"); effect.textContent = `실무적으로: ${basis.review_effect}`;
         card.append(link, rationale, effect); sourceRoot.append(card);
       });
-      if (!sourceRoot.children.length) {
-        (insight.legal_source_urls || []).forEach((url, index) => {
-          const link = document.createElement("a");
-          link.href = url; link.target = "_blank"; link.rel = "noopener";
-          link.textContent = `공식 법령근거 ${index + 1} ↗`;
-          const card = document.createElement("article"); card.className = "legal-basis-card";
-          card.append(link); sourceRoot.append(card);
-        });
-      }
+      (insight.legal_source_urls || []).forEach((url, index) => {
+        if (renderedLegalUrls.has(url)) return;
+        const link = document.createElement("a");
+        link.href = url; link.target = "_blank"; link.rel = "noopener";
+        link.textContent = `MCP 추가 공식 법령근거 ${index + 1} ↗`;
+        const card = document.createElement("article"); card.className = "legal-basis-card";
+        card.append(link); sourceRoot.append(card);
+        renderedLegalUrls.add(url);
+      });
       document.getElementById("policy-insight-limit").textContent = insight.limitations;
       const generatedAt = insight.generated_at
         ? new Date(insight.generated_at).toLocaleString("ko-KR", { hour12: false })

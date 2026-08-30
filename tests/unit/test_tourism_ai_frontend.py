@@ -69,10 +69,11 @@ def test_dashboard_exposes_three_decision_questions_and_required_tabs() -> None:
 
     for label in (
         "종합현황",
-        "관광 종합현황",
-        "동서 공급 격차",
-        "투자정보 제공",
-        "빈집 정보 제공",
+        "서부산 자치구 현황",
+        "동서 숙박공급 격차",
+        "서부산 숙박시설 투자정보",
+        "서부산 빈집 관광숙박 투자 정보",
+        "낙동강 관광자원화 투자 정보",
         "AI 종합 분석",
     ):
         assert label in html
@@ -96,7 +97,7 @@ def test_supply_gap_compares_east_west_demand_and_reception_capacity() -> None:
     stylesheet = _asset("app.css")
     document = json.loads(_asset("data.json"))
 
-    assert 'data-tab-target="supply">동서 공급 격차<' in html
+    assert 'data-tab-target="supply">동서 숙박공급 격차<' in html
     assert "동·서부산 숙박공급 격차" in html
     assert 'data-supply-gap-summary' in html
     assert 'data-visitor-demand-bars' in html
@@ -264,8 +265,8 @@ def test_dashboard_versions_static_assets_to_prevent_stale_ui() -> None:
     """Catches a new HTML release reusing cached CSS or JavaScript bytes."""
     html = _asset("index.html")
 
-    assert 'href="app.css?v=20260823-consumption-formula-v43"' in html
-    assert 'src="app.js?v=20260823-consumption-formula-v43"' in html
+    assert 'href="app.css?v=20260830-overview-demand-v23"' in html
+    assert 'src="app.js?v=20260830-overview-demand-v23"' in html
 
 
 def test_comprehensive_tab_has_all_report_sections_and_print_action() -> None:
@@ -327,7 +328,7 @@ def test_investment_information_combines_actions_map_ai_and_district_summary() -
     """Catches investment actions and the practical map drifting into separate tabs."""
     html = _asset("index.html")
 
-    assert 'data-tab-target="investment">투자정보 제공<' in html
+    assert 'data-tab-target="investment">서부산 숙박시설 투자정보<' in html
     assert 'data-tab-target="map"' not in html
     assert 'data-tab-panel="map"' not in html
 
@@ -352,10 +353,12 @@ def test_navigation_orders_decision_tabs_and_places_ai_analysis_last() -> None:
     nav = html.split('<nav class="tabs"', 1)[1].split("</nav>", 1)[0]
 
     expected = (
-        'data-tab-target="supply">동서 공급 격차<',
-        'data-tab-target="investment">투자정보 제공<',
-        'data-tab-target="vacant">빈집 정보 제공<',
-        'data-tab-target="river">낙동강 규제검토<',
+        'data-tab-target="overview">종합현황<',
+        'data-tab-target="tourism">서부산 자치구 현황<',
+        'data-tab-target="supply">동서 숙박공급 격차<',
+        'data-tab-target="investment">서부산 숙박시설 투자정보<',
+        'data-tab-target="vacant">서부산 빈집 관광숙박 투자 정보<',
+        'data-tab-target="river">낙동강 관광자원화 투자 정보<',
         'data-tab-target="insights">AI 종합 분석<',
     )
     positions = [nav.index(item) for item in expected]
@@ -435,7 +438,33 @@ def test_overview_separates_absolute_demand_from_supply_pressure() -> None:
     assert 'kpi("서부산 일평균 방문수요", value(west.visitorDailyAverage)' in script
     assert '{ label: "객실 100실당 방문 압력", key: "demandPer100Rooms"' in script
     assert "숙박객·점유율이 아닌 공급 검토용 지표" in script
-    assert 'kpi("객실 100실당 방문수요"' not in script
+    assert 'kpi("객실 100실당 방문수요", value(west.demandPer100Rooms)' in script
+    assert "일평균 방문수요 ÷ 확인 객실 × 100" in script
+    assert "실제 숙박객 수·객실 가동률이 아닙니다" in script
+    assert "방문량 대비 관광소비 상대지수" not in script
+
+
+def test_overview_places_demand_first_and_preserves_eight_card_order() -> None:
+    script = _asset("app.js")
+    overview_block = script.split(
+        'const overview = document.querySelector("[data-overview-kpis]");', 1
+    )[1]
+    overview_block = overview_block.split(
+        'const summary = document.querySelector("[data-region-summary]");', 1
+    )[0]
+    expected_markers = (
+        'kpi("서부산 일평균 방문수요"',
+        "facilitySupplyKpi(west, east)",
+        'kpi("관광숙박업 등록시설 비율"',
+        'kpi("2021년 이후 숙박업 등록"',
+        'kpi("객실 100실당 방문수요"',
+        'kpi("건축연령 20년 이상 시설"',
+        'kpi("평균 인허가 경과연수"',
+        'kpi("외국인 숙박 대응시설"',
+    )
+
+    positions = [overview_block.index(marker) for marker in expected_markers]
+    assert positions == sorted(positions)
 
 
 def test_facility_card_renders_rooms_as_a_smaller_secondary_value() -> None:
@@ -452,11 +481,11 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     script = _asset("app.js")
 
     for label in (
-        "서부산 숙박업체",
         "서부산 일평균 방문수요",
+        "서부산 숙박업체",
         "관광숙박업 등록시설 비율",
         "2021년 이후 숙박업 등록",
-        "방문량 대비 관광소비 상대지수",
+        "객실 100실당 방문수요",
         "건축연령 20년 이상 시설",
         "평균 인허가 경과연수",
         "외국인 숙박 대응시설",
@@ -469,15 +498,14 @@ def test_overview_has_eight_distinct_policy_cards() -> None:
     assert overview_block.count("facilitySupplyKpi(west, east)") == 1
     assert "객실 비중이 아닙니다" in overview_block
     assert "연결 인허가의 가장 이른 인허가일" in overview_block
-    assert "지역 간 소비 수준 비교에만 사용" in overview_block
-    assert "전체 관광소비액 ÷ 전체 방문량" in overview_block
-    assert "원화 금액·점유율로 해석하지 않습니다" in overview_block
+    assert "일평균 방문수요 ÷ 확인 객실 × 100" in overview_block
+    assert "실제 숙박객 수·객실 가동률이 아닙니다" in overview_block
     assert "내부 리모델링 상태를 뜻하지 않습니다" in overview_block
     assert "동일 사업자의 영업기간과 다릅니다" in overview_block
     for note in (
         "전체 숙박시설 대비 · 시설 수 기준",
         "현재 영업시설 · 최초 인허가일 기준",
-        "2026.07 구 평균 · 금액 아님",
+        "일평균 방문수요 ÷ 확인 객실 × 100",
         "건축물대장 사용승인일부터 산정",
         "최초 인허가일~기준일 평균",
     ):
@@ -585,11 +613,17 @@ def test_overview_cards_use_equal_height_grid_tracks() -> None:
 
 def test_overview_comparison_badges_are_all_percent_of_east_busan() -> None:
     script = _asset("app.js")
+    document = json.loads(_asset("data.json"))
     overview_block = script.split('const overview = document.querySelector("[data-overview-kpis]");', 1)[1]
     overview_block = overview_block.split('const summary = document.querySelector("[data-region-summary]");', 1)[0]
+    regions = {region["id"]: region for region in document["regions"]}
 
     assert "function relativeToEast" in script
     assert 'relativeToEast(west.facilities, east.facilities)' in script
+    assert 'relativeToEast(west.demandPer100Rooms, east.demandPer100Rooms)' in overview_block
+    assert regions["west"]["demandPer100Rooms"] == 3558.3
+    assert regions["east"]["demandPer100Rooms"] == 1997.5
+    assert round(3558.3 / 1997.5 * 100, 1) == 178.1
     assert overview_block.count("relativeToEast(") == 7
     assert "`동부산 ${" not in overview_block
 
@@ -691,6 +725,7 @@ def test_overview_contains_readable_demand_and_entry_combo_chart() -> None:
     assert '"trend-demand-panel"' in script
     assert '"trend-entry-panel"' in script
     assert '"trend-west-entry-label"' in script
+    assert '"trend-east-entry-label"' in script
     assert "const height = 390;" in script
     assert "const xInset = 32;" in script
     assert 'data-trend-region' not in script
@@ -712,6 +747,7 @@ def test_overview_contains_readable_demand_and_entry_combo_chart() -> None:
         ".trend-panel-label",
         ".trend-panel-divider",
         ".trend-west-entry-label",
+        ".trend-east-entry-label",
         ".trend-definition",
         ".trend-tooltip",
     ):

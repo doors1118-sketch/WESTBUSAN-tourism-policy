@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Protocol
 
+from westbusan.tourism_ai.fallback_logging import log_ai_fallback
 from westbusan.tourism_ai.metrics import load_metric_catalogue
 from westbusan.tourism_ai.models import (
     EvidenceMetric,
@@ -52,6 +54,7 @@ class InsightService:
 
     def generate(self, request: InsightRequest) -> InsightResponse:
         catalogue = load_metric_catalogue(self.data_path, request)
+        started_at = perf_counter()
         try:
             insight = self.generator.generate(
                 catalogue,
@@ -60,7 +63,14 @@ class InsightService:
             )
             evidence = _resolve_evidence(insight, catalogue)
             source = "openai"
-        except (RuntimeError, ValueError):
+        except (RuntimeError, ValueError) as error:
+            log_ai_fallback(
+                service="insight",
+                model=self.model,
+                request_identity=request,
+                error=error,
+                started_at=started_at,
+            )
             insight = _fallback_insight(catalogue, request.selection, request.district)
             evidence = _resolve_evidence(insight, catalogue)
             source = "rule_fallback"
@@ -76,6 +86,13 @@ class InsightService:
     def fallback(self, request: InsightRequest) -> InsightResponse:
         """Return a deterministic interpretation without calling OpenAI."""
 
+        log_ai_fallback(
+            service="insight",
+            model=self.model,
+            request_identity=request,
+            exception_type="DailyLimitExceeded",
+            elapsed_ms=0,
+        )
         catalogue = load_metric_catalogue(self.data_path, request)
         insight = _fallback_insight(catalogue, request.selection, request.district)
         return self._response(

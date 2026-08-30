@@ -9,6 +9,7 @@ import threading
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
+from time import perf_counter
 from typing import Literal, Protocol
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -28,6 +29,7 @@ from westbusan.river_regulation.legal_basis import (
     legal_basis_text,
 )
 from westbusan.river_regulation.rules import ACTIVITY_LABELS
+from westbusan.tourism_ai.fallback_logging import log_ai_fallback
 from westbusan.tourism_ai.legal_mcp import (
     KoreanLawMCPClient,
     LegalEvidenceStore,
@@ -193,7 +195,11 @@ class RiverPolicyInsightService:
             spatial=spatial_evidence,
         )
         bases = _legal_bases_for_all_actions(request=request, spatial=spatial_evidence)
-        mcp_legal = self._legal_evidence(request=request, spatial=spatial_evidence)
+        mcp_legal = self._legal_evidence(
+            request=request,
+            spatial=spatial_evidence,
+            bases=bases,
+        )
         curated_text = legal_basis_text(bases)
         legal_text = curated_text
         if mcp_legal is not None:
@@ -229,6 +235,7 @@ class RiverPolicyInsightService:
         *,
         request: RiverPolicyInsightRequest,
         spatial: dict[str, object],
+        bases: Sequence[LegalBasis],
     ) -> StoredLegalEvidence | None:
         if self.law_client is None or self.evidence_store is None:
             return None
@@ -240,7 +247,24 @@ class RiverPolicyInsightService:
             package_version=self.law_client.package_version,
         )
         if cached is not None:
-            return cached if cached.source_urls else None
+            source_urls = _verified_mcp_source_urls(
+                text=cached.text,
+                direct_urls=cached.source_urls,
+                bases=bases,
+            )
+            if not source_urls:
+                return None
+            if source_urls == cached.source_urls:
+                return cached
+            return self.evidence_store.put(
+                tool_name=cached.tool_name,
+                arguments=arguments,
+                package_version=cached.package_version,
+                text=cached.text,
+                source_urls=source_urls,
+                retrieved_at=cached.retrieved_at,
+                ttl=timedelta(hours=24),
+            )
         try:
             result = self.law_client.research(query=query, task="action_basis")
         except (LegalMCPError, ValueError):
@@ -250,7 +274,11 @@ class RiverPolicyInsightService:
             arguments=result.arguments,
             package_version=result.package_version,
             text=result.text,
-            source_urls=result.source_urls,
+            source_urls=_verified_mcp_source_urls(
+                text=result.text,
+                direct_urls=result.source_urls,
+                bases=bases,
+            ),
             retrieved_at=result.retrieved_at,
             ttl=timedelta(hours=24),
         )
@@ -269,6 +297,7 @@ class RiverPolicyInsightService:
     ) -> RiverPolicyInsightResponse:
         source: Literal["openai", "rule_fallback"] = "rule_fallback"
         if bases or mcp_legal is not None:
+            started_at = perf_counter()
             try:
                 model_value = self.generator.generate_river_policy_insight(
                     spatial_evidence=_safe_spatial_evidence(
@@ -278,7 +307,19 @@ class RiverPolicyInsightService:
                     legal_evidence=legal_text,
                 )
                 source = "openai"
-            except (RuntimeError, TypeError, ValueError):
+            except (RuntimeError, TypeError, ValueError) as error:
+                log_ai_fallback(
+                    service="river_policy",
+                    model=self.model,
+                    request_identity={
+                        "request": request,
+                        "spatial": _spatial_identity(spatial),
+                        "legal_basis": legal_basis_identity(bases),
+                        "legal_evidence_sha256": legal_sha256,
+                    },
+                    error=error,
+                    started_at=started_at,
+                )
                 model_value = _fallback(spatial, bases=bases, request=request)
         else:
             model_value = _fallback(spatial, bases=bases, request=request)
@@ -361,6 +402,21 @@ def _law_query(
         "행위별 적용 조문과 실무상 확인사항을 구분하고 공식 원문 URL을 함께 "
         "제시하십시오. 공간중첩만으로 허용·금지를 확정하지 마십시오."
     )
+
+
+def _verified_mcp_source_urls(
+    *,
+    text: str,
+    direct_urls: Sequence[str],
+    bases: Sequence[LegalBasis],
+) -> tuple[str, ...]:
+    """Attach only pre-verified official URLs for laws named by the MCP result."""
+
+    urls = list(direct_urls)
+    for basis in bases:
+        if basis.law_name in text and basis.official_url not in urls:
+            urls.append(basis.official_url)
+    return tuple(urls)
 
 
 def _spatial_identity(spatial: Mapping[str, object]) -> dict[str, object]:

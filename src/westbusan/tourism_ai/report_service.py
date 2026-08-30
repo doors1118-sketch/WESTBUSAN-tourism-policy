@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import Protocol
 
 from pydantic import ValidationError
 
+from westbusan.tourism_ai.fallback_logging import log_ai_fallback
 from westbusan.tourism_ai.models import EvidenceMetric
 from westbusan.tourism_ai.report_metrics import ReportEvidenceCatalogue
 from westbusan.tourism_ai.report_models import (
@@ -41,11 +43,28 @@ class ComprehensiveReportService:
     def generate(
         self, catalogue: ReportEvidenceCatalogue
     ) -> ComprehensiveReportResponse:
+        started_at = perf_counter()
         try:
             report = self.generator.generate_report(catalogue)
             validate_report_evidence(report, catalogue.metrics)
             source = "openai"
-        except (RuntimeError, ValueError, ValidationError, ReportEvidenceError):
+        except (
+            RuntimeError,
+            ValueError,
+            ValidationError,
+            ReportEvidenceError,
+        ) as error:
+            log_ai_fallback(
+                service="comprehensive_report",
+                model=self.model,
+                request_identity={
+                    "publication_identity": dict(catalogue.publication_identity),
+                    "data_as_of": catalogue.data_as_of,
+                    "metric_ids": sorted(catalogue.metrics),
+                },
+                error=error,
+                started_at=started_at,
+            )
             report = build_fallback_report(catalogue)
             validate_report_evidence(report, catalogue.metrics)
             source = "rule_fallback"
@@ -60,6 +79,17 @@ class ComprehensiveReportService:
     def fallback(
         self, catalogue: ReportEvidenceCatalogue
     ) -> ComprehensiveReportResponse:
+        log_ai_fallback(
+            service="comprehensive_report",
+            model=self.model,
+            request_identity={
+                "publication_identity": dict(catalogue.publication_identity),
+                "data_as_of": catalogue.data_as_of,
+                "metric_ids": sorted(catalogue.metrics),
+            },
+            exception_type="DailyLimitExceeded",
+            elapsed_ms=0,
+        )
         report = build_fallback_report(catalogue)
         return _resolve_report(
             report,

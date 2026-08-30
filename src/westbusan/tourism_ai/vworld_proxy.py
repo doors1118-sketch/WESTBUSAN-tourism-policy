@@ -13,6 +13,12 @@ _VWORLD_STATIC_MAP = "https://api.vworld.kr/req/image"
 _VWORLD_WMTS_ROOT = "https://api.vworld.kr/req/wmts/1.0.0"
 _VWORLD_SEARCH = "https://api.vworld.kr/req/search"
 _BUSAN_BOUNDS = (128.7, 34.8, 129.4, 35.5)
+_VWORLD_TILE_ATTEMPTS = 2
+_TRANSPARENT_PNG_TILE = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d4944415478da63606060600000000500017aa857500000000049454e44"
+    "ae426082"
+)
 _BUSAN_DISTRICTS = (
     "중구", "서구", "동구", "영도구", "부산진구", "동래구", "남구", "북구",
     "해운대구", "사하구", "금정구", "강서구", "연제구", "수영구", "사상구", "기장군",
@@ -157,14 +163,26 @@ class VWorldTileProxy:
         tile_count = 2**zoom
         if not 0 <= column < tile_count or not 0 <= row < tile_count:
             raise ValueError("vworld_tile_out_of_range")
-        response = self._client.get(
+        url = (
             f"{_VWORLD_WMTS_ROOT}/{self._api_key}/Base/"
             f"{zoom}/{row}/{column}.png"
         )
-        if response.status_code != 200:
-            raise VWorldBasemapError("vworld_tile_upstream_failed")
-        if not response.headers.get("content-type", "").lower().startswith("image/"):
-            raise VWorldBasemapError("vworld_tile_invalid_content")
-        if not response.content.startswith(b"\x89PNG"):
-            raise VWorldBasemapError("vworld_tile_invalid_image")
-        return response.content
+        for attempt in range(_VWORLD_TILE_ATTEMPTS):
+            try:
+                response = self._client.get(url)
+            except httpx.TransportError:
+                if attempt + 1 == _VWORLD_TILE_ATTEMPTS:
+                    return _TRANSPARENT_PNG_TILE
+                continue
+            if 500 <= response.status_code < 600:
+                if attempt + 1 == _VWORLD_TILE_ATTEMPTS:
+                    return _TRANSPARENT_PNG_TILE
+                continue
+            if response.status_code != 200:
+                raise VWorldBasemapError("vworld_tile_upstream_failed")
+            if not response.headers.get("content-type", "").lower().startswith("image/"):
+                raise VWorldBasemapError("vworld_tile_invalid_content")
+            if not response.content.startswith(b"\x89PNG"):
+                raise VWorldBasemapError("vworld_tile_invalid_image")
+            return response.content
+        raise AssertionError("vworld_tile_retry_exhausted")
