@@ -36,6 +36,7 @@
   let activePoiFilter = "all";
   let selectedGridNode = null;
   let dragOrigin = null;
+  let gridGeometryPromise = null;
 
   function worldPixel(lon, lat, zoom) {
     const size = TILE_SIZE * (2 ** zoom);
@@ -761,9 +762,24 @@
       && !polygon.slice(1).some((hole) => pointInRing(point, hole)));
   }
 
-  function findGridForPoint(longitude, latitude, district) {
+  async function loadGridGeometry() {
+    if (!gridGeometryPromise) {
+      const source = slippyMap.dataset.gridSource;
+      gridGeometryPromise = fetch(source, { cache: "force-cache" }).then((response) => {
+        if (!response.ok) throw new Error("grid geometry unavailable");
+        return response.json();
+      }).catch((error) => {
+        gridGeometryPromise = null;
+        throw error;
+      });
+    }
+    return gridGeometryPromise;
+  }
+
+  async function findGridForPoint(longitude, latitude, district) {
     const point = [Number(longitude), Number(latitude)];
-    const feature = (bundle.grids?.features || []).find((item) => {
+    const gridGeometry = await loadGridGeometry();
+    const feature = (gridGeometry.features || []).find((item) => {
       const properties = item.properties || {};
       return (!district || properties.district_name === district)
         && pointInGeometry(point, item.geometry);
@@ -844,7 +860,7 @@
         result.textContent = "입력한 부산 지번을 확인하지 못했습니다. 시·구·동과 번지를 포함해 다시 입력해 주세요.";
         return;
       }
-      const node = findGridForPoint(geocode.longitude, geocode.latitude, geocode.district);
+      const node = await findGridForPoint(geocode.longitude, geocode.latitude, geocode.district);
       if (!node) {
         result.textContent = "해당 지번과 연결되는 현재 발행 500m 분석지역이 없습니다.";
         return;

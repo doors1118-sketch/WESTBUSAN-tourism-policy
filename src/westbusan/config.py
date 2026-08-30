@@ -126,6 +126,7 @@ class Settings(BaseModel):
     data_dir: Path
     db_path: Path
     log_dir: Path
+    migrations_dir: Path | None = None
     regions: RegionConfig
     policy: PolicyConfig
     spatial: SpatialConfig = Field(default_factory=SpatialConfig.default)
@@ -149,6 +150,11 @@ class Settings(BaseModel):
             data_dir=path_from_env("WESTBUSAN_DATA_DIR", "data"),
             db_path=path_from_env("WESTBUSAN_DB_PATH", "data/westbusan.duckdb"),
             log_dir=path_from_env("WESTBUSAN_LOG_DIR", "logs"),
+            migrations_dir=(
+                path_from_env("WESTBUSAN_MIGRATIONS_DIR", "sql")
+                if os.getenv("WESTBUSAN_MIGRATIONS_DIR")
+                else None
+            ),
             regions=regions,
             policy=policy,
             spatial=spatial,

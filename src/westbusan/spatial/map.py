@@ -274,9 +274,31 @@ def build_public_spatial_payload(bundle_data: PublicSpatialData) -> dict[str, An
     }
 
 
+def build_runtime_spatial_payload(bundle_data: PublicSpatialData) -> dict[str, Any]:
+    """Return only data consumed by the deployed map at initial load."""
+    return {
+        "candidate_rankings": {
+            layer: build_layer_candidate_rankings(
+                list(bundle_data.grid_geojson.get("features", [])),
+                layer=layer,
+                access_context=(
+                    bundle_data.access_context
+                    if layer == "policy_priority"
+                    else None
+                ),
+            )
+            for layer in _CANDIDATE_LAYERS
+        },
+        "access_context": bundle_data.access_context,
+    }
+
+
 def render_map(bundle_data: PublicSpatialData) -> str:
     """Render one deterministic, policy-oriented investment opportunity map."""
-    payload = build_public_spatial_payload(bundle_data)
+    # The SVG already carries the visible grid/facility attributes. Evidence and
+    # facility GeoJSON remain in their published sidecars; embedding them again
+    # added more than 40 MB to the deployed document without a runtime consumer.
+    payload = build_runtime_spatial_payload(bundle_data)
     priorities = _district_policy_priorities(bundle_data.metadata)
     svg = _render_svg(
         bundle_data.grid_geojson,

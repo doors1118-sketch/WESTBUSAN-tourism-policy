@@ -25,7 +25,7 @@ from pyarrow import parquet
 from westbusan.db import Database
 from westbusan.spatial.map import (
     PublicSpatialData,
-    build_public_spatial_payload,
+    build_runtime_spatial_payload,
     render_map,
 )
 from westbusan.spatial.opportunity import OpportunityMetrics, recommend_investment
@@ -298,7 +298,7 @@ def export_spatial_current(
 
     public_data, artifacts = _build_artifacts(db, identity)
     html_body = render_map(public_data).encode("utf-8")
-    artifacts["index.html"] = _Artifact(html_body, 1, "standalone-html-v1")
+    artifacts["index.html"] = _Artifact(html_body, 2, "web-runtime-html-v2")
     manifest = _manifest(identity, export_date, artifacts)
     artifacts["manifest.json"] = _Artifact(
         _json_bytes(manifest, pretty=True), 1, "spatial-bundle-manifest-v1"
@@ -377,7 +377,7 @@ def validate_spatial_bundle(
             return False
         public_data, expected = _build_artifacts(db, identity)
         expected["index.html"] = _Artifact(
-            render_map(public_data).encode("utf-8"), 1, "standalone-html-v1"
+            render_map(public_data).encode("utf-8"), 2, "web-runtime-html-v2"
         )
         expected_manifest = _manifest(
             identity, date.fromisoformat(manifest["export_date"]), expected
@@ -1375,4 +1375,4 @@ def _embedded_payload_matches(path: Path, public_data: PublicSpatialData) -> boo
         return False
     payload_text = text.split(marker, 1)[1].split("</script>", 1)[0]
     payload = json.loads(payload_text)
-    return payload == build_public_spatial_payload(public_data)
+    return payload == build_runtime_spatial_payload(public_data)

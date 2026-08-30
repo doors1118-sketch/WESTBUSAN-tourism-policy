@@ -107,7 +107,10 @@ class Pipeline:
         self.root = Path(root).resolve()
         self.settings = settings
         self.fixture_dir = Path(fixture_dir).resolve() if fixture_dir else None
-        self.db = Database(settings.db_path, self.root / "sql")
+        self.db = Database(
+            settings.db_path,
+            settings.migrations_dir or self.root / "sql",
+        )
         self.registry = SourceRegistry.load(self.root / "config" / "sources.yaml")
         self.raw_store = RawStore(settings.data_dir)
         self._lease_owner_token = uuid4()

@@ -9,6 +9,7 @@ from westbusan.config import (
     Settings,
     region_group_for_district,
 )
+from westbusan.orchestrator import Pipeline
 
 
 def test_settings_loads_regions_and_keeps_key_out_of_repr(
@@ -46,6 +47,25 @@ def test_settings_loads_regions_and_keeps_key_out_of_repr(
     with pytest.raises(ValidationError, match="frozen"):
         settings.spatial.grid_size_m = 250
     assert "secret-value" not in repr(settings)
+
+
+def test_pipeline_uses_an_immutable_operational_migration_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Catches production silently reverting to rewritten repository migrations."""
+    root = Path.cwd()
+    migrations = tmp_path / "production-migrations"
+    migrations.mkdir()
+    monkeypatch.setenv("WESTBUSAN_MIGRATIONS_DIR", str(migrations))
+    monkeypatch.setenv("WESTBUSAN_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("WESTBUSAN_DB_PATH", str(tmp_path / "data" / "westbusan.duckdb"))
+    monkeypatch.setenv("WESTBUSAN_LOG_DIR", str(tmp_path / "logs"))
+
+    settings = Settings.load(root)
+    pipeline = Pipeline(root, settings)
+
+    assert settings.migrations_dir == migrations
+    assert pipeline.db.migrations_dir == migrations
 
 
 @pytest.mark.parametrize(

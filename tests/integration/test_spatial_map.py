@@ -226,6 +226,33 @@ def test_map_exposes_transport_and_tourism_context_layers() -> None:
     assert "<circle" in rendered
 
 
+def test_map_omits_unused_bulk_payload_and_loads_grid_geometry_only_for_lot_lookup() -> None:
+    """Catches 40+ MB evidence/facility duplication returning to the map HTML."""
+    marker = "must-not-be-embedded-in-runtime-map"
+    data = replace(
+        _map_data(),
+        evidence=tuple(
+            {**_map_data().evidence[0], "evidence_json": marker}
+            for _ in range(1_000)
+        ),
+    )
+
+    rendered = render_map(data)
+    payload = json.loads(
+        rendered.split('<script id="bundle-data" type="application/json">', 1)[1]
+        .split("</script>", 1)[0]
+    )
+
+    assert set(payload) == {"access_context", "candidate_rankings"}
+    assert marker not in rendered
+    assert 'data-grid-source="grid_500m.geojson"' in rendered
+    assert "async function findGridForPoint" in rendered
+    assert "await loadGridGeometry()" in rendered
+    assert "await findGridForPoint(" in rendered
+    # Public facility and POI markers remain in the SVG, so no visible layer is lost.
+    assert 'class="facility-feature"' in rendered
+
+
 def test_investment_rankings_publish_access_weighted_score_components() -> None:
     """Catches transport and tourism being shown without affecting investment rank."""
     data = _map_data()
@@ -685,8 +712,8 @@ def test_overview_clusters_facilities_by_dong_before_showing_exact_points() -> N
     assert ">2</text>" in rendered
 
 
-def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None:
-    """Catches map data drifting from exports or embedded text breaking script safety."""
+def test_embedded_runtime_json_is_minimal_and_escapes_markup() -> None:
+    """Catches unsafe runtime JSON or bulk sidecar data returning to the HTML."""
     data = _map_data()
     data.facility_geojson["features"][0]["properties"]["public_name"] = "</script><x>"
 
@@ -696,9 +723,10 @@ def test_embedded_json_matches_supplied_public_data_and_escapes_markup() -> None
     )[1].split("</script>", 1)[0]
     payload = json.loads(payload_text)
 
-    assert payload["grids"] == data.grid_geojson
-    assert payload["facilities"] == data.facility_geojson
-    assert payload["evidence"] == list(data.evidence)
+    assert set(payload) == {"access_context", "candidate_rankings"}
+    assert "grids" not in payload
+    assert "facilities" not in payload
+    assert "evidence" not in payload
     assert "</script><x>" not in payload_text
 
 
@@ -707,13 +735,10 @@ def test_default_priorities_do_not_mutate_manifest_bound_metadata() -> None:
     data = _map_data()
     data.metadata.pop("district_policy_priorities")
 
+    expected_metadata = dict(data.metadata)
     rendered = render_map(data)
-    payload_text = rendered.split(
-        '<script id="bundle-data" type="application/json">', 1
-    )[1].split("</script>", 1)[0]
-    payload = json.loads(payload_text)
 
-    assert payload["metadata"] == data.metadata
+    assert data.metadata == expected_metadata
     assert "관광수요 대비 숙박공급 부족" in rendered
 
 
