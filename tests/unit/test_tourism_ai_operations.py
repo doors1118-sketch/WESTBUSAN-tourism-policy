@@ -84,6 +84,20 @@ def test_operations_runbook_forbids_secret_and_existing_service_mutation() -> No
     assert "롤백" in runbook
 
 
+def test_operations_runbook_requires_complete_map_release_before_activation() -> None:
+    runbook = (ROOT / "docs" / "TOURISM_AI_OPERATIONS.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "build_tourism_dashboard_release.py build" in runbook
+    assert "build_tourism_dashboard_release.py validate" in runbook
+    assert "map/index.html" in runbook
+    assert "vacant-map/index.html" in runbook
+    assert "river-map/index.html" in runbook
+    assert "release-manifest.json" in runbook
+    assert "access_snapshot_id" in runbook
+
+
 def test_accessibility_runbooks_define_shared_snapshot_and_safe_interpretation() -> None:
     spatial = (ROOT / "docs" / "SPATIAL_MAP_OPERATIONS.md").read_text(
         encoding="utf-8"

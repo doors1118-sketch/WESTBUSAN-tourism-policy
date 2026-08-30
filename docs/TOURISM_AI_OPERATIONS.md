@@ -75,9 +75,43 @@
 5. `nginx -t`가 성공한 경우에만 reload한다.
 6. 새 UI release를 만들고 `current` 링크를 원자적으로 전환한다.
 
+## 지도 누락 방지형 UI 릴리스 조립
+
+대시보드 기본 파일만 새 release에 복사하면 투자지도 `map/`과 빈집지도
+`vacant-map/`이 빠져 탭 내부가 404가 된다. 두 지도는 Git 정적자산이 아니라
+승인 데이터에서 만든 별도 manifest 번들이므로, 다음 조립 명령을 통과한 release만
+`current` 후보로 사용한다. 직전 정상 release의 지도 번들을 재사용할 때도 동일하다.
+
+```bash
+python scripts/build_tourism_dashboard_release.py build \
+  --investment-map /opt/westbusan/dashboard/releases/<last-known-good>/map \
+  --vacant-map /opt/westbusan/dashboard/releases/<last-known-good>/vacant-map \
+  --output /opt/westbusan/dashboard/releases/<new-release>
+
+python scripts/build_tourism_dashboard_release.py validate \
+  --release /opt/westbusan/dashboard/releases/<new-release>
+```
+
+조립기는 다음 조건 중 하나라도 실패하면 출력 release를 만들지 않는다.
+
+- 메인 `index.html`, `app.css`, `app.js`, `data.json` 누락
+- `map/index.html`, `vacant-map/index.html`, `river-map/index.html` 누락
+- 투자·빈집 지도 manifest 파일목록, 바이트 수 또는 SHA-256 불일치
+- 두 지도 `access_snapshot_id` 불일치
+- 대시보드가 세 지도 상대경로를 참조하지 않음
+
+성공한 release에는 전체 파일을 묶는 `release-manifest.json`이 생성된다. 조립 완료
+후에도 `current`는 아직 바꾸지 않는다. `validate` 성공과 아래 네 URL의 staging
+검사를 마친 다음에만 심볼릭 링크를 원자적으로 전환한다. 실패하면 신규 release만
+폐기하고 기존 `current`를 유지한다.
+
 ## 검증
 
 - `/tourism/`과 `/tourism/api/healthz`가 200인지 확인한다.
+- `/tourism/map/index.html`, `/tourism/vacant-map/index.html`,
+  `/tourism/river-map/index.html`이 모두 200인지 확인한다.
+- `/tourism/map/manifest.json`, `/tourism/vacant-map/manifest.json`,
+  `/tourism/release-manifest.json`이 모두 200인지 확인한다.
 - 대표 정책 인사이트를 한 번 생성하고 같은 요청의 두 번째 응답이 캐시인지 확인한다.
 - 응답·페이지 소스·캐시·신규 unit 로그에 API 키가 없는지 값 노출 없이 점검한다.
 - 공공계약, 지역상품, 신용보증, 민생100일, 관광지도 등 기존 공개 URL의 상태가 작업 전과 같은지 확인한다.
