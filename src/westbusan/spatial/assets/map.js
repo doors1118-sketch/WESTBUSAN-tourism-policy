@@ -145,7 +145,8 @@
 
   function createFacilityNode(feature) {
     const properties = feature.properties || {};
-    const [x, y] = mapCoordinate(...feature.geometry.coordinates.map(Number));
+    const coordinates = feature.geometry.coordinates.map(Number);
+    const [x, y] = mapCoordinate(...coordinates);
     const node = document.createElementNS("http://www.w3.org/2000/svg", "circle");
     node.setAttribute("class", "facility-feature");
     node.setAttribute("cx", x.toFixed(3));
@@ -158,6 +159,7 @@
       baseRadius: "3",
       kind: "facility",
       key: textValue(properties.facility_key),
+      gridKey: textValue(properties.grid_id),
       grade: textValue(properties.composite_grade || "insufficient_evidence"),
       district: textValue(properties.district_name),
       dong: textValue(properties.primary_dong_name),
@@ -177,6 +179,7 @@
       mainUse: textValue(properties.main_use),
       parkingTotal: textValue(properties.parking_total),
       profileCoverage: textValue(properties.profile_coverage),
+      geoBounds: `${coordinates[0]},${coordinates[1]},${coordinates[0]},${coordinates[1]}`,
     });
     const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
     title.textContent = `${properties.public_name || "숙박시설"} · 객실 ${textValue(properties.room_count) || "자료 없음"} · 건물연수 ${textValue(properties.use_approval_age_years) || "자료 없음"}`;
@@ -354,7 +357,9 @@
   }
 
   function numeric(node, key) {
-    const value = Number(node.dataset[key]);
+    const raw = node.dataset[key];
+    if (raw === undefined || raw === "") return null;
+    const value = Number(raw);
     return Number.isFinite(value) ? value : null;
   }
 
@@ -395,18 +400,25 @@
     return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   }
 
-  function accessibilityContext(node) {
-    const bounds = (node.dataset.geoBounds || "").split(",").map(Number);
+  function accessibilityContextForSelection(bounds, district, dong) {
     const center = bounds.length === 4 && bounds.every(Number.isFinite)
       ? [(bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2]
       : null;
     const features = bundle.access_context?.features || [];
-    const transport = features.filter((item) => {
+    const transportCandidates = features.filter((item) => {
       const properties = item.properties || {};
       return properties.kind === "transport_dong"
-        && properties.district_name === node.dataset.district
-        && properties.dong_name === node.dataset.dong;
-    }).sort((a, b) => String(b.properties.period || "").localeCompare(String(a.properties.period || "")))[0];
+        && (!district || properties.district_name === district)
+        && (!dong || properties.dong_name === dong);
+    });
+    const transportPeriod = transportCandidates.reduce((latest, item) => (
+      String(item.properties?.period || "").localeCompare(latest) > 0
+        ? String(item.properties.period)
+        : latest
+    ), "");
+    const transport = transportCandidates.filter(
+      (item) => String(item.properties?.period || "") === transportPeriod,
+    );
     const pois = center ? features.filter((item) => item.properties?.kind === "tourism_poi"
       && item.geometry?.type === "Point").map((item) => ({
         item,
@@ -414,14 +426,60 @@
       })).sort((a, b) => a.distance - b.distance) : [];
     const nearest = pois[0] || null;
     return {
-      transportInbound: transport
-        ? Number(transport.properties.inbound_other_district || transport.properties.inbound_other_dong || 0)
+      transportInbound: transport.length
+        ? transport.reduce((total, item) => total + Number(
+          item.properties.inbound_other_district || item.properties.inbound_other_dong || 0,
+        ), 0)
         : null,
-      transportPeriod: transport?.properties.period || null,
+      transportPeriod: transportPeriod || null,
       nearestPoiName: nearest?.item.properties.title || null,
       nearestPoiDistance: nearest?.distance ?? null,
       poiCount1000m: pois.filter((item) => item.distance <= 1000).length,
     };
+  }
+
+  function accessibilityContext(node) {
+    const bounds = (node.dataset.geoBounds || "").split(",").map(Number);
+    return accessibilityContextForSelection(bounds, node.dataset.district, node.dataset.dong);
+  }
+
+  function regionAccessibilityContext(nodes, district, dong) {
+    return accessibilityContextForSelection(geographicBounds(nodes) || [], district, dong);
+  }
+
+  function districtRecentLicenseShare(district) {
+    if (!district) return null;
+    const node = grids.find((item) => item.dataset.district === district
+      && item.dataset.recentLicenseShare !== undefined
+      && item.dataset.recentLicenseShare !== "");
+    return node ? numeric(node, "recentLicenseShare") : null;
+  }
+
+  function renderAccessibilityMetrics(context, district, scopeLabel, transportScopeLabel) {
+    const distance = context.nearestPoiDistance;
+    document.getElementById("region-nearest-poi-distance").textContent = distance === null
+      ? "자료 없음"
+      : distance >= 1000
+        ? `${formatNumber(distance / 1000, 1)}km`
+        : `${formatNumber(Math.round(distance))}m`;
+    document.getElementById("region-metric-4-note").textContent = context.nearestPoiName
+      ? `${context.nearestPoiName} · ${scopeLabel} · 1km 내 ${formatNumber(context.poiCount1000m)}개`
+      : `${scopeLabel} · 관광지 자료 없음`;
+
+    document.getElementById("region-transport-inbound").textContent = context.transportInbound === null
+      ? "자료 없음"
+      : `${formatNumber(context.transportInbound)}통행`;
+    document.getElementById("region-metric-5-note").textContent = context.transportPeriod
+      ? `${transportScopeLabel} · ${context.transportPeriod}`
+      : "대중교통 유입자료 없음";
+
+    const recentShare = districtRecentLicenseShare(district);
+    document.getElementById("region-recent-license-share").textContent = recentShare === null
+      ? "자료 없음"
+      : `${recentShare.toLocaleString("ko-KR", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+    document.getElementById("region-metric-6-note").textContent = district
+      ? `${district} 현재 영업시설 · 최초 인허가일 기준`
+      : "자치구 선택 시 표시 · 500m 격자값 아님";
   }
 
   function accessibilitySummary(context) {
@@ -509,7 +567,7 @@
     });
     const explanations = {
       policy_priority: "서부산 500m 단위 수요·공급·노후 신호로 후보지역을 좁힙니다. 번호를 누르면 해당 생활권의 근거와 AI 정책 아이디어가 열립니다.",
-      tourism_supply_gap: "공급부족도 = 구별 방문수요 점수 − 해당 500m 객실공급 점수입니다. 값이 클수록 수요에 비해 확인 객실이 적습니다.",
+      tourism_supply_gap: "공급부족도 = 방문수요 점수 − 객실공급 점수입니다. 구별 방문수요와 해당 500m 확인 객실을 비교하며, 값이 클수록 수요에 비해 확인 객실이 적습니다.",
       facility_density: "500m 안의 주소 확인 숙박시설 수입니다. 진한 지역을 클릭하면 정확한 개수와 객실·노후 표본을 확인합니다.",
       aged_facilities: "500m 안의 20년 이상 숙박시설 수입니다. 색상 영역을 클릭하면 건물연수 확인 표본을 함께 표시합니다.",
       facility_locations: "숙박시설 위치입니다. 15레벨 이상 확대하면 묶음 대신 개별 시설점을 표시합니다.",
@@ -539,25 +597,30 @@
     const nodes = matchingGrids(district, dong);
     const name = [district || "부산 전체", dong].filter(Boolean).join(" · ");
     const sum = (key) => nodes.reduce((total, node) => total + (numeric(node, key) || 0), 0);
-    const known = (key) => nodes.map((node) => numeric(node, key)).filter((value) => value !== null);
     const facilityCount = sum("mappedFacilityCount");
     const agedCount = sum("agedCount");
     const ageKnown = sum("ageKnown");
     const roomCount = sum("roomCount");
-    const gapValues = known("tourismSupplyGap");
-    const gap = gapValues.length ? gapValues.reduce((a, b) => a + b, 0) / gapValues.length : null;
+    const access = regionAccessibilityContext(nodes, district, dong);
     setRegionMetricLabels({
       first: ["숙박시설 수", "주소 좌표 확인 기준"],
       second: ["20년 이상 시설", `건축연령 확인 ${formatNumber(ageKnown)}개 시설 기준`],
       third: ["확인 객실", "객실 자료 확인분 합계"],
-      fourth: ["공급부족도", "방문수요 점수 − 객실공급 점수"],
+      fourth: ["최근접 관광지", "선택 지역 중심 기준"],
+      fifth: ["대중교통 유입량", "동 단위 타 자치구 유입"],
+      sixth: ["2021년 이후 신규진입 비율", "현재 영업시설 · 최초 인허가일 기준"],
     });
     document.getElementById("region-summary-title").textContent = `${name} · 선택 지역 상세`;
     document.getElementById("region-facility-count").textContent = `${formatNumber(facilityCount)}개`;
     document.getElementById("region-aged-count").textContent = `${formatNumber(agedCount)}개`;
     document.getElementById("region-room-count").textContent = `${formatNumber(roomCount)}실`;
-    document.getElementById("region-gap-score").textContent = gap === null ? "자료 없음" : `${formatNumber(gap, 1)}점`;
-    document.getElementById("region-summary-text").textContent = `${name} 집계입니다. 색상 영역이나 후보 번호를 선택하면 500m 단위로 좁혀 정확한 공급·노후·수요 신호를 확인할 수 있습니다.`;
+    renderAccessibilityMetrics(
+      access,
+      district,
+      dong ? "선택 읍면동 중심" : district ? "선택 자치구 중심" : "부산 분석지역 중심",
+      dong ? "동 단위 타 자치구 유입" : district ? "자치구 내 동 합계" : "전체 동 합계",
+    );
+    document.getElementById("region-summary-text").textContent = `${name} 집계입니다. ${accessibilitySummary(access)}. 색상 영역이나 후보 번호를 선택하면 500m 단위로 좁혀 정확한 공급·노후·수요 신호를 확인할 수 있습니다.`;
     document.getElementById("region-ai-result").hidden = true;
   }
 
@@ -574,18 +637,20 @@
     const dongFacilityCount = dongSum("mappedFacilityCount");
     const dongAgedCount = dongSum("agedCount");
     const dongRoomCount = dongSum("roomCount");
-    const gap = numeric(node, "tourismSupplyGap");
+    const access = accessibilityContext(node);
     setRegionMetricLabels({
       first: ["500m 격자 숙박시설", `${node.dataset.dong} 전체 ${formatNumber(dongFacilityCount)}개`],
       second: ["500m 격자 노후시설", `${node.dataset.dong} 전체 ${formatNumber(dongAgedCount)}개 · 격자 표본 ${formatNumber(known)}개`],
       third: ["500m 격자 확인객실", `${node.dataset.dong} 전체 ${formatNumber(dongRoomCount)}실`],
-      fourth: ["공급부족도", "방문수요 점수 − 객실공급 점수"],
+      fourth: ["최근접 관광지", "선택 격자 중심 기준"],
+      fifth: ["대중교통 유입량", "동 단위 타 자치구 유입"],
+      sixth: ["2021년 이후 신규진입 비율", "현재 영업시설 · 최초 인허가일 기준"],
     });
     document.getElementById("region-summary-title").textContent = `${name} · 선택 500m 격자 상세`;
     document.getElementById("region-facility-count").textContent = `${formatNumber(facilityCount)}개`;
     document.getElementById("region-aged-count").textContent = `${formatNumber(aged)}개`;
     document.getElementById("region-room-count").textContent = `${formatNumber(rooms)}실`;
-    document.getElementById("region-gap-score").textContent = gap === null ? "자료 없음" : `${formatNumber(gap, 1)}점`;
+    renderAccessibilityMetrics(access, node.dataset.district, "선택 격자 중심", "동 단위 타 자치구 유입");
     const action = {
       new_supply: "신규 관광숙박 공급",
       remodel: "노후시설 개선·전환",
@@ -594,7 +659,6 @@
       investment_caution: "공급 확대 신중 검토",
     }[node.dataset.recommendation] || "수요·노후 근거 보완";
     const fundingTracks = fundingTrackLabel(node);
-    const access = accessibilityContext(node);
     document.getElementById("region-summary-text").textContent = `선택한 500m 격자 내 숙박시설은 ${formatNumber(facilityCount)}개이며, ${node.dataset.dong} 전체는 ${formatNumber(dongFacilityCount)}개입니다. ${accessibilitySummary(access)}. 격자 시장 신호는 ${action}이며, 지원방식은 ${fundingTracks}입니다. 사업주체·인수 가능성 자료가 없어 확정 배정이 아닌 1차 중복 검토 결과입니다.`;
   }
 
@@ -616,6 +680,7 @@
     const coverageRatio = numeric(node, "buildingCoverageRatio");
     const floorAreaRatio = numeric(node, "floorAreaRatio");
     const parking = numeric(node, "parkingTotal");
+    const access = accessibilityContext(node);
     const profileParts = [
       node.dataset.landUseZone ? `용도지역 ${node.dataset.landUseZone}` : null,
       siteArea === null ? null : `대지 ${formatNumber(siteArea, 1)}㎡`,
@@ -629,13 +694,15 @@
       first: ["선택 시설", "지도에 표시된 개별 숙박시설"],
       second: ["건축연령", "사용승인일 기반 확인값"],
       third: ["확인 객실", "인허가 원자료 확인값"],
-      fourth: ["행정구역", "주소 기준 자치구·읍면동"],
+      fourth: ["최근접 관광지", "선택 시설 위치 기준"],
+      fifth: ["대중교통 유입량", "동 단위 타 자치구 유입"],
+      sixth: ["2021년 이후 신규진입 비율", "현재 영업시설 · 최초 인허가일 기준"],
     });
     document.getElementById("region-summary-title").textContent = `${node.dataset.publicName || "숙박시설"} · 개별 시설 상세`;
     document.getElementById("region-facility-count").textContent = "1개 시설";
     document.getElementById("region-aged-count").textContent = age === null ? "자료 없음" : `${formatNumber(age, 1)}년`;
     document.getElementById("region-room-count").textContent = rooms === null ? "자료 없음" : `${formatNumber(rooms)}실`;
-    document.getElementById("region-gap-score").textContent = `${node.dataset.district || "-"} ${node.dataset.dong || ""}`.trim();
+    renderAccessibilityMetrics(access, node.dataset.district, "선택 시설 위치 기준", "동 단위 타 자치구 유입");
     const profileText = profileParts.length
       ? ` · 건축물대장 투자검토 정보: ${profileParts.join(" · ")}`
       : " · 건축물대장 투자검토 정보는 확인되지 않았습니다.";
@@ -644,7 +711,7 @@
   }
 
   function setRegionMetricLabels(labels) {
-    const entries = [labels.first, labels.second, labels.third, labels.fourth];
+    const entries = [labels.first, labels.second, labels.third, labels.fourth, labels.fifth, labels.sixth];
     entries.forEach(([label, note], index) => {
       document.getElementById(`region-metric-${index + 1}-label`).textContent = label;
       document.getElementById(`region-metric-${index + 1}-note`).textContent = note;

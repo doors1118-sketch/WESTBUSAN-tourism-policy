@@ -134,8 +134,10 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .region-summary-head h2 { margin: 3px 0 0; font-size: 1.25rem; }
 .region-summary-head .eyebrow { color: #0f6b68; }
 #region-ai-button { border-color: #0f5d79; background: #0f5d79; color: #fff; font-weight: 800; white-space: nowrap; }
-.region-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 15px; }
+.region-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 15px; }
 .region-metrics div { display: grid; gap: 4px; min-height: 95px; padding: 12px 14px; border-radius: 9px; background: #fff; border: 1px solid #dde6e9; }
+.region-metrics .region-metric-access { border-top: 3px solid #168b89; }
+.region-metrics .region-metric-market { border-top: 3px solid #0f5d79; }
 .region-metrics span { color: #52616a; font-size: .82rem; font-weight: 700; }
 .region-metrics strong { color: #102a43; font-size: 1.35rem; }
 .region-metrics small { color: #6a7880; font-size: .72rem; line-height: 1.35; }
@@ -179,7 +181,7 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
   .layer-controls { display: flex; }
   .layer-button { flex: 0 0 170px; }
   #slippy-map { height: 520px; }
-  .region-metrics { grid-template-columns: 1fr 1fr; }
+  .region-metrics { grid-template-columns: 1fr; }
   .region-summary-head { align-items: flex-start; flex-direction: column; }
   .kpis { min-width: 0; width: 100%; }
 }

@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>부산 관광 숙박 투자기회 지도</title>
+<title>부산 관광 숙박시설 투자 정보 지도</title>
 <style>{{STYLE}}</style>
 </head>
 <body>
 <header>
   <div><p class="eyebrow">BUSAN TOURISM INVESTMENT INTELLIGENCE</p>
-  <h1>부산 관광 숙박 투자기회 지도</h1></div>
+  <h1>부산 관광 숙박시설 투자 정보 지도</h1></div>
   <div class="freshness" aria-label="자료 기준">
     <span>기준일 <strong>{{BUSINESS_DATE}}</strong></span>
     <span>경계 <strong>{{BOUNDARY_VERSION}}</strong></span>
@@ -48,7 +48,7 @@
       </div>
     </details>
   </section>
-  <section id="map-panel" aria-label="관광 숙박 투자기회 지도">
+  <section id="map-panel" aria-label="관광 숙박시설 투자 정보 지도">
     <div class="map-toolbar"><button id="zoom-in" aria-label="지도 확대">+</button>
       <button id="zoom-out" aria-label="지도 축소">−</button>
       <button id="zoom-reset" aria-label="지도 원래 크기">초기화</button></div>
@@ -82,10 +82,12 @@
         <button id="region-ai-button" type="button">AI 권역 해석</button>
       </div>
       <div class="region-metrics">
-        <div><span id="region-metric-1-label">숙박시설 수</span><strong id="region-facility-count">-</strong><small id="region-metric-1-note">주소 좌표 확인 기준</small></div>
-        <div><span id="region-metric-2-label">20년 이상 시설</span><strong id="region-aged-count">-</strong><small id="region-metric-2-note">건축연령 자료 기준</small></div>
-        <div><span id="region-metric-3-label">확인 객실</span><strong id="region-room-count">-</strong><small id="region-metric-3-note">객실 자료 확인분 합계</small></div>
-        <div><span id="region-metric-4-label">공급부족도</span><strong id="region-gap-score">-</strong><small id="region-metric-4-note">방문수요 점수 − 객실공급 점수</small></div>
+        <div class="region-metric-card"><span id="region-metric-1-label">숙박시설 수</span><strong id="region-facility-count">-</strong><small id="region-metric-1-note">주소 좌표 확인 기준</small></div>
+        <div class="region-metric-card"><span id="region-metric-2-label">20년 이상 시설</span><strong id="region-aged-count">-</strong><small id="region-metric-2-note">건축연령 자료 기준</small></div>
+        <div class="region-metric-card"><span id="region-metric-3-label">확인 객실</span><strong id="region-room-count">-</strong><small id="region-metric-3-note">객실 자료 확인분 합계</small></div>
+        <div class="region-metric-card region-metric-access"><span id="region-metric-4-label">최근접 관광지</span><strong id="region-nearest-poi-distance">-</strong><small id="region-metric-4-note">선택 지역 중심 기준</small></div>
+        <div class="region-metric-card region-metric-access"><span id="region-metric-5-label">대중교통 유입량</span><strong id="region-transport-inbound">-</strong><small id="region-metric-5-note">동 단위 타 자치구 유입</small></div>
+        <div class="region-metric-card region-metric-market"><span id="region-metric-6-label">2021년 이후 신규진입 비율</span><strong id="region-recent-license-share">-</strong><small id="region-metric-6-note">현재 영업시설 · 최초 인허가일 기준</small></div>
       </div>
       <p id="region-summary-text" class="region-summary-text">지도에서 구·읍면동 또는 색상 영역을 선택하면 해당 지역의 정책 검토 근거를 설명합니다.</p>
       <div id="region-ai-result" class="region-ai-result" hidden></div>

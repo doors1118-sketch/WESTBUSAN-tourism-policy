@@ -137,7 +137,7 @@ def test_map_uses_vworld_basemap_and_policy_opportunity_layers() -> None:
     assert 'id="selected-evidence"' not in rendered
     assert 'id="slippy-map"' in rendered
     assert 'id="spatial-map"' in rendered
-    assert "부산 관광 숙박 투자기회 지도" in rendered
+    assert "부산 관광 숙박시설 투자 정보 지도" in rendered
     assert 'id="vworld-tile-layer"' in rendered
     assert 'data-tile-template="/tourism/api/vworld/tiles/{z}/{x}/{y}.png"' in rendered
     assert 'data-max-zoom="19"' in rendered
@@ -375,7 +375,9 @@ def test_map_has_filters_interactions_keyboard_labels_and_policy_decisions() -> 
         'id="region-facility-count"',
         'id="region-aged-count"',
         'id="region-room-count"',
-        'id="region-gap-score"',
+        'id="region-nearest-poi-distance"',
+        'id="region-transport-inbound"',
+        'id="region-recent-license-share"',
         'aria-label="지도 확대"',
         'aria-label="지도 축소"',
         'tabindex="0"',
@@ -393,6 +395,23 @@ def test_map_has_filters_interactions_keyboard_labels_and_policy_decisions() -> 
         "분석 레이어",
     ):
         assert marker in rendered
+
+
+def test_selected_area_uses_six_investment_information_cards() -> None:
+    """Keeps the selected-area facts visible as a three-by-two decision set."""
+    data = _map_data()
+    data.metadata["district_policy_priorities"][1]["recentLicenseShare"] = 5.8
+
+    rendered = render_map(data)
+
+    assert rendered.count('<div class="region-metric-card') == 6
+    assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in rendered
+    assert "최근접 관광지" in rendered
+    assert "대중교통 유입량" in rendered
+    assert "2021년 이후 신규진입 비율" in rendered
+    assert "현재 영업시설 · 최초 인허가일 기준" in rendered
+    assert 'data-recent-license-share="5.8"' in rendered
+    assert "function renderAccessibilityMetrics" in rendered
 
 
 def test_dong_and_period_filters_have_matching_facility_attributes() -> None:

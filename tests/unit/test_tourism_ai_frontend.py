@@ -265,6 +265,8 @@ def test_large_spatial_map_is_loaded_only_after_investment_tab_is_selected() -> 
 
     assert 'data-map-src="map/index.html?v=20260830-map-layout-v67"' in html
     assert '<iframe src="map/index.html"' not in html
+    assert "지역별 숙박시설 투자 정보 지도" in html
+    assert 'title="부산 관광 숙박시설 투자 정보 지도"' in html
     assert 'target === "investment"' in script
     assert "방문·체류·소비·교통수요가 어디에서 얼마나 발생하는가" in html
     assert "숙박 객실·관광숙박 비중·시설 규모·노후도·신규 진입" in html

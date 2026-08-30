@@ -306,6 +306,7 @@ def render_map(bundle_data: PublicSpatialData) -> str:
         priorities,
         bundle_data.access_context,
         candidate_rankings=payload["candidate_rankings"]["policy_priority"],
+        recent_license_shares=_district_recent_license_shares(bundle_data.metadata),
     )
     package = files("westbusan.spatial")
     template = (
@@ -343,6 +344,7 @@ def _render_svg(
     access_context: Mapping[str, Any],
     *,
     candidate_rankings: Mapping[str, Any] | None = None,
+    recent_license_shares: Mapping[str, float] | None = None,
 ) -> str:
     grid_features = list(grids.get("features", []))
     facility_features = list(facilities.get("features", []))
@@ -357,6 +359,7 @@ def _render_svg(
     candidate_rankings = candidate_rankings or build_policy_candidate_rankings(
         grid_features, access_context=access_context
     )
+    recent_license_shares = recent_license_shares or {}
     policy_by_district = {
         str(item["name"]): (
             _policy_kind(int(item["rank"])),
@@ -387,6 +390,7 @@ def _render_svg(
         grid_key = str(properties.get("grid_id", ""))
         dong_code = str(properties.get("primary_dong_code") or "")
         transport = transport_by_dong.get(dong_code, {})
+        recent_license_share = recent_license_shares.get(district)
         policy_kind = policy_by_district.get(district, ("", 0, ""))[0]
         default_rank = candidate_rankings["default"].get(grid_key, "")
         district_rank = candidate_rankings["district"].get(district, {}).get(
@@ -418,6 +422,7 @@ def _render_svg(
             'data-room-count="{room_count}" data-room-coverage="{room_coverage}" '
             'data-demand-score="{demand_score}" data-supply-score="{supply_score}" '
             'data-transport-inbound="{transport_inbound}" '
+            'data-recent-license-share="{recent_license_share}" '
             'data-default-rank="{default_rank}" data-district-rank="{district_rank}" '
             'data-dong-rank="{dong_rank}" '
             'data-map-bounds="{min_x:.3f},{min_y:.3f},{max_x:.3f},{max_y:.3f}" '
@@ -450,6 +455,7 @@ def _render_svg(
                     transport.get("inbound_other_district")
                     or transport.get("inbound_other_dong")
                 ),
+                recent_license_share=_attribute(recent_license_share),
                 default_rank=_attribute(default_rank),
                 district_rank=_attribute(district_rank),
                 dong_rank=_attribute(dong_rank),
@@ -577,7 +583,7 @@ def _render_svg(
     return (
         '<svg id="spatial-map" viewBox="0 0 1000 700" '
         'data-map-center="129.075,35.18" data-map-zoom="10" '
-        'aria-label="부산 관광 숙박 투자기회 지도" role="application">'
+        'aria-label="부산 관광 숙박시설 투자 정보 지도" role="application">'
         '<g id="map-viewport">'
         + "".join(paths)
         + '<g id="candidate-markers"></g>'
@@ -736,6 +742,31 @@ def _district_policy_priorities(
             continue
         priorities.append({"rank": rank, "name": name, "priority": priority})
     return sorted(priorities, key=lambda item: int(item["rank"]))
+
+
+def _district_recent_license_shares(
+    metadata: Mapping[str, Any],
+) -> dict[str, float]:
+    """Return district-level shares without implying 500m-grid precision."""
+    dashboard_data = json.loads(
+        files("westbusan.tourism_dashboard")
+        .joinpath("assets/data.json")
+        .read_text(encoding="utf-8")
+    )
+    sources = [
+        dashboard_data.get("westDistricts", []),
+        metadata.get("district_policy_priorities", []),
+    ]
+    shares: dict[str, float] = {}
+    for raw in sources:
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, Mapping):
+                continue
+            name = item.get("name")
+            share = _optional_number(item.get("recentLicenseShare"))
+            if isinstance(name, str) and share is not None and 0 <= share <= 100:
+                shares[name] = share
+    return shares
 
 
 def _render_priority_overlay(priorities: Sequence[Mapping[str, Any]]) -> str:
