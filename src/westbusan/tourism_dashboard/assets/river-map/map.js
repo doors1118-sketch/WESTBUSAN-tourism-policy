@@ -299,6 +299,7 @@
   }
 
   function setParkBoundaryLayerVisible(visible) {
+    focusMessageOverride = "";
     document.querySelectorAll("[data-park-boundary-layer]").forEach((input) => {
       input.checked = visible;
     });
@@ -310,11 +311,17 @@
         button.setAttribute("aria-pressed", "false");
       });
     }
+    applyLayerReadability();
     renderOverlay();
   }
 
   function inputForLayer(layer) {
     return document.querySelector(`[data-layer="${layer}"], [data-regulation-layer="${layer}"]`);
+  }
+
+  function allLayersCleared() {
+    const inputs = document.querySelectorAll("[data-park-boundary-layer], [data-layer], [data-regulation-layer]");
+    return inputs.length > 0 && Array.from(inputs).every((input) => !input.checked);
   }
 
   function updateFocusButtons() {
@@ -354,6 +361,9 @@
       if (active) button.textContent = "강조 중";
     });
     clearAllLayersButton.disabled = false;
+    clearAllLayersButton.textContent = allLayersCleared()
+      ? "전체 레이어 켜기"
+      : "전체 레이어 해제";
     layerFocusStatus.classList.toggle("is-active", hasFocus);
     const count = hasFocus ? focusItemsForLayer(focusedLayer).length : 0;
     layerFocusStatus.textContent = focusMessageOverride || (hasFocus
@@ -385,14 +395,17 @@
   }
 
   function clearAllLayers() {
+    const layerInputs = [...document.querySelectorAll("[data-park-boundary-layer], [data-layer], [data-regulation-layer]")];
+    const showAll = layerInputs.every((input) => !input.checked);
     focusedLayer = null;
-    focusMessageOverride = "전체 레이어를 해제했습니다. 체크박스 또는 강조 버튼에서 필요한 레이어를 선택하십시오.";
-    document.querySelectorAll("[data-park-boundary-layer], [data-layer], [data-regulation-layer]").forEach((input) => {
-      input.checked = false;
+    focusMessageOverride = showAll ? "전체 레이어를 다시 표시합니다."
+      : "전체 레이어를 해제했습니다. 체크박스 또는 강조 버튼에서 필요한 레이어를 선택하십시오.";
+    layerInputs.forEach((input) => {
+      input.checked = showAll;
     });
-    pathNodes.forEach(({ node }) => node.classList.add("is-hidden"));
-    externalPathNodes.forEach(({ node }) => node.classList.add("is-hidden"));
-    parkBoundaryPathNodes.forEach(({ node }) => node.classList.add("is-hidden"));
+    pathNodes.forEach(({ node }) => node.classList.toggle("is-hidden", !showAll));
+    externalPathNodes.forEach(({ node }) => node.classList.toggle("is-hidden", !showAll));
+    parkBoundaryPathNodes.forEach(({ node }) => node.classList.toggle("is-hidden", !showAll));
     setActiveParkBoundary(null);
     document.querySelectorAll("[data-park]").forEach((button) => {
       button.classList.remove("is-active");
@@ -997,11 +1010,13 @@
     input.addEventListener("change", () => setParkBoundaryLayerVisible(input.checked));
   });
   document.querySelectorAll("[data-layer]").forEach((input) => input.addEventListener("change", () => {
+    focusMessageOverride = "";
     pathNodes.filter((item) => item.feature.properties.zone_type === input.dataset.layer).forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
     if (!input.checked && focusedLayer === input.dataset.layer) focusedLayer = null;
     applyLayerReadability();
   }));
   document.querySelectorAll("[data-regulation-layer]").forEach((input) => input.addEventListener("change", () => {
+    focusMessageOverride = "";
     externalPathNodes.filter((item) => item.feature.properties.category === input.dataset.regulationLayer)
       .forEach((item) => item.node.classList.toggle("is-hidden", !input.checked));
     if (!input.checked && focusedLayer === input.dataset.regulationLayer) focusedLayer = null;
@@ -1066,6 +1081,8 @@
     features.slice().sort((a, b) => a.properties.priority - b.properties.priority).forEach((feature) => {
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
       path.setAttribute("class", `zone-feature zone-${feature.properties.zone_type}`); path.setAttribute("fill-rule", "evenodd");
+      const input = inputForLayer(feature.properties.zone_type);
+      path.classList.toggle("is-hidden", input ? !input.checked : false);
       overlay.append(path); pathNodes.push({ node: path, feature });
     });
     updateFocusButtons();

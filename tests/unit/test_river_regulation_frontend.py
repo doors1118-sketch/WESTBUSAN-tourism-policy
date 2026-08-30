@@ -28,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 규제검토<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260829-ai-decision-v18"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260830-layer-toggle-v19"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -170,8 +170,8 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
     assert 'node.classList.remove("is-hidden")' in script
     assert "clearAllLayersButton.disabled = false" in script
     assert '[data-park-boundary-layer], [data-layer], [data-regulation-layer]' in script
-    assert "input.checked = false" in script
-    assert 'parkBoundaryPathNodes.forEach(({ node }) => node.classList.add("is-hidden"))' in script
+    assert "input.checked = showAll" in script
+    assert 'parkBoundaryPathNodes.forEach(({ node }) => node.classList.toggle("is-hidden", !showAll))' in script
     assert "setView(INITIAL.lon, INITIAL.lat, INITIAL.zoom)" in script
     assert 'classList.toggle("is-focus-layer"' in script
     assert 'classList.toggle("is-context-layer"' in script
@@ -208,10 +208,27 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
 
     assert html.count(">강조</button>") == 4
 
-    version = "20260829-ai-decision-v18"
+    version = "20260830-layer-toggle-v19"
     assert f"map.css?v={version}" in html
     assert f"map.js?v={version}" in html
     assert f'river-map/index.html?v={version}' in dashboard_html
+
+
+def test_clear_all_layers_button_restores_every_layer_on_second_click() -> None:
+    script = _read(RIVER_ROOT / "map.js")
+    clear_all_layers = script.split("  function clearAllLayers() {", 1)[1].split(
+        "\n  }\n\n  function riverOverlapItems", 1
+    )[0]
+
+    assert "const showAll = layerInputs.every((input) => !input.checked);" in clear_all_layers
+    assert "input.checked = showAll" in clear_all_layers
+    assert clear_all_layers.count('classList.toggle("is-hidden", !showAll)') == 3
+    assert 'showAll ? "전체 레이어를 다시 표시합니다."' in clear_all_layers
+    assert (
+        'clearAllLayersButton.textContent = allLayersCleared()\n'
+        '      ? "전체 레이어 켜기"\n'
+        '      : "전체 레이어 해제";'
+    ) in script
 
 
 def test_reference_park_boundaries_cover_each_published_map_label() -> None:
