@@ -28,7 +28,7 @@ def test_dashboard_adds_lazy_river_review_before_ai_analysis() -> None:
     assert 'data-tab-target="river">낙동강 관광자원화 투자 정보<' in nav
     assert nav.index('data-tab-target="vacant"') < nav.index('data-tab-target="river"')
     assert nav.index('data-tab-target="river"') < nav.index('data-tab-target="insights"')
-    assert 'data-river-map-src="river-map/index.html?v=20260830-focus-preserve-v22"' in html
+    assert 'data-river-map-src="river-map/index.html?v=20260831-policy-readability-v23"' in html
     assert '<iframe src="river-map/index.html"' not in html
     assert 'target === "river"' in script
     assert "riverMapSrc" in script
@@ -226,10 +226,21 @@ def test_river_map_provides_focus_mode_and_text_overlap_summary() -> None:
 
     assert html.count(">강조</button>") == 4
 
-    version = "20260830-focus-preserve-v22"
+    version = "20260831-policy-readability-v23"
     assert f"map.css?v={version}" in html
     assert f"map.js?v={version}" in html
     assert f'river-map/index.html?v={version}' in dashboard_html
+
+    for readable_rule in (
+        ".assessment-copy p{font-size:13px;line-height:1.72}",
+        ".assessment-support-list{gap:8px;margin-top:12px;padding:12px 13px 12px 31px;font-size:12px;line-height:1.65}",
+        ".policy-insight>p{margin:15px 0;font-size:14px;line-height:1.78}",
+        ".policy-insight-grid ul{padding-left:20px;font-size:13px;line-height:1.72}",
+        ".action-screening-card p{margin-top:7px;font-size:12px;line-height:1.62}",
+        ".legal-basis-card p{margin-top:8px;font-size:12px;line-height:1.65}",
+        ".policy-insight-meta{margin-top:12px!important;font-size:10.5px!important;line-height:1.6!important}",
+    ):
+        assert readable_rule in stylesheet
 
 
 def test_clear_all_layers_button_restores_every_layer_on_second_click() -> None:
