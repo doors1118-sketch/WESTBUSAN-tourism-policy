@@ -275,6 +275,47 @@ def test_building_probe_accepts_official_success_with_empty_body(
     assert status.status == "EMPTY"
 
 
+def test_transport_probe_accepts_official_no_data_envelope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unpublished month is EMPTY, not a false schema-change incident."""
+    monkeypatch.setenv("DATA_GO_KR_SERVICE_KEY", "test-service-key")
+    spec = SourceRegistry.load(Path("config/sources.yaml")).get(
+        "public_transport_od_usage"
+    )
+    db = Database(tmp_path / "status.duckdb", Path("sql"))
+    db.migrate()
+    record_inspection(
+        spec,
+        db,
+        operation="getMonthlyODUsageforGeneralBusesandUrbanRailways",
+        required_parameters={
+            "opr_ym": "{baseYm}",
+            "dptre_ctpv_cd": "26",
+            "arvl_ctpv_cd": "26",
+        },
+        response_row_path="Response.body.items.item",
+        portal_detail_url="https://www.data.go.kr/data/15142069/openapi.do",
+    )
+    client = SafeHttpClient(
+        httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    json={"Error": {"code": "50", "message": "NO_DATA_FOUND"}},
+                )
+            )
+        ),
+        sleeper=lambda _: None,
+    )
+
+    status = probe_source(spec, client, db, probe_date=date(2026, 9, 4))
+
+    assert status.status == "EMPTY"
+    assert status.detail["parameters"]["opr_ym"] == "202608"
+    assert status.detail["row_count"] == 0
+
+
 @pytest.mark.parametrize(
     ("source_id", "body", "expected_status"),
     [

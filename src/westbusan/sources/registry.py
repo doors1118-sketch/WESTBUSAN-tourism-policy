@@ -214,15 +214,16 @@ def probe_source(
     }
     try:
         result = client.get(spec.endpoint_url, params)
+        explicit_empty = _is_successful_empty_probe(
+            spec, result.body, result.content_type
+        )
         if spec.inspection_required and not _response_path_exists(
             result.body, result.content_type, spec.response_row_path
-        ):
+        ) and not explicit_empty:
             raise SchemaError("response does not contain the inspected row path")
         page = (
             _empty_probe_page(result.body)
-            if _is_successful_empty_building_probe(
-                spec, result.body, result.content_type
-            )
+            if explicit_empty
             else parse_data_page(
                 result.body,
                 result.content_type,
@@ -495,6 +496,35 @@ def _is_successful_empty_building_probe(
         and str(header.get("resultCode", "")) == "00"
         and isinstance(response_body, Mapping)
         and not response_body
+    )
+
+
+def _is_successful_empty_probe(
+    spec: SourceSpec, body: bytes, content_type: str
+) -> bool:
+    """Accept reviewed, explicit empty envelopes without weakening schema checks."""
+    return _is_successful_empty_building_probe(
+        spec, body, content_type
+    ) or _is_data_go_no_data_envelope(body, content_type)
+
+
+def _is_data_go_no_data_envelope(body: bytes, content_type: str) -> bool:
+    """Recognize data.go.kr's HTTP-200 ``NO_DATA_FOUND`` response."""
+    try:
+        decoded = (
+            xmltodict.parse(body)
+            if "xml" in content_type.lower() or body.lstrip().startswith(b"<")
+            else json.loads(body)
+        )
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(decoded, Mapping):
+        return False
+    error = decoded.get("Error") or decoded.get("error")
+    return (
+        isinstance(error, Mapping)
+        and str(error.get("code", "")).strip() == "50"
+        and str(error.get("message", "")).strip().upper() == "NO_DATA_FOUND"
     )
 
 
