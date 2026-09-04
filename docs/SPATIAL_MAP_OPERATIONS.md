@@ -215,3 +215,23 @@ snapshot이 차례로 생성될 수 있습니다. migration 045 이후 snapshot 
 보여 주되, 자료가 없으면 기존 정책순위를 재정렬하거나 0으로 대체하지 않습니다.
 투자·사업대상 확정에는 토지이용, 접도, 소유권, 사업자 수요와 현장조사가 별도로
 필요합니다.
+
+### 일일 할당량 기반 교통 백필 재개
+
+운영 서버는 `westbusan-transport-backfill.timer`로 매일 00:25(Asia/Seoul),
+최대 10분 임의 지연 후 동일 logical run을 재개합니다. 서비스는
+`public_transport_od_usage`만 대상으로 하며 `/data/westbusan` 전용 DB·raw 경로
+밖에는 쓰지 않습니다. API가 공식 할당량 코드 22 또는 23을 반환하면 완료된 월
+체크포인트를 보존하고 `PAUSED_QUOTA`를 구조화 로그로 남긴 뒤 정상 종료합니다.
+인증·스키마·DB·품질 오류는 정상 종료로 바꾸지 않습니다.
+
+```bash
+systemctl list-timers westbusan-transport-backfill.timer --all
+journalctl -u westbusan-transport-backfill.service -n 50 --no-pager
+```
+
+월 도중 적재된 fact는 다음 실행에서 같은 고유키로 재처리하며, 해당 월이 완결되기
+전에는 `completed` 체크포인트로 기록하지 않습니다. 전체 기간이 품질 게이트를
+통과해 새 core가 게시되기 전까지 기존 `publication_state`와 대시보드 수치는
+변경하지 않습니다. 완료 후에는 타이머를 비활성화하고, 새 core에 맞춰 spatial run,
+접근성 snapshot, spatial export를 순서대로 다시 게시합니다.
