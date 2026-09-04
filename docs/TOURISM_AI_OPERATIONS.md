@@ -128,8 +128,11 @@ python scripts/build_tourism_dashboard_release.py validate \
 - `westbusan-db-backup.timer`는 매일 04:20 KST 이후 최대 10분의 무작위
   지연을 두고 실행한다. `Persistent=true`이므로 서버가 꺼져 있던 시각의
   작업은 다음 부팅 후 한 번 보충 실행한다.
-- 백업은 DuckDB 읽기 잠금을 잡은 상태에서 `COPY FROM DATABASE`로 생성하고,
-  다시 읽어 테이블·뷰 개수를 비교한 뒤 SHA-256과 메타데이터를 기록한다.
+- 백업은 DuckDB 읽기 잠금을 잡고 WAL이 없는 체크포인트 상태를 확인한 뒤
+  물리 복사하며, 다시 읽어 테이블·뷰 개수를 비교한 뒤 SHA-256과
+  메타데이터를 기록한다. 운영 DB의 과거 FK 참조구조 때문에 논리
+  `COPY FROM DATABASE`가 제약조건 복사순서에서 실패할 수 있으므로 사용하지
+  않는다.
 - `/data/westbusan/automated-backups`의 `westbusan-auto-*` 파일만 최근 2개로
   정리한다. 기존 수동 백업과 작업 전 스냅샷은 자동 삭제하지 않는다.
 - 원본 DB 크기와 최소 1 GiB 중 큰 값을 포함한 여유공간을 확보하지 못하면

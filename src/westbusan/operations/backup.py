@@ -42,10 +42,11 @@ def create_verified_backup(
 ) -> BackupResult:
     """Create, verify, atomically publish, and prune one managed backup.
 
-    DuckDB holds a read-only database lock while ``COPY FROM DATABASE`` runs.
+    DuckDB holds a read-only database lock while the physical file copy runs.
     This prevents a state-changing pipeline process from writing through the
-    same database file during the logical copy.  Only files created with this
-    module's prefix are eligible for retention pruning.
+    same database file.  A non-empty WAL aborts the backup instead of creating
+    an incomplete snapshot.  Only files created with this module's prefix are
+    eligible for retention pruning.
     """
 
     source_path = Path(source).resolve()
@@ -115,16 +116,22 @@ def create_verified_backup(
 
 
 def _copy_database(source: Path, destination: Path) -> tuple[int, int]:
-    source_sql = _sql_path(source)
-    destination_sql = _sql_path(destination)
-    with duckdb.connect(":memory:") as connection:
-        connection.execute(f"ATTACH '{source_sql}' AS source_db (READ_ONLY)")
-        connection.execute(f"ATTACH '{destination_sql}' AS backup_db")
-        source_counts = _attached_catalogue_counts(connection, "source_db")
-        connection.execute("COPY FROM DATABASE source_db TO backup_db")
-        connection.execute("CHECKPOINT backup_db")
-        connection.execute("DETACH backup_db")
-        connection.execute("DETACH source_db")
+    wal_path = Path(f"{source}.wal")
+    before = source.stat()
+    with duckdb.connect(str(source), read_only=True) as connection:
+        source_counts = _attached_catalogue_counts(connection, "main")
+        if wal_path.exists() and wal_path.stat().st_size:
+            raise RuntimeError("source WAL is present; checkpoint recovery required")
+        with source.open("rb") as source_stream, destination.open("xb") as target:
+            shutil.copyfileobj(source_stream, target, length=8 * 1024 * 1024)
+            target.flush()
+            os.fsync(target.fileno())
+        after = source.stat()
+        if (before.st_size, before.st_mtime_ns) != (
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise RuntimeError("source database changed during backup")
     return source_counts
 
 
@@ -185,10 +192,6 @@ def _atomic_text(path: Path, text: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _sql_path(path: Path) -> str:
-    return str(path).replace("'", "''")
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
@@ -206,4 +209,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

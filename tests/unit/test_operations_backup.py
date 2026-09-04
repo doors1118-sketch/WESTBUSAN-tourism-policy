@@ -86,6 +86,17 @@ def test_backup_rejects_source_directory_and_invalid_retention(tmp_path: Path) -
         create_verified_backup(source, tmp_path / "backups", keep=0)
 
 
+def test_backup_refuses_a_non_empty_wal(tmp_path: Path) -> None:
+    source = tmp_path / "source.duckdb"
+    _database(source)
+    Path(f"{source}.wal").write_bytes(b"uncheckpointed")
+
+    with pytest.raises(RuntimeError, match="source WAL is present"):
+        create_verified_backup(source, tmp_path / "backups")
+
+    assert not list((tmp_path / "backups").glob("westbusan-auto-*.duckdb"))
+
+
 def test_systemd_timer_is_bounded_and_mount_aware() -> None:
     root = Path(__file__).parents[2]
     service = (root / "scripts" / "westbusan-db-backup.service").read_text(
