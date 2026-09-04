@@ -108,6 +108,12 @@ python scripts/build_tourism_dashboard_release.py validate \
 ## 검증
 
 - `/tourism/`과 `/tourism/api/healthz`가 200인지 확인한다.
+- loopback `/readyz`에서 발행 JSON, 캐시 쓰기, 설정된 DuckDB 읽기,
+  법령 MCP 상태를 확인한다. 기존 `/healthz`는 프로세스 생존성과 발행파일
+  존재 여부만 확인하는 호환용 경량 검사다.
+- `/readyz`의 `ready=false`는 발행본·캐시·DB 장애이므로 배포를 중단한다.
+  `status=degraded, ready=true`는 법령 MCP 또는 선택 제공자 장애로 결정규칙
+  폴백은 사용 가능하다는 뜻이며, AI·법령 품질 저하 경보를 남긴다.
 - `/tourism/map/index.html`, `/tourism/vacant-map/index.html`,
   `/tourism/river-map/index.html`이 모두 200인지 확인한다.
 - `/tourism/map/manifest.json`, `/tourism/vacant-map/manifest.json`,
@@ -116,6 +122,21 @@ python scripts/build_tourism_dashboard_release.py validate \
 - 응답·페이지 소스·캐시·신규 unit 로그에 API 키가 없는지 값 노출 없이 점검한다.
 - 공공계약, 지역상품, 신용보증, 민생100일, 관광지도 등 기존 공개 URL의 상태가 작업 전과 같은지 확인한다.
 - 신용보증 서비스는 전 과정에서 재시작하지 않는다.
+
+## 운영 DB 자동백업
+
+- `westbusan-db-backup.timer`는 매일 04:20 KST 이후 최대 10분의 무작위
+  지연을 두고 실행한다. `Persistent=true`이므로 서버가 꺼져 있던 시각의
+  작업은 다음 부팅 후 한 번 보충 실행한다.
+- 백업은 DuckDB 읽기 잠금을 잡은 상태에서 `COPY FROM DATABASE`로 생성하고,
+  다시 읽어 테이블·뷰 개수를 비교한 뒤 SHA-256과 메타데이터를 기록한다.
+- `/data/westbusan/automated-backups`의 `westbusan-auto-*` 파일만 최근 2개로
+  정리한다. 기존 수동 백업과 작업 전 스냅샷은 자동 삭제하지 않는다.
+- 원본 DB 크기와 최소 1 GiB 중 큰 값을 포함한 여유공간을 확보하지 못하면
+  복사를 시작하지 않는다. writer와 잠금이 충돌하거나 검증이 실패하면
+  기존 백업과 운영 DB를 변경하지 않고 unit을 실패 처리한다.
+- 월 1회 최신 자동백업을 별도 임시 경로에서 읽고 대표 publication pointer와
+  핵심 테이블 건수를 운영 DB와 비교하는 복구훈련을 수행한다.
 
 ## 롤백
 

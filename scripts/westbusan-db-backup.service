@@ -1,0 +1,29 @@
+[Unit]
+Description=Verified West Busan DuckDB backup
+After=data-westbusan.mount
+RequiresMountsFor=/data/westbusan
+
+[Service]
+Type=oneshot
+User=westbusan-tourism
+Group=westbusan-tourism
+WorkingDirectory=/opt/westbusan/app
+Environment=PYTHONPATH=/opt/westbusan/app/src
+RuntimeDirectory=westbusan-db-backup
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/flock -n /run/westbusan-db-backup/backup.lock /data/westbusan/venv/bin/python3 -m westbusan.operations.backup --source /data/westbusan/db/westbusan.duckdb --destination /data/westbusan/automated-backups --keep 2
+TimeoutStartSec=45min
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ReadWritePaths=/data/westbusan/automated-backups
+

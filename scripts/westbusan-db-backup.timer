@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily verified West Busan DuckDB backup schedule
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 Asia/Seoul
+RandomizedDelaySec=10m
+Persistent=true
+Unit=westbusan-db-backup.service
+
+[Install]
+WantedBy=timers.target
+

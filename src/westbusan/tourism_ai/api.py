@@ -53,6 +53,7 @@ from westbusan.tourism_ai.models import (
     VacantAddressAnalysisResponse,
 )
 from westbusan.tourism_ai.openai_client import OpenAIResponsesClient
+from westbusan.tourism_ai.readiness import readiness_report
 from westbusan.tourism_ai.report_metrics import (
     ReportEvidenceCatalogue,
     load_report_evidence,
@@ -320,6 +321,15 @@ def create_app(
             "status": "ok",
             "data_ready": settings.tourism_ai_data_path.is_file(),
         }
+
+    @app.get("/readyz")
+    def readiness() -> JSONResponse:
+        report = readiness_report(settings)
+        return JSONResponse(
+            status_code=200 if report["ready"] else 503,
+            content=report,
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/regulations/point")
     def regulation_point(

@@ -374,6 +374,30 @@ def test_health_and_error_response_never_return_api_key(tmp_path: Path) -> None:
     assert response.json()["source"] == "rule_fallback"
 
 
+def test_readyz_returns_component_evidence_without_secrets(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    secret = "sentinel-openai-key"
+    settings = _settings(tmp_path)
+    settings.openai_api_key = SecretStr(secret)
+    monkeypatch.setattr(
+        "westbusan.tourism_ai.api.readiness_report",
+        lambda current: {
+            "status": "degraded",
+            "ready": True,
+            "checks": {"law_mcp": {"status": "degraded"}},
+        },
+    )
+    client = TestClient(create_app(settings, generator=_CountingGenerator(_model_document())))
+
+    response = client.get("/readyz")
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json()["status"] == "degraded"
+    assert secret not in response.text
+
+
 def test_missing_openai_key_keeps_rule_fallback_available(tmp_path: Path) -> None:
     settings = TourismAISettings(
         tourism_ai_data_path=_write_dashboard(tmp_path),
