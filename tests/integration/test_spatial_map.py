@@ -360,6 +360,17 @@ def test_policy_overlays_share_the_geographic_vworld_tile_viewport() -> None:
     assert 'd="M0.000,700.000' not in rendered
 
 
+def test_high_zoom_culls_offscreen_grids_without_changing_filter_state() -> None:
+    """Prevents all 3,544 grid paths from being painted at detailed zoom levels."""
+    rendered = render_map(_map_data())
+
+    assert "function updateViewportCulling()" in rendered
+    assert "if (mapState.zoom < 12)" in rendered
+    assert "visibleGeographicBounds()" in rendered
+    assert 'classList.toggle("is-outside-viewport", outside)' in rendered
+    assert ".is-hidden, .is-filtered, .is-outside-viewport" in rendered
+
+
 def test_map_has_filters_interactions_keyboard_labels_and_policy_decisions() -> None:
     """Catches an inaccessible colour-only map without decision-oriented layers."""
     rendered = render_map(_map_data())
