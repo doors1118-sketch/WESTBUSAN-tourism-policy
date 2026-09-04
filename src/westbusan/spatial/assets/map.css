@@ -158,7 +158,7 @@ select, button { border: 1px solid #a9b3b8; border-radius: 6px; background: #fff
 .lot-input-row input { min-width: 0; border: 1px solid #a9b3b8; border-radius: 6px; padding: 10px 12px; font: inherit; }
 .lot-input-row button { border-color: #0f5d79; background: #0f5d79; color: #fff; font-weight: 800; white-space: nowrap; }
 .lot-help { margin: 8px 0 0; color: #62737b; font-size: .77rem; line-height: 1.45; }
-.is-hidden, .is-filtered { display: none !important; }
+  .is-hidden, .is-filtered, .is-outside-viewport { display: none !important; }
 @media (max-width: 900px) {
   :root { font-size: 16px; }
   header { align-items: start; flex-direction: column; }

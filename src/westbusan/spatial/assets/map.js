@@ -40,6 +40,7 @@
   let facilityGeoJsonPromise = null;
   let facilityFeatures = null;
   let facilityRenderTimer = null;
+  let viewportCullTimer = null;
   let mapRenderFrame = null;
 
   function filterableNodes() {
@@ -126,6 +127,41 @@
       mapState.zoom,
     );
     return [northWest[0], southEast[1], southEast[0], northWest[1]];
+  }
+
+  function expandedBounds(bounds, paddingRatio = 0.3) {
+    const longitudePadding = (bounds[2] - bounds[0]) * paddingRatio;
+    const latitudePadding = (bounds[3] - bounds[1]) * paddingRatio;
+    return [
+      bounds[0] - longitudePadding,
+      bounds[1] - latitudePadding,
+      bounds[2] + longitudePadding,
+      bounds[3] + latitudePadding,
+    ];
+  }
+
+  function intersectsBounds(first, second) {
+    return first[0] <= second[2] && first[2] >= second[0]
+      && first[1] <= second[3] && first[3] >= second[1];
+  }
+
+  function updateViewportCulling() {
+    if (mapState.zoom < 12) {
+      grids.forEach((node) => node.classList.remove("is-outside-viewport"));
+      return;
+    }
+    const viewport = expandedBounds(visibleGeographicBounds());
+    grids.forEach((node) => {
+      const bounds = (node.dataset.geoBounds || "").split(",").map(Number);
+      const outside = bounds.length !== 4 || !bounds.every(Number.isFinite)
+        || !intersectsBounds(bounds, viewport);
+      node.classList.toggle("is-outside-viewport", outside);
+    });
+  }
+
+  function scheduleViewportCulling() {
+    window.clearTimeout(viewportCullTimer);
+    viewportCullTimer = window.setTimeout(updateViewportCulling, 90);
   }
 
   function facilityFeatureVisible(feature, bounds) {
@@ -263,6 +299,7 @@
     svg.setAttribute("preserveAspectRatio", "none");
     slippyMap.dataset.currentZoom = String(mapState.zoom);
     updateOverlayScale();
+    scheduleViewportCulling();
     scheduleFacilityRender();
   }
 
