@@ -16,6 +16,9 @@ TimeoutStartSec=45min
 Nice=10
 IOSchedulingClass=best-effort
 IOSchedulingPriority=7
+MemoryHigh=1G
+MemoryMax=2G
+MemorySwapMax=0
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
@@ -26,4 +29,3 @@ ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
 ReadWritePaths=/data/westbusan/automated-backups
-

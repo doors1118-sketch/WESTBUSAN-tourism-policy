@@ -138,6 +138,10 @@ python scripts/build_tourism_dashboard_release.py validate \
 - 원본 DB 크기와 최소 1 GiB 중 큰 값을 포함한 여유공간을 확보하지 못하면
   복사를 시작하지 않는다. writer와 잠금이 충돌하거나 검증이 실패하면
   기존 백업과 운영 DB를 변경하지 않고 unit을 실패 처리한다.
+- 공유 서버의 파일 캐시가 다른 서비스 메모리를 밀어내지 않도록 backup
+  unit은 `MemoryHigh=1G`, `MemoryMax=2G`, swap 0과 낮은 I/O 우선순위를
+  적용한다. 메모리 상한 때문에 백업이 실패하면 상한을 제거하지 말고
+  journal과 당시 가용메모리를 먼저 확인한다.
 - 월 1회 최신 자동백업을 별도 임시 경로에서 읽고 대표 publication pointer와
   핵심 테이블 건수를 운영 DB와 비교하는 복구훈련을 수행한다.
 

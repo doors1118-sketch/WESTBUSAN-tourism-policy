@@ -110,5 +110,8 @@ def test_systemd_timer_is_bounded_and_mount_aware() -> None:
     assert "westbusan.operations.backup" in service
     assert "--keep 2" in service
     assert "ReadWritePaths=/data/westbusan/automated-backups" in service
+    assert "MemoryHigh=1G" in service
+    assert "MemoryMax=2G" in service
+    assert "MemorySwapMax=0" in service
     assert "OnCalendar=*-*-* 04:20:00 Asia/Seoul" in timer
     assert "Persistent=true" in timer
