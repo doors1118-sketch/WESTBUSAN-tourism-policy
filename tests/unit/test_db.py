@@ -1118,6 +1118,29 @@ def test_migration_checksum_rejects_changed_applied_sql(tmp_path: Path) -> None:
         Database(path, migrations).migrate()
 
 
+def test_migration_checksum_accepts_only_line_ending_changes(tmp_path: Path) -> None:
+    """Windows CRLF and Linux LF checkouts represent the same migration text."""
+    migrations = tmp_path / "migrations"
+    migrations.mkdir()
+    migration = migrations / "001_example.sql"
+    migration.write_bytes(b"create table example (\r\n    value integer\r\n);\r\n")
+    path = tmp_path / "newline-checksum.duckdb"
+    db = Database(path, migrations)
+    db.migrate()
+    stored_checksum = db.scalar(
+        "select checksum from schema_migrations where version = '001_example'"
+    )
+    db.connection.close()
+
+    migration.write_bytes(b"create table example (\n    value integer\n);\n")
+    reopened = Database(path, migrations)
+    reopened.migrate()
+
+    assert reopened.scalar(
+        "select checksum from schema_migrations where version = '001_example'"
+    ) == stored_checksum
+
+
 def test_failed_migration_rolls_back_ddl_and_version_record(tmp_path: Path) -> None:
     """Catches half-applied schema changes surviving a failed migration."""
     migrations = tmp_path / "migrations"

@@ -13,6 +13,29 @@ import duckdb
 from westbusan.models import RawArtifact, SourceStatus
 
 
+def _migration_checksum_variants(body: bytes) -> tuple[str, frozenset[str]]:
+    """Return the raw checksum and compatible newline-only hashes.
+
+    Migration SQL is shared between Windows workstations and Linux production.
+    Git may materialize the same text with CRLF or LF line endings, which must not
+    be treated as a rewritten migration.  The checksum recorded for a new
+    migration remains the exact raw-file hash for audit compatibility; the LF and
+    CRLF variants are accepted only while validating an already applied version.
+    Any non-newline content change still fails closed.
+    """
+    normalized = body.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+    crlf = normalized.replace(b"\n", b"\r\n")
+    raw = hashlib.sha256(body).hexdigest()
+    compatible = frozenset(
+        {
+            raw,
+            hashlib.sha256(normalized).hexdigest(),
+            hashlib.sha256(crlf).hexdigest(),
+        }
+    )
+    return raw, compatible
+
+
 class Database:
     """Owns a DuckDB database and applies ordered SQL migrations."""
 
@@ -37,7 +60,7 @@ class Database:
         for migration_path in sorted(self.migrations_dir.glob("*.sql")):
             version = migration_path.stem
             body = migration_path.read_bytes()
-            checksum = hashlib.sha256(body).hexdigest()
+            checksum, compatible_checksums = _migration_checksum_variants(body)
             applied = self.connection.execute(
                 "select checksum from schema_migrations where version = ?", [version]
             ).fetchone()
@@ -48,7 +71,7 @@ class Database:
                         [checksum, version],
                     )
                     continue
-                if str(applied[0]) != checksum:
+                if str(applied[0]) not in compatible_checksums:
                     raise RuntimeError(
                         f"migration checksum mismatch for applied version {version}"
                     )
