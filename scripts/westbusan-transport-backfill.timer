@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily quota-window West Busan transport catch-up
+
+[Timer]
+OnCalendar=*-*-* 00:25:00 Asia/Seoul
+RandomizedDelaySec=10m
+Persistent=true
+Unit=westbusan-transport-backfill.service
+
+[Install]
+WantedBy=timers.target
